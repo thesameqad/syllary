@@ -1,0 +1,39 @@
+import { createClerkClient, verifyToken } from "@clerk/backend";
+import type { FastifyRequest } from "fastify";
+import { env } from "../env.js";
+
+const clerk = env.CLERK_SECRET_KEY
+  ? createClerkClient({ secretKey: env.CLERK_SECRET_KEY })
+  : null;
+
+/** Verify the Clerk bearer token and return the Clerk user id, or null if the
+ *  request is unauthenticated (or auth isn't configured). */
+export async function getAuthUserId(req: FastifyRequest): Promise<string | null> {
+  const secretKey = env.CLERK_SECRET_KEY;
+  if (!secretKey) return null;
+  const header = req.headers.authorization;
+  if (!header?.startsWith("Bearer ")) return null;
+  try {
+    const payload = await verifyToken(header.slice(7), {
+      secretKey,
+      authorizedParties: [env.APP_URL],
+    });
+    return payload.sub ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getClerkEmail(userId: string): Promise<string | null> {
+  if (!clerk) return null;
+  try {
+    const user = await clerk.users.getUser(userId);
+    return (
+      user.primaryEmailAddress?.emailAddress ??
+      user.emailAddresses[0]?.emailAddress ??
+      null
+    );
+  } catch {
+    return null;
+  }
+}

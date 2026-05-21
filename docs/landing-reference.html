@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Syllary — Landing Page Reference (Static Mockup)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #000;
+    color: white;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .container { max-width: 1200px; margin: 0 auto; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+
+  /* ---- NAV ---- */
+  nav {
+    padding: 18px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 0.5px solid rgba(255,255,255,0.04);
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(0,0,0,0.8);
+    backdrop-filter: blur(20px);
+  }
+  nav .brand { display: flex; align-items: center; gap: 10px; }
+  nav .brand span { font-size: 17px; font-weight: 500; letter-spacing: -0.4px; }
+  nav .links { display: flex; align-items: center; gap: 26px; }
+  nav .links a { color: rgba(255,255,255,0.5); font-size: 13px; text-decoration: none; }
+  nav .links button {
+    background: white; color: #0a0a0a; border: none;
+    padding: 9px 18px; border-radius: 999px;
+    font-size: 13px; font-weight: 500; cursor: pointer;
+  }
+
+  /* ---- HERO ---- */
+  .hero {
+    position: relative;
+    min-height: 720px;
+    overflow: hidden;
+    background: radial-gradient(ellipse at 50% 40%, #2a0a0a 0%, #0a0303 35%, #000 70%);
+  }
+  .hero-glow {
+    position: absolute; inset: 0; opacity: 0.4; pointer-events: none;
+  }
+  .hero-glow::before, .hero-glow::after, .hero-glow span {
+    content: ''; position: absolute; border-radius: 50%; filter: blur(40px);
+  }
+  .hero-glow::before {
+    top: 10%; left: 8%; width: 200px; height: 200px;
+    background: radial-gradient(circle, rgba(255,45,45,0.4) 0%, transparent 70%);
+  }
+  .hero-glow::after {
+    top: 60%; right: 5%; width: 300px; height: 300px;
+    background: radial-gradient(circle, rgba(216,24,24,0.3) 0%, transparent 70%);
+    filter: blur(60px);
+  }
+  .hero-glow span {
+    top: 30%; right: 30%; width: 150px; height: 150px;
+    background: radial-gradient(circle, rgba(255,107,107,0.25) 0%, transparent 70%);
+    filter: blur(30px);
+  }
+
+  /* Bars at bottom of hero */
+  .hero-bars {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 280px;
+    display: flex; align-items: end; justify-content: center;
+    gap: 3px; padding: 0 60px; opacity: 0.35;
+  }
+  .hero-bars div {
+    width: 4px;
+    background: linear-gradient(180deg, transparent 0%, #FF2D2D 100%);
+    border-radius: 2px 2px 0 0;
+  }
+
+  .hero-content {
+    position: relative; z-index: 5;
+    padding: 56px 32px 80px;
+    text-align: center;
+    max-width: 1200px; margin: 0 auto;
+  }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,0.04);
+    border: 0.5px solid rgba(255,255,255,0.08);
+    padding: 6px 14px; border-radius: 999px;
+    margin-bottom: 28px;
+    backdrop-filter: blur(10px);
+  }
+  .badge-dot {
+    width: 6px; height: 6px; background: #FF2D2D; border-radius: 50%;
+    box-shadow: 0 0 12px #FF2D2D;
+  }
+  .badge span:last-child {
+    color: rgba(255,255,255,0.7); font-size: 12px; letter-spacing: 0.3px;
+  }
+
+  h1.hero-title {
+    font-size: 68px; font-weight: 500;
+    letter-spacing: -2.8px; line-height: 1;
+    margin: 0 0 22px;
+  }
+  .hero-title .accent {
+    background: linear-gradient(180deg, #FF6B6B 0%, #FF2D2D 50%, #8B0000 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  p.hero-sub {
+    color: rgba(255,255,255,0.55);
+    font-size: 19px; line-height: 1.5;
+    max-width: 500px; margin: 0 auto 44px;
+  }
+
+  /* Upload card */
+  .upload-card {
+    max-width: 480px; margin: 0 auto;
+    background: rgba(15,15,15,0.6);
+    border: 0.5px solid rgba(255,255,255,0.1);
+    border-radius: 20px;
+    padding: 28px;
+    backdrop-filter: blur(20px);
+  }
+  .upload-dropzone {
+    border: 2px dashed rgba(255,255,255,0.15);
+    border-radius: 14px;
+    padding: 32px 20px;
+    transition: all 0.3s;
+  }
+  .upload-icon {
+    width: 56px; height: 56px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #FF2D2D 0%, #8B0000 100%);
+    margin: 0 auto 16px;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 8px 32px rgba(255,45,45,0.4);
+  }
+  .upload-dropzone h3 {
+    color: white; font-size: 17px; font-weight: 500; margin-bottom: 4px;
+  }
+  .upload-dropzone .hint {
+    color: rgba(255,255,255,0.4); font-size: 13px; margin-bottom: 18px;
+  }
+  .upload-btn {
+    background: #FF2D2D; color: white; border: none;
+    padding: 12px 28px; border-radius: 999px;
+    font-size: 14px; font-weight: 500; cursor: pointer;
+    box-shadow: 0 4px 24px rgba(255,45,45,0.5);
+  }
+  .upload-meta {
+    display: flex; align-items: center; justify-content: center;
+    gap: 14px; margin-top: 18px;
+    color: rgba(255,255,255,0.4); font-size: 12px;
+  }
+  .upload-meta .check { color: #4ADE80; }
+
+  /* Output format pills */
+  .formats {
+    margin-top: 48px;
+    display: flex; align-items: center; justify-content: center;
+    gap: 10px; flex-wrap: wrap;
+  }
+  .formats .label {
+    color: rgba(255,255,255,0.3);
+    font-size: 11px; letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-right: 8px;
+  }
+  .formats .pill {
+    background: rgba(255,255,255,0.06);
+    color: rgba(255,255,255,0.7);
+    padding: 5px 12px; border-radius: 999px;
+    font-size: 11px; font-family: 'JetBrains Mono', monospace;
+    border: 0.5px solid rgba(255,255,255,0.08);
+  }
+
+  /* ---- LIVE PREVIEW SECTION ---- */
+  .preview-section {
+    padding: 80px 32px;
+    background: #060606;
+  }
+  .section-header { text-align: center; margin-bottom: 48px; }
+  .section-eyebrow {
+    color: rgba(255,45,45,0.7);
+    font-size: 11px; letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+  .section-header h2 {
+    color: white; font-size: 36px; font-weight: 500;
+    letter-spacing: -1.2px;
+  }
+
+  .demo-card {
+    max-width: 580px; margin: 0 auto;
+    background: linear-gradient(180deg, #161616 0%, #0d0d0d 100%);
+    border: 0.5px solid rgba(255,255,255,0.08);
+    border-radius: 20px; padding: 28px;
+    box-shadow: 0 40px 80px rgba(0,0,0,0.5), 0 0 80px rgba(255,45,45,0.08);
+  }
+  .demo-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 20px;
+  }
+  .demo-track { display: flex; align-items: center; gap: 12px; }
+  .demo-track-icon {
+    width: 44px; height: 44px; border-radius: 10px;
+    background: linear-gradient(135deg, #FF2D2D 0%, #8B0000 100%);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 16px rgba(255,45,45,0.4);
+  }
+  .demo-title { font-size: 15px; font-weight: 500; }
+  .demo-meta { font-size: 12px; color: rgba(255,255,255,0.4); }
+  .demo-status {
+    background: rgba(74,222,128,0.12); color: #4ADE80;
+    padding: 5px 12px; border-radius: 999px;
+    font-size: 11px; font-weight: 500;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+
+  .lyric-block { text-align: left; margin: 24px 0; }
+  .verse-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(255,45,45,0.08); padding: 4px 10px;
+    border-radius: 999px; margin-bottom: 14px;
+    color: #FF6B6B; font-size: 10px; letter-spacing: 1.5px;
+    text-transform: uppercase; font-weight: 500;
+  }
+  .lyric-line { color: rgba(255,255,255,0.25); font-size: 17px; line-height: 1.8; }
+  .lyric-active { color: white; font-size: 19px; line-height: 1.8; }
+  .word-highlight {
+    background: #FF2D2D; color: white;
+    padding: 2px 10px; border-radius: 6px;
+    box-shadow: 0 0 24px rgba(255,45,45,0.6);
+  }
+
+  .download-row {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    padding-top: 18px;
+    border-top: 0.5px solid rgba(255,255,255,0.06);
+  }
+  .download-btn {
+    background: rgba(255,255,255,0.04); color: white;
+    border: 0.5px solid rgba(255,255,255,0.1);
+    padding: 9px 14px; border-radius: 10px;
+    font-size: 12px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .download-btn-primary {
+    background: #FF2D2D; border: none; font-weight: 500;
+    margin-left: auto; font-family: inherit;
+  }
+  .download-btn .arrow { color: #FF2D2D; }
+  .download-btn-primary .arrow { color: white; }
+
+  /* ---- PRICING ---- */
+  .pricing {
+    padding: 80px 32px; background: #000; text-align: center;
+  }
+  .pricing-grid {
+    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    gap: 14px; max-width: 620px; margin: 0 auto;
+  }
+  .price-card {
+    background: linear-gradient(180deg, #161616 0%, #0a0a0a 100%);
+    border: 0.5px solid rgba(255,255,255,0.08);
+    border-radius: 16px; padding: 24px 20px;
+    text-align: left;
+  }
+  .price-card.featured {
+    background: linear-gradient(180deg, #1a0a0a 0%, #0a0303 100%);
+    border: 1.5px solid #FF2D2D;
+    box-shadow: 0 8px 32px rgba(255,45,45,0.15);
+    position: relative;
+  }
+  .price-badge {
+    position: absolute; top: -10px; left: 50%;
+    transform: translateX(-50%);
+    background: #FF2D2D; color: white;
+    padding: 4px 12px; border-radius: 999px;
+    font-size: 10px; font-weight: 500;
+    letter-spacing: 0.8px; text-transform: uppercase;
+  }
+  .price-tier { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+  .price-desc { color: rgba(255,255,255,0.4); font-size: 11px; margin-bottom: 18px; }
+  .price-amount { font-size: 32px; font-weight: 500; letter-spacing: -1.2px; }
+  .price-amount .per { color: rgba(255,255,255,0.4); font-size: 13px; font-weight: 400; }
+  .price-features {
+    color: rgba(255,255,255,0.5); font-size: 11px;
+    margin-top: 16px; line-height: 1.6;
+  }
+
+  /* ---- FOOTER ---- */
+  footer {
+    padding: 18px 32px;
+    border-top: 0.5px solid rgba(255,255,255,0.04);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  footer .copyright {
+    display: flex; align-items: center; gap: 8px;
+    color: rgba(255,255,255,0.3); font-size: 11px;
+  }
+  footer .links { color: rgba(255,255,255,0.25); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<!-- Note for developers reading this file:
+     This is a STATIC visual reference of the agreed landing page design.
+     The real implementation should use React + GSAP + React Three Fiber.
+     See DESIGN-SPEC.md for the motion + interactivity spec.
+-->
+
+<nav>
+  <div class="brand">
+    <svg width="24" height="24" viewBox="0 0 56 56" fill="none">
+      <rect x="6" y="22" width="3" height="12" rx="1.5" fill="#FF2D2D"/>
+      <rect x="12" y="16" width="3" height="24" rx="1.5" fill="#FF2D2D"/>
+      <rect x="18" y="10" width="3" height="36" rx="1.5" fill="#FF2D2D"/>
+      <rect x="24" y="18" width="3" height="20" rx="1.5" fill="#FF2D2D"/>
+      <rect x="30" y="14" width="3" height="28" rx="1.5" fill="#FF2D2D"/>
+      <rect x="36" y="20" width="3" height="16" rx="1.5" fill="#FF2D2D"/>
+      <rect x="42" y="24" width="3" height="8" rx="1.5" fill="#FF2D2D"/>
+      <line x1="3" y1="50" x2="48" y2="50" stroke="#FF2D2D" stroke-width="1.5" stroke-dasharray="2 3" stroke-linecap="round"/>
+    </svg>
+    <span>syllary</span>
+  </div>
+  <div class="links">
+    <a href="#how">How it works</a>
+    <a href="#pricing">Pricing</a>
+    <a href="#signin">Sign in</a>
+    <button>Start free</button>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="hero-glow"><span></span></div>
+  <div class="hero-bars">
+    <!-- 40 bars with varied heights, will be replaced by Three.js scene in build -->
+    <div style="height: 30%;"></div><div style="height: 55%;"></div><div style="height: 22%;"></div>
+    <div style="height: 70%;"></div><div style="height: 40%;"></div><div style="height: 85%;"></div>
+    <div style="height: 50%;"></div><div style="height: 35%;"></div><div style="height: 65%;"></div>
+    <div style="height: 28%;"></div><div style="height: 92%;"></div><div style="height: 45%;"></div>
+    <div style="height: 60%;"></div><div style="height: 25%;"></div><div style="height: 78%;"></div>
+    <div style="height: 38%;"></div><div style="height: 68%;"></div><div style="height: 32%;"></div>
+    <div style="height: 88%;"></div><div style="height: 42%;"></div><div style="height: 58%;"></div>
+    <div style="height: 26%;"></div><div style="height: 72%;"></div><div style="height: 48%;"></div>
+    <div style="height: 82%;"></div><div style="height: 36%;"></div><div style="height: 64%;"></div>
+    <div style="height: 24%;"></div><div style="height: 75%;"></div><div style="height: 52%;"></div>
+    <div style="height: 30%;"></div><div style="height: 90%;"></div><div style="height: 44%;"></div>
+    <div style="height: 67%;"></div><div style="height: 33%;"></div><div style="height: 80%;"></div>
+    <div style="height: 46%;"></div><div style="height: 62%;"></div><div style="height: 27%;"></div>
+    <div style="height: 73%;"></div>
+  </div>
+
+  <div class="hero-content">
+    <div class="badge">
+      <span class="badge-dot"></span>
+      <span>Whisper + AI-aligned · 99+ languages</span>
+    </div>
+
+    <h1 class="hero-title">
+      Every word.<br/>
+      <span class="accent">Every beat.</span>
+    </h1>
+
+    <p class="hero-sub">
+      Upload your track. Get plain lyrics, synced LRC, Apple Music TTML, and every other format your distributor needs — validated and ready.
+    </p>
+
+    <div class="upload-card">
+      <div class="upload-dropzone">
+        <div class="upload-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14"/>
+          </svg>
+        </div>
+        <h3>Drop your track here</h3>
+        <div class="hint">MP3, WAV, or FLAC · up to 25MB</div>
+        <button class="upload-btn">Choose file</button>
+      </div>
+      <div class="upload-meta">
+        <span><span class="check">✓</span> 1 free song</span>
+        <span style="color: rgba(255,255,255,0.15);">·</span>
+        <span><span class="check">✓</span> No sign-up</span>
+        <span style="color: rgba(255,255,255,0.15);">·</span>
+        <span><span class="check">✓</span> ~45 sec</span>
+      </div>
+    </div>
+
+    <div class="formats">
+      <span class="label">Outputs</span>
+      <span class="pill">.lrc</span>
+      <span class="pill">.lrc enhanced</span>
+      <span class="pill">.ttml</span>
+      <span class="pill">.srt</span>
+      <span class="pill">.vtt</span>
+      <span class="pill">.txt</span>
+      <span class="pill">.json</span>
+    </div>
+  </div>
+</section>
+
+<section class="preview-section" id="preview">
+  <div class="section-header">
+    <div class="section-eyebrow">Live preview</div>
+    <h2>Watch the words light up.</h2>
+  </div>
+
+  <div class="demo-card">
+    <div class="demo-header">
+      <div class="demo-track">
+        <div class="demo-track-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>
+        </div>
+        <div>
+          <div class="demo-title">midnight_demo.mp3</div>
+          <div class="demo-meta">3:42 · Processed in 38s</div>
+        </div>
+      </div>
+      <span class="demo-status">
+        <span style="width: 5px; height: 5px; background: #4ADE80; border-radius: 50%;"></span>
+        Platform-ready
+      </span>
+    </div>
+
+    <!-- Waveform placeholder - real impl uses wavesurfer.js -->
+    <div style="height: 56px; background: linear-gradient(90deg, #FF2D2D 50%, rgba(255,255,255,0.2) 50%); border-radius: 4px; margin-bottom: 24px;"></div>
+
+    <div class="lyric-block">
+      <div class="verse-badge">
+        <span style="width: 5px; height: 5px; background: #FF2D2D; border-radius: 50%;"></span>
+        Verse 1 · 0:14
+      </div>
+      <div class="lyric-line">Streetlights flicker on the avenue</div>
+      <div class="lyric-active">
+        I keep <span class="word-highlight">walking</span> till the morning's through
+      </div>
+      <div class="lyric-line">Counting every breath I take</div>
+    </div>
+
+    <div class="download-row">
+      <button class="download-btn"><span class="arrow">↓</span> .lrc</button>
+      <button class="download-btn"><span class="arrow">↓</span> .ttml</button>
+      <button class="download-btn"><span class="arrow">↓</span> .srt</button>
+      <button class="download-btn"><span class="arrow">↓</span> .vtt</button>
+      <button class="download-btn"><span class="arrow">↓</span> .txt</button>
+      <button class="download-btn download-btn-primary">📦 Download all</button>
+    </div>
+  </div>
+</section>
+
+<section class="pricing" id="pricing">
+  <div class="section-header">
+    <div class="section-eyebrow">Simple pricing</div>
+    <h2>Start free. Scale when you ship.</h2>
+  </div>
+
+  <div class="pricing-grid">
+    <div class="price-card">
+      <div class="price-tier">Starter</div>
+      <div class="price-desc">For trying it out</div>
+      <div class="price-amount">$6<span class="per">/mo</span></div>
+      <div class="price-features">30 songs/month<br/>All formats<br/>Platform validation</div>
+    </div>
+
+    <div class="price-card featured">
+      <div class="price-badge">Most Popular</div>
+      <div class="price-tier">Creator</div>
+      <div class="price-desc">For active releases</div>
+      <div class="price-amount">$14<span class="per">/mo</span></div>
+      <div class="price-features">100 songs/month<br/>Bulk upload<br/>Priority queue<br/>Embed widget</div>
+    </div>
+
+    <div class="price-card">
+      <div class="price-tier">Pro</div>
+      <div class="price-desc">For labels & studios</div>
+      <div class="price-amount">$29<span class="per">/mo</span></div>
+      <div class="price-features">400 songs/month<br/>API access<br/>Early MP4 video<br/>Priority support</div>
+    </div>
+  </div>
+
+  <div style="color: rgba(255,255,255,0.3); font-size: 12px; margin-top: 24px;">
+    Annual plans save 2 months. Free tier: 3 songs to start, no credit card.
+  </div>
+</section>
+
+<footer>
+  <div class="copyright">
+    <svg width="14" height="14" viewBox="0 0 56 56" fill="none">
+      <rect x="6" y="22" width="3" height="12" rx="1.5" fill="#FF2D2D"/>
+      <rect x="18" y="10" width="3" height="36" rx="1.5" fill="#FF2D2D"/>
+      <rect x="30" y="14" width="3" height="28" rx="1.5" fill="#FF2D2D"/>
+      <rect x="42" y="24" width="3" height="8" rx="1.5" fill="#FF2D2D"/>
+    </svg>
+    <span>© 2026 Syllary</span>
+  </div>
+  <div class="links">Terms · Privacy · Contact</div>
+</footer>
+
+</body>
+</html>

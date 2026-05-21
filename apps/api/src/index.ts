@@ -1,0 +1,38 @@
+import "./load-env.js";
+import cors from "@fastify/cors";
+import Fastify from "fastify";
+import { env } from "./env.js";
+import { billingRoutes } from "./routes/billing.js";
+import { songsRoutes } from "./routes/songs.js";
+import { uploadsRoutes } from "./routes/uploads.js";
+import { webhookRoutes } from "./routes/webhooks.js";
+
+const app = Fastify({ logger: true, trustProxy: true });
+
+// Keep the raw body (Stripe webhook signature verification needs it) while still
+// parsing JSON for normal routes.
+app.addContentTypeParser(
+  "application/json",
+  { parseAs: "buffer" },
+  (req, body, done) => {
+    const buf = body as Buffer;
+    req.rawBody = buf;
+    const text = buf.toString("utf8");
+    try {
+      done(null, text.length ? JSON.parse(text) : {});
+    } catch (err) {
+      done(err as Error, undefined);
+    }
+  },
+);
+
+await app.register(cors, { origin: env.APP_URL, methods: ["GET", "POST"] });
+
+app.get("/health", () => ({ ok: true }));
+
+await app.register(uploadsRoutes, { prefix: "/api" });
+await app.register(songsRoutes, { prefix: "/api" });
+await app.register(billingRoutes, { prefix: "/api" });
+await app.register(webhookRoutes, { prefix: "/api" });
+
+await app.listen({ port: env.PORT, host: "0.0.0.0" });

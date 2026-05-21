@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1779338024973,
+      "tag": "0000_known_brood",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1779342521805,
+      "tag": "0001_first_clea",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1779347981813,
+      "tag": "0002_military_payback",
+      "breakpoints": true
+    }
+  ]
+}

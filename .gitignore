@@ -1,0 +1,31 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+build/
+*.tsbuildinfo
+
+# env files (never commit secrets — .env.example is tracked)
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# test / coverage
+coverage/
+.cache/
+
+# local test audio
+uploads/

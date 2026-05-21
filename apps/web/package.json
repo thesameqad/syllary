@@ -1,0 +1,48 @@
+{
+  "name": "@syllary/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@clerk/clerk-react": "^5.61.3",
+    "@clerk/themes": "^2.4.57",
+    "@fontsource-variable/inter": "^5.1.1",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "@gsap/react": "^2.1.2",
+    "@react-three/drei": "^9.122.0",
+    "@react-three/fiber": "^8.18.0",
+    "@syllary/lyrics": "workspace:*",
+    "@syllary/shared": "workspace:*",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.39.0",
+    "gsap": "^3.15.0",
+    "lucide-react": "^0.469.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.15.1",
+    "simplex-noise": "^4.0.3",
+    "tailwind-merge": "^3.0.0",
+    "three": "^0.184.0",
+    "wavesurfer.js": "^7.12.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@types/three": "^0.184.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.0.0",
+    "tw-animate-css": "^1.2.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.7"
+  }
+}

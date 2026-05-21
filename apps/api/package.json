@@ -1,0 +1,41 @@
+{
+  "name": "@syllary/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsup",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "setup:r2": "tsx src/scripts/setup-r2.ts",
+    "setup:stripe": "tsx src/scripts/setup-stripe.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1051.0",
+    "@aws-sdk/s3-request-presigner": "^3.1051.0",
+    "@clerk/backend": "^3.4.11",
+    "@fastify/cors": "^10.0.2",
+    "@syllary/lyrics": "workspace:*",
+    "@syllary/shared": "workspace:*",
+    "dotenv": "^16.4.7",
+    "drizzle-orm": "^0.38.0",
+    "fastify": "^5.2.0",
+    "postgres": "^3.4.5",
+    "replicate": "^1.4.0",
+    "stripe": "^22.1.1",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "drizzle-kit": "^0.30.0",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0"
+  }
+}

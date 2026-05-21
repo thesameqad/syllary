@@ -1,0 +1,222 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* =============================================================================
+   Syllary design system. Every color is a CSS variable so the dark/light flip
+   is a one-line change (toggle the `.dark` class on <html>).
+   Brand: Pulse #FF2D2D, Ember #D81818, Void #0A0A0A, Stage #161616,
+          Paper #FAFAF7, Mute #888888, Success #4ADE80.
+   ========================================================================== */
+
+:root {
+  --radius: 0.875rem;
+
+  /* Brand palette */
+  --pulse: #ff2d2d;
+  --ember: #d81818;
+  --void: #0a0a0a;
+  --stage: #161616;
+  --paper: #fafaf7;
+  --mute: #888888;
+  --success: #4ade80;
+
+  /* Light theme (Paper) — auth, billing, account */
+  --background: var(--paper);
+  --foreground: #0a0a0a;
+  --card: #ffffff;
+  --card-foreground: #0a0a0a;
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0a;
+  --primary: var(--ember);
+  --primary-foreground: #fafaf7;
+  --secondary: #f2f2ee;
+  --secondary-foreground: #0a0a0a;
+  --muted: #f2f2ee;
+  --muted-foreground: var(--mute);
+  --accent: #f2f2ee;
+  --accent-foreground: #0a0a0a;
+  --destructive: var(--ember);
+  --destructive-foreground: #fafaf7;
+  --border: #e5e5e0;
+  --input: #e5e5e0;
+  --ring: var(--ember);
+}
+
+.dark {
+  /* Dark theme (Void / Stage) — landing, player, dashboard */
+  --background: var(--void);
+  --foreground: #fafafa;
+  --card: var(--stage);
+  --card-foreground: #fafafa;
+  --popover: var(--stage);
+  --popover-foreground: #fafafa;
+  --primary: var(--pulse);
+  --primary-foreground: #0a0a0a;
+  --secondary: #1f1f1f;
+  --secondary-foreground: #fafafa;
+  --muted: #1f1f1f;
+  --muted-foreground: var(--mute);
+  --accent: #1f1f1f;
+  --accent-foreground: #fafafa;
+  --destructive: var(--pulse);
+  --destructive-foreground: #0a0a0a;
+  --border: #262626;
+  --input: #262626;
+  --ring: var(--pulse);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Brand tokens for direct utilities: bg-pulse, text-ember, text-success, etc. */
+  --color-pulse: var(--pulse);
+  --color-ember: var(--ember);
+  --color-void: var(--void);
+  --color-stage: var(--stage);
+  --color-paper: var(--paper);
+  --color-mute: var(--mute);
+  --color-success: var(--success);
+
+  --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 6px);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+}
+
+/* =============================================================================
+   Landing-page motion primitives. Heavy choreography is GSAP/Framer (JS-gated
+   on prefers-reduced-motion); these are the CSS-only ambient pieces.
+   ========================================================================== */
+
+/* Animated gradient on the hero accent word ("Every beat."). */
+.hero-accent {
+  background: linear-gradient(180deg, #ff6b6b 0%, #ff2d2d 50%, #8b0000 100%);
+  background-size: 100% 300%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: gradient-cycle 6s ease-in-out infinite;
+}
+
+@keyframes gradient-cycle {
+  0%,
+  100% {
+    background-position: 0% 0%;
+  }
+  50% {
+    background-position: 0% 100%;
+  }
+}
+
+/* Drifting ambient glow blobs that replace the hero video atmosphere. */
+@keyframes drift-a {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(6%, 4%, 0) scale(1.15);
+  }
+}
+@keyframes drift-b {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1.1);
+  }
+  50% {
+    transform: translate3d(-7%, -5%, 0) scale(0.95);
+  }
+}
+@keyframes drift-c {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(0.95);
+  }
+  50% {
+    transform: translate3d(4%, -6%, 0) scale(1.2);
+  }
+}
+
+.animate-drift-a {
+  animation: drift-a 16s ease-in-out infinite;
+}
+.animate-drift-b {
+  animation: drift-b 21s ease-in-out infinite;
+}
+.animate-drift-c {
+  animation: drift-c 18s ease-in-out infinite;
+}
+
+/* Fine film grain overlay for cinematic texture (no video needed). */
+.grain-overlay {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+}
+
+/* Custom landing cursor: hide the native cursor only on precise pointers. */
+@media (hover: hover) and (pointer: fine) {
+  .cursor-none-precise,
+  .cursor-none-precise * {
+    cursor: none;
+  }
+}
+
+/* Hard accessibility requirement: kill all motion when the user opts out. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .cursor-none-precise,
+  .cursor-none-precise * {
+    cursor: auto;
+  }
+}

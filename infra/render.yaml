@@ -1,0 +1,106 @@
+# Render blueprint — https://render.com/docs/blueprint-spec
+# One-click deploy: Fastify API (web service) + Vite frontend (static site).
+#
+# NOTE: Postgres is hosted on Supabase (external), so there is no `databases:`
+# block here — set DATABASE_URL from the Supabase dashboard (session pooler URL).
+# NOTE: Plausible (self-hosted analytics) is deployed as a separate stack
+# because it requires ClickHouse; it is intentionally not part of this blueprint.
+# Secrets marked `sync: false` must be filled in via the Render dashboard.
+
+services:
+  # ---------------------------------------------------------------------------
+  # API — Fastify (Node)
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: syllary-api
+    runtime: node
+    plan: starter
+    region: oregon
+    rootDir: .
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @syllary/api build
+    startCommand: pnpm --filter @syllary/api start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: PORT
+        value: "10000"
+      - key: LOG_LEVEL
+        value: info
+      - key: APP_URL
+        sync: false
+      # Supabase session pooler URL (Project Settings -> Database -> Connection string)
+      - key: DATABASE_URL
+        sync: false
+      - key: BETTER_AUTH_SECRET
+        generateValue: true
+      - key: BETTER_AUTH_URL
+        sync: false
+      - key: IP_HASH_SALT
+        generateValue: true
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_STARTER_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_STARTER_YEARLY
+        sync: false
+      - key: STRIPE_PRICE_CREATOR_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_CREATOR_YEARLY
+        sync: false
+      - key: STRIPE_PRICE_PRO_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_PRO_YEARLY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_ENDPOINT
+        sync: false
+      - key: R2_PUBLIC_URL
+        sync: false
+      - key: REPLICATE_API_TOKEN
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: google/gemini-2.5-flash
+
+  # ---------------------------------------------------------------------------
+  # Web — Vite static site
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: syllary-web
+    runtime: static
+    rootDir: .
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @syllary/web build
+    staticPublishPath: apps/web/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+      - key: VITE_STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: VITE_PLAUSIBLE_DOMAIN
+        sync: false
+      - key: VITE_PLAUSIBLE_API_HOST
+        sync: false
+      - key: VITE_REWARDFUL_API_KEY
+        sync: false

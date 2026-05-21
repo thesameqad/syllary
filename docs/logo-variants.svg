@@ -1,0 +1,90 @@
+<!--
+  Syllary Logo — Bargroove (audio spectrum bars over dashed timeline)
+  Use these SVGs directly. Each is optimized and can be inlined as a React component.
+  Pulse red = #FF2D2D (use on dark backgrounds)
+  Ember red = #D81818 (use on light backgrounds)
+
+  Variants below:
+  1. Primary mark (dark bg, full color)
+  2. Light mark (light bg)
+  3. Wordmark with logo (for navigation)
+  4. Monochrome white (for footers)
+  5. Monochrome black (for invoices, light PDFs)
+  6. Favicon mark (simplified for small sizes)
+-->
+
+<!-- ====== 1. PRIMARY MARK (dark backgrounds) ====== -->
+<svg width="56" height="56" viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Syllary">
+  <rect x="6" y="22" width="3" height="12" rx="1.5" fill="#FF2D2D"/>
+  <rect x="12" y="16" width="3" height="24" rx="1.5" fill="#FF2D2D"/>
+  <rect x="18" y="10" width="3" height="36" rx="1.5" fill="#FF2D2D"/>
+  <rect x="24" y="18" width="3" height="20" rx="1.5" fill="#FF2D2D"/>
+  <rect x="30" y="14" width="3" height="28" rx="1.5" fill="#FF2D2D"/>
+  <rect x="36" y="20" width="3" height="16" rx="1.5" fill="#FF2D2D"/>
+  <rect x="42" y="24" width="3" height="8" rx="1.5" fill="#FF2D2D"/>
+  <line x1="3" y1="50" x2="48" y2="50" stroke="#FF2D2D" stroke-width="1.5" stroke-dasharray="2 3" stroke-linecap="round"/>
+</svg>
+
+<!-- ====== 2. LIGHT-BG MARK ====== -->
+<svg width="56" height="56" viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Syllary">
+  <rect x="6" y="22" width="3" height="12" rx="1.5" fill="#D81818"/>
+  <rect x="12" y="16" width="3" height="24" rx="1.5" fill="#D81818"/>
+  <rect x="18" y="10" width="3" height="36" rx="1.5" fill="#D81818"/>
+  <rect x="24" y="18" width="3" height="20" rx="1.5" fill="#D81818"/>
+  <rect x="30" y="14" width="3" height="28" rx="1.5" fill="#D81818"/>
+  <rect x="36" y="20" width="3" height="16" rx="1.5" fill="#D81818"/>
+  <rect x="42" y="24" width="3" height="8" rx="1.5" fill="#D81818"/>
+  <line x1="3" y1="50" x2="48" y2="50" stroke="#D81818" stroke-width="1.5" stroke-dasharray="2 3" stroke-linecap="round"/>
+</svg>
+
+<!-- ====== 3. WORDMARK + LOGO (for nav) ====== -->
+<svg width="148" height="32" viewBox="0 0 148 32" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Syllary">
+  <!-- Logo at left (scaled down) -->
+  <g transform="translate(0, 4) scale(0.43)">
+    <rect x="6" y="22" width="3" height="12" rx="1.5" fill="#FF2D2D"/>
+    <rect x="12" y="16" width="3" height="24" rx="1.5" fill="#FF2D2D"/>
+    <rect x="18" y="10" width="3" height="36" rx="1.5" fill="#FF2D2D"/>
+    <rect x="24" y="18" width="3" height="20" rx="1.5" fill="#FF2D2D"/>
+    <rect x="30" y="14" width="3" height="28" rx="1.5" fill="#FF2D2D"/>
+    <rect x="36" y="20" width="3" height="16" rx="1.5" fill="#FF2D2D"/>
+    <rect x="42" y="24" width="3" height="8" rx="1.5" fill="#FF2D2D"/>
+    <line x1="3" y1="50" x2="48" y2="50" stroke="#FF2D2D" stroke-width="1.5" stroke-dasharray="2 3" stroke-linecap="round"/>
+  </g>
+  <!-- Wordmark text -->
+  <text x="30" y="22" font-family="Inter, -apple-system, sans-serif" font-size="18" font-weight="500" fill="white" letter-spacing="-0.4">syllary</text>
+</svg>
+
+<!-- ====== 4. MONOCHROME WHITE ====== -->
+<svg width="56" height="56" viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Syllary">
+  <rect x="6" y="22" width="3" height="12" rx="1.5" fill="white"/>
+  <rect x="12" y="16" width="3" height="24" rx="1.5" fill="white"/>
+  <rect x="18" y="10" width="3" height="36" rx="1.5" fill="white"/>
+  <rect x="24" y="18" width="3" height="20" rx="1.5" fill="white"/>
+  <rect x="30" y="14" width="3" height="28" rx="1.5" fill="white"/>
+  <rect x="36" y="20" width="3" height="16" rx="1.5" fill="white"/>
+  <rect x="42" y="24" width="3" height="8" rx="1.5" fill="white"/>
+  <line x1="3" y1="50" x2="48" y2="50" stroke="white" stroke-width="1.5" stroke-dasharray="2 3" stroke-linecap="round"/>
+</svg>
+
+<!-- ====== 5. MONOCHROME BLACK ====== -->
+<svg width="56" height="56" viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Syllary">
+  <rect x="6" y="22" width="3" height="12" rx="1.5" fill="#0A0A0A"/>
+  <rect x="12" y="16" width="3" height="24" rx="1.5" fill="#0A0A0A"/>
+  <rect x="18" y="10" width="3" height="36" rx="1.5" fill="#0A0A0A"/>
+  <rect x="24" y="18" width="3" height="20" rx="1.5" fill="#0A0A0A"/>
+  <rect x="30" y="14" width="3" height="28" rx="1.5" fill="#0A0A0A"/>
+  <rect x="36" y="20" width="3" height="16" rx="1.5" fill="#0A0A0A"/>
+  <rect x="42" y="24" width="3" height="8" rx="1.5" fill="#0A0A0A"/>
+  <line x1="3" y1="50" x2="48" y2="50" stroke="#0A0A0A" stroke-width="1.5" stroke-dasharray="2 3" stroke-linecap="round"/>
+</svg>
+
+<!-- ====== 6. FAVICON MARK (simplified, no dashed line — too thin at 16px) ====== -->
+<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Syllary">
+  <rect x="3" y="13" width="2.5" height="6" rx="1.25" fill="#FF2D2D"/>
+  <rect x="7" y="9" width="2.5" height="14" rx="1.25" fill="#FF2D2D"/>
+  <rect x="11" y="5" width="2.5" height="22" rx="1.25" fill="#FF2D2D"/>
+  <rect x="15" y="10" width="2.5" height="12" rx="1.25" fill="#FF2D2D"/>
+  <rect x="19" y="7" width="2.5" height="18" rx="1.25" fill="#FF2D2D"/>
+  <rect x="23" y="11" width="2.5" height="10" rx="1.25" fill="#FF2D2D"/>
+  <rect x="27" y="14" width="2.5" height="4" rx="1.25" fill="#FF2D2D"/>
+</svg>
