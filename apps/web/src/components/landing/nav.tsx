@@ -44,10 +44,10 @@ function AccountArea() {
       </SignedOut>
       <SignedIn>
         <Link
-          to="/account"
+          to="/dashboard"
           className="hidden text-[13px] text-white/50 transition-colors hover:text-white sm:inline"
         >
-          Account
+          Dashboard
         </Link>
         <UserButton afterSignOutUrl="/" />
       </SignedIn>

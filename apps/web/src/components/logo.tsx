@@ -67,9 +67,9 @@ export function LogoWordmark({
   color = "var(--color-pulse)",
 }: Pick<LogoProps, "className" | "color">) {
   return (
-    <span className={cn("flex items-center gap-2.5", className)}>
-      <LogoMark color={color} className="h-6 w-6" />
-      <span className="text-[17px] font-medium tracking-[-0.4px] text-foreground">
+    <span className={cn("flex items-center gap-3", className)}>
+      <LogoMark color={color} className="h-9 w-9" />
+      <span className="text-[22px] font-medium tracking-[-0.5px] text-foreground">
         syllary
       </span>
     </span>

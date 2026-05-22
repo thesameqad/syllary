@@ -1,0 +1,13 @@
+User-agent: *
+Allow: /
+
+# App / authenticated surfaces — no SEO value, keep out of the index.
+Disallow: /dashboard
+Disallow: /upload
+Disallow: /library
+Disallow: /account
+Disallow: /sign-in
+Disallow: /sign-up
+Disallow: /embed/
+
+Sitemap: https://syllary.com/sitemap.xml

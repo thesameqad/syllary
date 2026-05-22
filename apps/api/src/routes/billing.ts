@@ -24,6 +24,7 @@ function priceIdFor(tier: "starter" | "creator" | "pro", period: BillingPeriod):
 function toAccount(user: UserRow): Account {
   return {
     plan: user.plan as Plan,
+    credits: user.credits,
     monthlyQuota: user.monthlyQuota,
     songsThisPeriod: user.songsThisPeriod,
     songsLifetime: user.songsLifetime,

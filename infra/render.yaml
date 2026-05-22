@@ -18,6 +18,9 @@ services:
     region: oregon
     rootDir: .
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @syllary/api build
+    # Apply DB migrations after build, before traffic switches (migrations are
+    # tracked, so this is a no-op when nothing is pending).
+    preDeployCommand: pnpm --filter @syllary/api db:migrate
     startCommand: pnpm --filter @syllary/api start
     healthCheckPath: /health
     autoDeploy: true
@@ -30,15 +33,16 @@ services:
         value: "10000"
       - key: LOG_LEVEL
         value: info
+      # Public URL of the FRONTEND (used for CORS, canonical/share URLs).
       - key: APP_URL
         sync: false
       # Supabase session pooler URL (Project Settings -> Database -> Connection string)
       - key: DATABASE_URL
         sync: false
-      - key: BETTER_AUTH_SECRET
-        generateValue: true
-      - key: BETTER_AUTH_URL
+      # Clerk production backend key (sk_live_...)
+      - key: CLERK_SECRET_KEY
         sync: false
+      # Stable salt for anonymous IP+UA hashing — must NOT change after launch.
       - key: IP_HASH_SALT
         generateValue: true
       - key: STRIPE_SECRET_KEY
@@ -56,10 +60,6 @@ services:
       - key: STRIPE_PRICE_PRO_MONTHLY
         sync: false
       - key: STRIPE_PRICE_PRO_YEARLY
-        sync: false
-      - key: RESEND_API_KEY
-        sync: false
-      - key: EMAIL_FROM
         sync: false
       - key: R2_ACCOUNT_ID
         sync: false
@@ -89,18 +89,17 @@ services:
     rootDir: .
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @syllary/web build
     staticPublishPath: apps/web/dist
+    # SPA: every path falls back to index.html so deep links (e.g. /p/:id public
+    # pages) load on a direct hit / refresh.
     routes:
       - type: rewrite
         source: /*
         destination: /index.html
     envVars:
+      # Vite vars are baked at BUILD time — set these before the static build runs.
+      # Public URL of the API service (e.g. https://api.syllary.com).
       - key: VITE_API_URL
         sync: false
-      - key: VITE_STRIPE_PUBLISHABLE_KEY
-        sync: false
-      - key: VITE_PLAUSIBLE_DOMAIN
-        sync: false
-      - key: VITE_PLAUSIBLE_API_HOST
-        sync: false
-      - key: VITE_REWARDFUL_API_KEY
+      # Clerk production publishable key (pk_live_...).
+      - key: VITE_CLERK_PUBLISHABLE_KEY
         sync: false

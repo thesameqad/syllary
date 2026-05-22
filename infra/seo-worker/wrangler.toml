@@ -1,0 +1,16 @@
+name = "syllary-seo"
+main = "src/worker.ts"
+compatibility_date = "2024-11-01"
+
+# Build-time defaults — override per-environment or in the Cloudflare dashboard.
+# ORIGIN = the Render static site URL; API = the public API URL.
+[vars]
+ORIGIN = "https://syllary-web.onrender.com"
+API = "https://api.syllary.com"
+
+# Only intercept the SEO-sensitive paths; everything else bypasses the worker
+# and is served straight from Render via Cloudflare. Update zone_name to match.
+routes = [
+  { pattern = "syllary.com/p/*", zone_name = "syllary.com" },
+  { pattern = "syllary.com/sitemap.xml", zone_name = "syllary.com" },
+]

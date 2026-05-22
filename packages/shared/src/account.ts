@@ -4,8 +4,17 @@ export const PLANS = ["free", "starter", "creator", "pro"] as const;
 export const planSchema = z.enum(PLANS);
 export type Plan = z.infer<typeof planSchema>;
 
+/** Monthly token allowance granted per plan (free is granted once on signup). */
+export const PLAN_CREDITS: Record<Plan, number> = {
+  free: 1000,
+  starter: 5000,
+  creator: 15000,
+  pro: 60000,
+};
+
 export const accountSchema = z.object({
   plan: planSchema,
+  credits: z.number(),
   monthlyQuota: z.number().nullable(),
   songsThisPeriod: z.number(),
   songsLifetime: z.number(),

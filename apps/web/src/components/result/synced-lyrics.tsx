@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { Play } from "lucide-react";
 import type { Lyrics, LyricLine } from "@syllary/shared";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
+import { wordsCoverText } from "@/lib/lyrics";
 import { cn } from "@/lib/utils";
 
 type SectionGroup = {
@@ -68,15 +69,11 @@ export function SyncedLyrics({
   }, [activeIndex, reduced]);
 
   if (lyrics.lines.length === 0) {
-    return (
-      <div className="rounded-[20px] border-[0.5px] border-white/[0.08] bg-stage/40 p-12 text-center">
-        <p className="text-[15px] text-white/40">No lyrics were detected in this track.</p>
-      </div>
-    );
+    return <p className="py-12 text-center text-[15px] text-white/40">No lyrics were detected in this track.</p>;
   }
 
   return (
-    <div className="max-h-[560px] overflow-y-auto rounded-[20px] border-[0.5px] border-white/[0.08] bg-[linear-gradient(180deg,#161616_0%,#0d0d0d_100%)] p-6 sm:p-8">
+    <div className="max-h-[440px] overflow-y-auto pr-1">
       <div className="space-y-7">
         {sections.map((section, si) => {
           const sectionActive =
@@ -131,7 +128,7 @@ export function SyncedLyrics({
                           : "text-[18px] text-white/30 hover:text-white/55",
                       )}
                     >
-                      {active && line.words.length > 0 ? (
+                      {active && wordsCoverText(line) ? (
                         <ActiveWords line={line} time={currentTime} />
                       ) : (
                         line.text

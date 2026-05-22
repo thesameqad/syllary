@@ -22,6 +22,48 @@
       "when": 1779347981813,
       "tag": "0002_military_payback",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1779384676138,
+      "tag": "0003_colossal_lucky_pierre",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1779392988000,
+      "tag": "0004_aromatic_demogoblin",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1779397939463,
+      "tag": "0005_quick_sharon_ventura",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1779408514157,
+      "tag": "0006_rainy_alice",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1779409997128,
+      "tag": "0007_gray_bastion",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1779411748678,
+      "tag": "0008_brainy_impossible_man",
+      "breakpoints": true
     }
   ]
 }

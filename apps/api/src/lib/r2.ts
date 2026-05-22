@@ -1,4 +1,5 @@
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
@@ -35,6 +36,14 @@ export function presignGet(key: string): Promise<string> {
   return getSignedUrl(s3, new GetObjectCommand({ Bucket: env.R2_BUCKET, Key: key }), {
     expiresIn: 3600,
   });
+}
+
+export async function deleteObject(key: string): Promise<void> {
+  try {
+    await s3.send(new DeleteObjectCommand({ Bucket: env.R2_BUCKET, Key: key }));
+  } catch {
+    // best-effort
+  }
 }
 
 export async function objectSize(key: string): Promise<number | null> {

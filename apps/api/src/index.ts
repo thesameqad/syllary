@@ -3,7 +3,9 @@ import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { env } from "./env.js";
 import { billingRoutes } from "./routes/billing.js";
+import { seoRoutes } from "./routes/seo.js";
 import { songsRoutes } from "./routes/songs.js";
+import { trackRoutes } from "./routes/track.js";
 import { uploadsRoutes } from "./routes/uploads.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 
@@ -26,12 +28,20 @@ app.addContentTypeParser(
   },
 );
 
-await app.register(cors, { origin: env.APP_URL, methods: ["GET", "POST"] });
+await app.register(cors, {
+  origin: env.APP_URL,
+  methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+});
 
 app.get("/health", () => ({ ok: true }));
 
+// Served at the API root (not under /api) so it's reachable at
+// <api-host>/sitemap.xml; the SEO worker proxies it to <site>/sitemap.xml.
+await app.register(seoRoutes);
+
 await app.register(uploadsRoutes, { prefix: "/api" });
 await app.register(songsRoutes, { prefix: "/api" });
+await app.register(trackRoutes, { prefix: "/api" });
 await app.register(billingRoutes, { prefix: "/api" });
 await app.register(webhookRoutes, { prefix: "/api" });
 

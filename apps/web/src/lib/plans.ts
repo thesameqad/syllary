@@ -1,3 +1,13 @@
+import type { Plan } from "@syllary/shared";
+
+export const PLAN_ORDER: Record<Plan, number> = { free: 0, starter: 1, creator: 2, pro: 3 };
+export const PLAN_LABEL: Record<Plan, string> = {
+  free: "Free",
+  starter: "Starter",
+  creator: "Creator",
+  pro: "Pro",
+};
+
 export type PlanTier = {
   id: "starter" | "creator" | "pro";
   name: string;

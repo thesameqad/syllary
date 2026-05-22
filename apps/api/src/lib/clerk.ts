@@ -37,3 +37,22 @@ export async function getClerkEmail(userId: string): Promise<string | null> {
     return null;
   }
 }
+
+/** Email + a public display name (username, then full name, then email local
+ *  part) for a Clerk user. Used to label uploaders on public pages. */
+export async function getClerkProfile(
+  userId: string,
+): Promise<{ email: string | null; displayName: string | null }> {
+  if (!clerk) return { email: null, displayName: null };
+  try {
+    const user = await clerk.users.getUser(userId);
+    const email =
+      user.primaryEmailAddress?.emailAddress ?? user.emailAddresses[0]?.emailAddress ?? null;
+    const fullName = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+    const displayName =
+      user.username?.trim() || (fullName.length > 0 ? fullName : null) || email?.split("@")[0] || null;
+    return { email, displayName };
+  } catch {
+    return { email: null, displayName: null };
+  }
+}

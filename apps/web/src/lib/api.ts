@@ -1,12 +1,19 @@
 import {
   accountSchema,
   presignResponseSchema,
+  publicSongSchema,
+  ratingSummarySchema,
+  songListSchema,
   songSchema,
   type Account,
   type BillingPeriod,
   type PresignRequest,
   type PresignResponse,
+  type PublicSong,
+  type RatingSummary,
   type Song,
+  type SongSummary,
+  type UpdateSong,
 } from "@syllary/shared";
 
 const API_BASE =
@@ -56,7 +63,7 @@ export async function presignUpload(req: PresignRequest): Promise<PresignRespons
 
 export function uploadToR2(
   url: string,
-  file: File,
+  body: Blob,
   contentType: string,
   onProgress: (percent: number) => void,
 ): Promise<void> {
@@ -72,8 +79,47 @@ export function uploadToR2(
         ? resolve()
         : reject(new ApiError("Upload to storage failed.", xhr.status));
     xhr.onerror = () => reject(new ApiError("Upload to storage failed.", 0));
-    xhr.send(file);
+    xhr.send(body);
   });
+}
+
+type UploadOptions = {
+  title: string | null;
+  artist?: string | null;
+  album?: string | null;
+  year?: number | null;
+  durationSeconds: number | null;
+  cover: { blob: Blob; contentType: string } | null;
+};
+
+/** Full upload flow: presign → PUT audio (+ cover) → start processing. */
+export async function uploadAndProcess(
+  file: File,
+  opts: UploadOptions,
+  onProgress: (percent: number) => void,
+): Promise<string> {
+  const contentType = file.type || "application/octet-stream";
+  const presign = await presignUpload({
+    filename: file.name,
+    contentType,
+    size: file.size,
+    durationSeconds: opts.durationSeconds,
+    title: opts.title ?? undefined,
+    artist: opts.artist ?? undefined,
+    album: opts.album ?? undefined,
+    year: opts.year ?? undefined,
+    coverContentType: opts.cover?.contentType,
+  });
+  await uploadToR2(presign.uploadUrl, file, contentType, onProgress);
+  if (opts.cover && presign.coverUploadUrl) {
+    try {
+      await uploadToR2(presign.coverUploadUrl, opts.cover.blob, opts.cover.contentType, () => {});
+    } catch {
+      // cover is best-effort
+    }
+  }
+  await processSong(presign.songId);
+  return presign.songId;
 }
 
 export async function processSong(id: string): Promise<Song> {
@@ -122,6 +168,86 @@ export async function startCheckout(
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not start checkout."), res.status);
   return urlFrom(data);
+}
+
+export async function listSongs(): Promise<SongSummary[]> {
+  const res = await fetch(`${API_BASE}/api/songs`, { headers: { ...(await authHeaders()) } });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not load your library."), res.status);
+  return songListSchema.parse(data);
+}
+
+export async function listPublicSongs(): Promise<SongSummary[]> {
+  const res = await fetch(`${API_BASE}/api/songs/public`);
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not load songs."), res.status);
+  return songListSchema.parse(data);
+}
+
+export async function updateSong(id: string, body: UpdateSong): Promise<Song> {
+  const res = await fetch(`${API_BASE}/api/songs/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(body),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not update the song."), res.status);
+  return songSchema.parse(data);
+}
+
+export async function updateSongLyrics(id: string, text: string): Promise<Song> {
+  const res = await fetch(`${API_BASE}/api/songs/${id}/lyrics`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ text }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not save lyrics."), res.status);
+  return songSchema.parse(data);
+}
+
+export async function deleteSong(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/songs/${id}`, {
+    method: "DELETE",
+    headers: { ...(await authHeaders()) },
+  });
+  if (!res.ok) {
+    const data: unknown = await res.json().catch(() => ({}));
+    throw new ApiError(errorMessage(data, "Could not delete the song."), res.status);
+  }
+}
+
+/** Fire-and-forget funnel "visited" ping. Never throws. */
+export async function trackVisit(): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/api/track/visit`, {
+      method: "POST",
+      headers: { ...(await authHeaders()) },
+      keepalive: true,
+    });
+  } catch {
+    // analytics is best-effort
+  }
+}
+
+export async function getPublicSong(id: string): Promise<PublicSong> {
+  const res = await fetch(`${API_BASE}/api/songs/${id}/public`, {
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "This page isn't available."), res.status);
+  return publicSongSchema.parse(data);
+}
+
+export async function rateSong(id: string, stars: number): Promise<RatingSummary> {
+  const res = await fetch(`${API_BASE}/api/songs/${id}/rating`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ stars }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't save your rating."), res.status);
+  return ratingSummarySchema.parse(data);
 }
 
 export async function openBillingPortal(): Promise<string> {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { RedirectToSignIn, SignedIn, SignedOut, UserButton } from "@clerk/clerk-react";
+import { Link, Navigate } from "react-router-dom";
+import { SignedIn, SignedOut, UserButton } from "@clerk/clerk-react";
 import { Check, ExternalLink, Loader2 } from "lucide-react";
 import type { Account, BillingPeriod } from "@syllary/shared";
 import { ApiError, getAccount, openBillingPortal, startCheckout } from "@/lib/api";
@@ -231,7 +231,7 @@ export function AccountPage() {
   return (
     <>
       <SignedOut>
-        <RedirectToSignIn />
+        <Navigate to="/sign-in" replace />
       </SignedOut>
       <SignedIn>
         <Shell>

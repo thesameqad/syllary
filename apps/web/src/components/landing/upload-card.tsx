@@ -3,25 +3,32 @@ import { AnimatePresence, motion, useMotionValue, useSpring } from "framer-motio
 import gsap from "gsap";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight, Check, FileAudio, Loader2, Upload, X } from "lucide-react";
-import {
-  isAcceptedExtension,
-  MAX_DURATION_SECONDS,
-  MAX_FILE_BYTES,
-} from "@syllary/shared";
-import { ApiError, presignUpload, processSong, uploadToR2 } from "@/lib/api";
-import { getAudioDuration } from "@/lib/audio";
+import { creditCost, isAcceptedExtension, MAX_DURATION_SECONDS, MAX_FILE_BYTES } from "@syllary/shared";
+import { ApiError, uploadAndProcess } from "@/lib/api";
+import { extractMetadata, type AudioMeta } from "@/lib/metadata";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
 
 function formatBytes(n: number): string {
-  return n < 1024 * 1024
-    ? `${Math.round(n / 1024)} KB`
-    : `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatDuration(seconds: number | null): string {
+  if (seconds == null) return "";
+  return `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, "0")}`;
 }
 
 type Phase = "idle" | "selected" | "uploading";
 
-export function UploadCard() {
+type UploadCardProps = {
+  mode?: "anonymous" | "credits";
+  /** Current credit balance, for cost validation in credits mode. */
+  credits?: number | null;
+  /** Called after processing starts (credits mode); otherwise we go to /s/:id. */
+  onStarted?: (songId: string) => void;
+};
+
+export function UploadCard({ mode = "anonymous", credits = null, onStarted }: UploadCardProps) {
   const navigate = useNavigate();
   const reduced = usePrefersReducedMotion();
   const cardRef = useRef<HTMLDivElement>(null);
@@ -30,7 +37,7 @@ export function UploadCard() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [dragging, setDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
-  const [duration, setDuration] = useState<number | null>(null);
+  const [meta, setMeta] = useState<AudioMeta | null>(null);
   const [progress, setProgress] = useState(0);
   const [statusLabel, setStatusLabel] = useState("Uploading…");
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +46,10 @@ export function UploadCard() {
   const rotateY = useMotionValue(0);
   const springX = useSpring(rotateX, { stiffness: 150, damping: 15 });
   const springY = useSpring(rotateY, { stiffness: 150, damping: 15 });
+
+  const isCredits = mode === "credits";
+  const cost = meta ? creditCost(meta.durationSeconds ?? 60) : 0;
+  const tooExpensive = isCredits && credits != null && cost > credits;
 
   function handlePointerMove(e: PointerEvent<HTMLDivElement>) {
     if (reduced || phase !== "idle") return;
@@ -89,13 +100,13 @@ export function UploadCard() {
       setError("That file is over 60MB.");
       return;
     }
-    const seconds = await getAudioDuration(f);
-    if (seconds !== null && seconds > MAX_DURATION_SECONDS + 1) {
-      setError("Free preview supports tracks up to 3 minutes.");
+    const m = await extractMetadata(f);
+    if (!isCredits && m.durationSeconds !== null && m.durationSeconds > MAX_DURATION_SECONDS + 1) {
+      setError("Free preview supports tracks up to 3 minutes. Sign up to remove the limit.");
       return;
     }
     setFile(f);
-    setDuration(seconds);
+    setMeta(m);
     setPhase("selected");
     resetTilt();
     const host = cardRef.current;
@@ -118,23 +129,26 @@ export function UploadCard() {
   }
 
   async function startProcessing() {
-    if (!file) return;
+    if (!file || !meta) return;
     setPhase("uploading");
     setProgress(0);
     setStatusLabel("Uploading…");
     setError(null);
-    const contentType = file.type || "application/octet-stream";
     try {
-      const { songId, uploadUrl } = await presignUpload({
-        filename: file.name,
-        contentType,
-        size: file.size,
-        durationSeconds: duration,
-      });
-      await uploadToR2(uploadUrl, file, contentType, setProgress);
-      setStatusLabel("Starting transcription…");
-      await processSong(songId);
-      navigate(`/s/${songId}`);
+      const songId = await uploadAndProcess(
+        file,
+        {
+          title: meta.title,
+          artist: meta.artist,
+          album: meta.album,
+          year: meta.year,
+          durationSeconds: meta.durationSeconds,
+          cover: meta.cover,
+        },
+        setProgress,
+      );
+      if (onStarted) onStarted(songId);
+      else navigate(`/s/${songId}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong. Please try again.");
       setPhase("selected");
@@ -143,7 +157,7 @@ export function UploadCard() {
 
   function reset() {
     setFile(null);
-    setDuration(null);
+    setMeta(null);
     setError(null);
     setProgress(0);
     setPhase("idle");
@@ -190,7 +204,7 @@ export function UploadCard() {
             </span>
             <h3 className="text-[17px] font-medium text-white">Drop your track here</h3>
             <p className="mb-[18px] mt-1 text-[13px] text-white/40">
-              MP3, WAV, or FLAC · up to 3 min
+              MP3, WAV, or FLAC{isCredits ? "" : " · up to 3 min"}
             </p>
             <button
               type="button"
@@ -202,19 +216,21 @@ export function UploadCard() {
             {error ? (
               <p className="mt-3 text-[12px] text-pulse">{error}</p>
             ) : (
-              <div className="mt-[18px] flex flex-wrap items-center justify-center gap-x-3.5 gap-y-1 text-[12px] text-white/40">
-                <span className="flex items-center gap-1">
-                  <Check className="h-3 w-3 text-success" /> 1 free song
-                </span>
-                <span className="text-white/15">·</span>
-                <span className="flex items-center gap-1">
-                  <Check className="h-3 w-3 text-success" /> No sign-up
-                </span>
-                <span className="text-white/15">·</span>
-                <span className="flex items-center gap-1">
-                  <Check className="h-3 w-3 text-success" /> up to 3 min
-                </span>
-              </div>
+              !isCredits && (
+                <div className="mt-[18px] flex flex-wrap items-center justify-center gap-x-3.5 gap-y-1 text-[12px] text-white/40">
+                  <span className="flex items-center gap-1">
+                    <Check className="h-3 w-3 text-success" /> 1 free song
+                  </span>
+                  <span className="text-white/15">·</span>
+                  <span className="flex items-center gap-1">
+                    <Check className="h-3 w-3 text-success" /> No sign-up
+                  </span>
+                  <span className="text-white/15">·</span>
+                  <span className="flex items-center gap-1">
+                    <Check className="h-3 w-3 text-success" /> up to 3 min
+                  </span>
+                </div>
+              )
             )}
           </motion.div>
         ) : (
@@ -232,11 +248,11 @@ export function UploadCard() {
               </span>
               <span className="min-w-0 flex-1 text-left">
                 <span className="block truncate text-[14px] font-medium text-white">
-                  {file?.name}
+                  {meta?.title || file?.name}
                 </span>
                 <span className="block text-[12px] text-white/40">
                   {file ? formatBytes(file.size) : ""}
-                  {duration ? ` · ${Math.floor(duration / 60)}:${String(Math.round(duration % 60)).padStart(2, "0")}` : ""}
+                  {meta?.durationSeconds ? ` · ${formatDuration(meta.durationSeconds)}` : ""}
                 </span>
               </span>
               {phase === "selected" && (
@@ -273,11 +289,28 @@ export function UploadCard() {
                 <button
                   type="button"
                   onClick={() => void startProcessing()}
-                  className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-pulse py-3 text-[14px] font-medium text-white shadow-[0_4px_24px_rgba(255,45,45,0.5)] transition-transform hover:scale-[1.02]"
+                  disabled={tooExpensive}
+                  className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-pulse py-3 text-[14px] font-medium text-white shadow-[0_4px_24px_rgba(255,45,45,0.5)] transition-transform hover:scale-[1.02] disabled:opacity-50 disabled:hover:scale-100"
                 >
-                  Get my lyric files
-                  <ArrowRight className="h-4 w-4" />
+                  {isCredits ? (
+                    <>
+                      Get lyrics
+                      <span className="rounded-full bg-black/25 px-2 py-0.5 text-[12px]">
+                        {cost} tokens
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      Get my lyric files
+                      <ArrowRight className="h-4 w-4" />
+                    </>
+                  )}
                 </button>
+                {tooExpensive && (
+                  <p className="mt-2 text-center text-[12px] text-pulse">
+                    Not enough credits ({credits} left). Upgrade to continue.
+                  </p>
+                )}
                 {error && <p className="mt-3 text-center text-[12px] text-pulse">{error}</p>}
               </>
             )}

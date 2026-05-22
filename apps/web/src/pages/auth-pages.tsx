@@ -31,7 +31,7 @@ export function SignInPage() {
   if (!authConfigured) return <NotConfigured />;
   return (
     <AuthShell>
-      <SignIn routing="path" path="/sign-in" signUpUrl="/sign-up" />
+      <SignIn routing="path" path="/sign-in" signUpUrl="/sign-up" fallbackRedirectUrl="/dashboard" />
     </AuthShell>
   );
 }
@@ -40,7 +40,7 @@ export function SignUpPage() {
   if (!authConfigured) return <NotConfigured />;
   return (
     <AuthShell>
-      <SignUp routing="path" path="/sign-up" signInUrl="/sign-in" />
+      <SignUp routing="path" path="/sign-up" signInUrl="/sign-in" fallbackRedirectUrl="/dashboard" />
     </AuthShell>
   );
 }

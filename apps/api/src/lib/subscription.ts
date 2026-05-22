@@ -1,5 +1,6 @@
 import type Stripe from "stripe";
 import { eq } from "drizzle-orm";
+import { PLAN_CREDITS } from "@syllary/shared";
 import { db } from "../db/client.js";
 import { users } from "../db/schema.js";
 import { planFromPrice, stripe } from "./stripe.js";
@@ -24,6 +25,9 @@ export async function applySubscription(sub: Stripe.Subscription): Promise<void>
   const periodEnd = periodEndUnix ? new Date(periodEndUnix * 1000) : null;
   const periodChanged =
     !user.currentPeriodEnd || (periodEnd ? periodEnd.getTime() !== user.currentPeriodEnd.getTime() : false);
+  // Grant the plan's token allowance on activation, upgrade, or renewal —
+  // not on every reconcile (so usage within a period is preserved).
+  const grantTokens = active && (periodChanged || user.plan !== tier);
 
   await db
     .update(users)
@@ -34,6 +38,7 @@ export async function applySubscription(sub: Stripe.Subscription): Promise<void>
       monthlyQuota: active ? quota : null,
       currentPeriodEnd: active ? periodEnd : null,
       songsThisPeriod: periodChanged ? 0 : user.songsThisPeriod,
+      ...(grantTokens ? { credits: PLAN_CREDITS[tier] } : {}),
       updatedAt: new Date(),
     })
     .where(eq(users.id, user.id));

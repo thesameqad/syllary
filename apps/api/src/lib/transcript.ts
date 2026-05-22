@@ -1,4 +1,4 @@
-import type { Lyrics, LyricLine, LyricWord } from "@syllary/shared";
+import type { Lyrics, LyricLine, LyricWord, ParsedLyricsText } from "@syllary/shared";
 import { structureLyrics } from "./openrouter.js";
 
 type WhisperxWord = { word?: string; text?: string; start?: number; end?: number };
@@ -68,38 +68,107 @@ export function mapWhisperx(output: unknown): Lyrics {
 
 const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9']/g, "");
 
+type PendingWord = { text: string; start: number | null; end: number | null };
+
+/** Interpolate timings for words that didn't match an original word, spreading
+ *  each gap evenly between its known neighbours. */
+function fillTimings(ws: PendingWord[], lineStart: number, lineEnd: number): void {
+  const n = ws.length;
+  let i = 0;
+  while (i < n) {
+    if (ws[i]!.start !== null) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < n && ws[j]!.start === null) j++;
+    const left = i > 0 ? ws[i - 1]!.end! : lineStart;
+    const right = j < n ? ws[j]!.start! : lineEnd;
+    const span = Math.max(right - left, 0);
+    const count = j - i;
+    const width = span / count;
+    for (let k = 0; k < count; k++) {
+      ws[i + k]!.start = left + width * k;
+      ws[i + k]!.end = left + width * (k + 1);
+    }
+    i = j;
+  }
+}
+
 /**
- * Align LLM-reformatted lines back onto the original word timestamps using a
+ * Align reformatted/edited lines back onto the original word timestamps using a
  * greedy, mismatch-tolerant token walk, so re-segmented/cleaned lines keep
- * accurate start/end times for karaoke sync.
+ * accurate start/end times for karaoke sync. Every display token becomes a word
+ * (preserving the edited spelling); words with no original match get an
+ * interpolated timing so `words` always reconstructs `text`.
  */
-function alignLines(formatted: string[], words: LyricWord[]): LyricLine[] {
+export function alignLines(formatted: string[], words: LyricWord[]): LyricLine[] {
   const out: LyricLine[] = [];
   let cursor = 0;
   let prevEnd = words[0]?.start ?? 0;
 
   for (const text of formatted) {
-    const tokens = text.split(/\s+/).map(normalize).filter(Boolean);
-    const matched: LyricWord[] = [];
+    const tokens = text.split(/\s+/).filter(Boolean);
+    const lineWords: PendingWord[] = tokens.map((t) => ({ text: t, start: null, end: null }));
 
-    for (const token of tokens) {
+    for (let k = 0; k < tokens.length; k++) {
+      const token = normalize(tokens[k]!);
+      if (!token) continue;
       const limit = Math.min(words.length, cursor + 8);
       for (let j = cursor; j < limit; j++) {
         if (normalize(words[j]!.text) === token) {
-          matched.push(words[j]!);
+          lineWords[k]!.start = words[j]!.start;
+          lineWords[k]!.end = words[j]!.end;
           cursor = j + 1;
           break;
         }
       }
     }
 
-    const start = matched[0]?.start ?? prevEnd;
-    const end = matched.at(-1)?.end ?? start;
-    if (matched.length > 0) prevEnd = end;
-    out.push({ text, start, end, words: matched, section: null });
+    const firstMatched = lineWords.find((w) => w.start !== null);
+    const lastMatched = [...lineWords].reverse().find((w) => w.end !== null);
+    const lineStart = firstMatched?.start ?? prevEnd;
+    const lineEnd = lastMatched?.end ?? lineStart;
+
+    fillTimings(lineWords, lineStart, lineEnd);
+
+    const finalWords: LyricWord[] = lineWords.map((w) => ({
+      text: w.text,
+      start: w.start ?? lineStart,
+      end: w.end ?? lineStart,
+    }));
+
+    const start = finalWords[0]?.start ?? lineStart;
+    const end = finalWords.at(-1)?.end ?? lineEnd;
+    prevEnd = end;
+    out.push({ text, start, end, words: finalWords, section: null });
   }
 
   return out;
+}
+
+/**
+ * Re-build a Lyrics object from user-edited text, re-aligning the new lines onto
+ * the original word timestamps so karaoke sync survives edits. Falls back to the
+ * old per-line timings (by position) when no word-level timing is available.
+ */
+export function realignFromText(old: Lyrics, parsed: ParsedLyricsText): Lyrics {
+  const words = old.lines.flatMap((l) => l.words);
+  const sectionByIndex = new Map(parsed.sections.map((s) => [s.index, s.label]));
+
+  const base: LyricLine[] =
+    words.length > 0
+      ? alignLines(parsed.lines, words)
+      : parsed.lines.map((text, i) => ({
+          text,
+          start: old.lines[i]?.start ?? 0,
+          end: old.lines[i]?.end ?? 0,
+          words: [],
+          section: null,
+        }));
+
+  const lines = base.map((line, i) => ({ ...line, section: sectionByIndex.get(i) ?? null }));
+  return { language: old.language, lines };
 }
 
 export async function buildLyrics(output: unknown): Promise<Lyrics> {

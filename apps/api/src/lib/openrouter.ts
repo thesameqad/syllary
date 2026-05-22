@@ -1,3 +1,4 @@
+import type { SongInsights } from "@syllary/shared";
 import { env } from "../env.js";
 
 const SYSTEM_PROMPT = `You are given a rough auto-transcription of a song as an ordered array of text fragments.
@@ -71,6 +72,61 @@ export async function structureLyrics(rawLines: string[]): Promise<StructuredLyr
     }
 
     return { lines: lines.map((l) => l.trim()), sections };
+  } catch {
+    return null;
+  }
+}
+
+const INSIGHTS_PROMPT = `You are given the full lyrics of a song as an ordered array of lines.
+Write a concise, factual "about this song" insight for a public lyrics page.
+Return ONLY JSON: { "summary": string, "themes": string[], "mood": string }.
+
+- "summary": ~60 words, neutral and descriptive. Describe what the song is about and its tone. Do NOT quote long passages or invent facts about the artist.
+- "themes": 3 to 5 short lowercase theme tags (1-2 words each), e.g. "companionship", "heartbreak", "city nights".
+- "mood": 1 to 3 mood words separated by " · ", e.g. "Tender · Introspective".`;
+
+/** Generate an AI "about this song" insight (summary, themes, mood). Returns
+ *  null on any failure so processing can continue without it. */
+export async function summarizeSong(lines: string[]): Promise<SongInsights | null> {
+  if (lines.length === 0) return null;
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: env.OPENROUTER_MODEL,
+        temperature: 0.4,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: INSIGHTS_PROMPT },
+          { role: "user", content: JSON.stringify({ lines }) },
+        ],
+      }),
+    });
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as ChatResponse;
+    const content = data.choices?.[0]?.message?.content;
+    if (typeof content !== "string") return null;
+
+    const parsed = JSON.parse(content) as {
+      summary?: unknown;
+      themes?: unknown;
+      mood?: unknown;
+    };
+    const summary = typeof parsed.summary === "string" ? parsed.summary.trim() : "";
+    const mood = typeof parsed.mood === "string" ? parsed.mood.trim() : "";
+    const themes = Array.isArray(parsed.themes)
+      ? parsed.themes
+          .filter((t): t is string => typeof t === "string" && t.trim().length > 0)
+          .map((t) => t.trim().toLowerCase())
+          .slice(0, 5)
+      : [];
+    if (!summary) return null;
+    return { summary, themes, mood };
   } catch {
     return null;
   }
