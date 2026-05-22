@@ -17,11 +17,14 @@ services:
     plan: starter
     region: oregon
     rootDir: .
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @syllary/api build
+    # Render pre-installs pnpm, so use it directly. (Do NOT run `corepack enable`
+    # — it fails on Render's read-only /usr/bin.)
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @syllary/api build
     # Apply DB migrations after build, before traffic switches (migrations are
     # tracked, so this is a no-op when nothing is pending).
     preDeployCommand: pnpm --filter @syllary/api db:migrate
-    startCommand: pnpm --filter @syllary/api start
+    # Bundled output runs with plain node — no pnpm needed at runtime.
+    startCommand: node apps/api/dist/index.js
     healthCheckPath: /health
     autoDeploy: true
     envVars:
@@ -87,7 +90,7 @@ services:
     name: syllary-web
     runtime: static
     rootDir: .
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @syllary/web build
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @syllary/web build
     staticPublishPath: apps/web/dist
     # SPA: every path falls back to index.html so deep links (e.g. /p/:id public
     # pages) load on a direct hit / refresh.
@@ -96,6 +99,8 @@ services:
         source: /*
         destination: /index.html
     envVars:
+      - key: NODE_VERSION
+        value: "22"
       # Vite vars are baked at BUILD time — set these before the static build runs.
       # Public URL of the API service (e.g. https://api.syllary.com).
       - key: VITE_API_URL
