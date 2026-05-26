@@ -2,9 +2,7 @@ import { useRef } from "react";
 import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import { cn } from "@/lib/utils";
-import { useMediaQuery, usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
-import { CustomCursor } from "./custom-cursor";
+import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { Footer } from "./footer";
 import { Hero } from "./hero";
 import { LivePreview } from "./live-preview";
@@ -16,8 +14,6 @@ gsap.registerPlugin(ScrollTrigger);
 export function LandingPage() {
   const root = useRef<HTMLElement>(null);
   const reduced = usePrefersReducedMotion();
-  const coarsePointer = useMediaQuery("(hover: none)");
-  const showCursor = !reduced && !coarsePointer;
 
   useGSAP(
     () => {
@@ -83,12 +79,8 @@ export function LandingPage() {
   return (
     <main
       ref={root}
-      className={cn(
-        "relative w-full max-w-full overflow-x-hidden bg-void text-white",
-        showCursor && "cursor-none-precise",
-      )}
+      className="relative w-full max-w-full overflow-x-hidden bg-void text-white"
     >
-      {showCursor && <CustomCursor />}
       <Nav />
       <Hero />
       <LivePreview />

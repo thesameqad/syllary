@@ -178,7 +178,6 @@ export function UploadCard({ mode = "anonymous", credits = null, onStarted }: Up
   return (
     <motion.div
       ref={cardRef}
-      data-cursor="interactive"
       onPointerMove={handlePointerMove}
       onPointerLeave={resetTilt}
       onDragOver={(e) => {

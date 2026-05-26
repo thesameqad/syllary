@@ -195,14 +195,6 @@
   background-size: 200px 200px;
 }
 
-/* Custom landing cursor: hide the native cursor only on precise pointers. */
-@media (hover: hover) and (pointer: fine) {
-  .cursor-none-precise,
-  .cursor-none-precise * {
-    cursor: none;
-  }
-}
-
 /* Hard accessibility requirement: kill all motion when the user opts out. */
 @media (prefers-reduced-motion: reduce) {
   html {
@@ -214,9 +206,5 @@
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
-  }
-  .cursor-none-precise,
-  .cursor-none-precise * {
-    cursor: auto;
   }
 }
