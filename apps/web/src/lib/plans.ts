@@ -35,8 +35,8 @@ export const PLAN_TIERS: PlanTier[] = [
     annual: 48,
     features: [
       { text: "5,000 tokens / month" },
-      { text: "All three generation modes (Fast, Normal, Pro)" },
-      { text: "Every export format (.lrc, .ttml, .srt, .vtt, .txt, .json)" },
+      { text: "All three generation modes" },
+      { text: "Every export format" },
       { text: "Inline lyric editing" },
     ],
   },
