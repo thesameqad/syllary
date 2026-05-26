@@ -85,9 +85,19 @@ function PlanCard({
       </div>
       <ul className="mt-3 space-y-1 text-[11px] leading-[1.6] text-white/50">
         {tier.features.map((f) => (
-          <li key={f} className="flex items-center gap-1.5">
-            <Check className="h-3 w-3 text-success" />
-            {f}
+          <li key={f.text} className="flex items-center gap-1.5">
+            <Check
+              className={cn(
+                "h-3 w-3 shrink-0",
+                f.comingSoon ? "text-white/30" : "text-success",
+              )}
+            />
+            <span className={cn(f.comingSoon && "text-white/35")}>{f.text}</span>
+            {f.comingSoon && (
+              <span className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.6px] text-white/55">
+                Soon
+              </span>
+            )}
           </li>
         ))}
       </ul>

@@ -104,7 +104,14 @@ export function Pricing() {
             </div>
             <ul className="mt-4 space-y-1 text-[11px] leading-[1.6] text-white/50">
               {tier.features.map((feature) => (
-                <li key={feature}>{feature}</li>
+                <li key={feature.text} className="flex items-baseline gap-1.5">
+                  <span className={cn(feature.comingSoon && "text-white/35")}>{feature.text}</span>
+                  {feature.comingSoon && (
+                    <span className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.6px] text-white/55">
+                      Soon
+                    </span>
+                  )}
+                </li>
               ))}
             </ul>
             {authConfigured ? (

@@ -8,16 +8,24 @@ export const PLAN_LABEL: Record<Plan, string> = {
   pro: "Pro",
 };
 
+export type PlanFeature = { text: string; comingSoon?: boolean };
+
 export type PlanTier = {
   id: "starter" | "creator" | "pro";
   name: string;
   desc: string;
   monthly: number;
   annual: number;
-  features: string[];
+  features: PlanFeature[];
   featured?: boolean;
 };
 
+// IMPORTANT: keep this list aligned with what the backend actually enforces
+// (see lib/subscription.ts + packages/shared/src/account.ts PLAN_CREDITS).
+// Today the only enforced per-plan differentiator is the monthly token grant
+// — everything else (modes, export formats, inline editing, embed widget,
+// public sharing) is available on every paid plan. Don't list features here
+// that aren't actually gated or that don't yet exist.
 export const PLAN_TIERS: PlanTier[] = [
   {
     id: "starter",
@@ -25,7 +33,12 @@ export const PLAN_TIERS: PlanTier[] = [
     desc: "For trying it out",
     monthly: 6,
     annual: 48,
-    features: ["30 songs/month", "All formats", "Platform validation"],
+    features: [
+      { text: "5,000 tokens / month" },
+      { text: "All three generation modes (Fast, Normal, Pro)" },
+      { text: "Every export format (.lrc, .ttml, .srt, .vtt, .txt, .json)" },
+      { text: "Inline lyric editing" },
+    ],
   },
   {
     id: "creator",
@@ -33,7 +46,11 @@ export const PLAN_TIERS: PlanTier[] = [
     desc: "For active releases",
     monthly: 14,
     annual: 120,
-    features: ["100 songs/month", "Bulk upload", "Priority queue", "Embed widget"],
+    features: [
+      { text: "15,000 tokens / month — 3× Starter" },
+      { text: "Everything in Starter" },
+      { text: "Cancel or upgrade anytime" },
+    ],
     featured: true,
   },
   {
@@ -42,6 +59,11 @@ export const PLAN_TIERS: PlanTier[] = [
     desc: "For labels & studios",
     monthly: 29,
     annual: 240,
-    features: ["400 songs/month", "API access", "Early MP4 video", "Priority support"],
+    features: [
+      { text: "60,000 tokens / month — 4× Creator" },
+      { text: "Everything in Creator" },
+      { text: "API access", comingSoon: true },
+      { text: "Early access to new features", comingSoon: true },
+    ],
   },
 ];
