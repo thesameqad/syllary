@@ -10,11 +10,55 @@ export const FREE_SIGNED_UP_LIFETIME = 3;
 export const FREE_CREDITS = 1000;
 export const FREE_SONG_LIMIT = 3;
 
+/** Generation modes — a tradeoff curve between speed/cost and accuracy. */
+export const GENERATION_MODES = ["fast", "normal", "pro"] as const;
+export type GenerationMode = (typeof GENERATION_MODES)[number];
+
+/** Cost multiplier per mode. The pipeline gets progressively more thorough,
+ *  but we keep the price curve gentle so the right tool for the song never
+ *  feels expensive. */
+export const MODE_MULTIPLIER: Record<GenerationMode, number> = {
+  fast: 1,
+  normal: 1.5,
+  pro: 2,
+};
+
+/** UI metadata for the mode picker. Descriptions are written for musicians,
+ *  not engineers — they should guide the choice by genre/style rather than
+ *  describe the internals. */
+export const MODE_INFO: Record<
+  GenerationMode,
+  { label: string; tagline: string; description: string; eta: string }
+> = {
+  fast: {
+    label: "Fast",
+    tagline: "Great for most songs",
+    description:
+      "Works beautifully on acoustic, pop, singer-songwriter, ballads, country, lo-fi, and most tracks where the vocal sits clearly above the band. The quickest way to get clean, accurate lyrics.",
+    eta: "≈ 1 min for a 5-min song",
+  },
+  normal: {
+    label: "Normal",
+    tagline: "For busier mixes",
+    description:
+      "A more careful pass for indie, R&B, soul, electronic, hip-hop, and anthemic pop — anything where the production is layered or the vocal weaves through a fuller arrangement.",
+    eta: "≈ 1.5 min for a 5-min song",
+  },
+  pro: {
+    label: "Pro",
+    tagline: "For the hardest tracks",
+    description:
+      "Built for rock, metal, punk, hardcore, fast rap, drill, and anything with screams, growls, double-tracked vocals, or a wall of guitars. Catches words the other modes miss.",
+    eta: "≈ 2.5 min for a 5-min song",
+  },
+};
+
 /** Token cost for a track: 100 for the first minute, 50 for each additional
- *  minute (rounded to the nearest minute). */
-export function creditCost(durationSeconds: number): number {
+ *  minute (rounded to the nearest minute), multiplied by the mode tier. */
+export function creditCost(durationSeconds: number, mode: GenerationMode = "pro"): number {
   const minutes = Math.max(1, Math.round(durationSeconds / 60));
-  return 100 + 50 * (minutes - 1);
+  const base = 100 + 50 * (minutes - 1);
+  return Math.round(base * MODE_MULTIPLIER[mode]);
 }
 
 export const ACCEPTED_EXTENSIONS = [".mp3", ".wav", ".flac"] as const;

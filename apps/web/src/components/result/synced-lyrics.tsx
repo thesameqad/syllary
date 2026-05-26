@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Play } from "lucide-react";
 import type { Lyrics, LyricLine } from "@syllary/shared";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { wordsCoverText } from "@/lib/lyrics";
+import { InlineLineEditor } from "@/components/result/inline-line-editor";
 import { cn } from "@/lib/utils";
 
 type SectionGroup = {
@@ -49,17 +50,24 @@ export function SyncedLyrics({
   lyrics,
   currentTime,
   onSeek,
+  canEdit = false,
+  onSaveLine,
+  onEditingChange,
 }: {
   lyrics: Lyrics;
   currentTime: number;
   onSeek: (seconds: number) => void;
+  canEdit?: boolean;
+  onSaveLine?: (lineIndex: number, nextText: string) => Promise<void>;
+  onEditingChange?: (editing: boolean) => void;
 }) {
   const reduced = usePrefersReducedMotion();
-  const activeRef = useRef<HTMLButtonElement>(null);
+  const activeRef = useRef<HTMLSpanElement>(null);
   const sections = useMemo(() => groupSections(lyrics.lines), [lyrics.lines]);
   const activeIndex = lyrics.lines.findIndex(
     (l) => currentTime >= l.start && currentTime < l.end,
   );
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({
@@ -115,25 +123,72 @@ export function SyncedLyrics({
               <div>
                 {section.items.map(({ line, index }) => {
                   const active = index === activeIndex;
+                  const isEditing = editingIndex === index;
+                  const sizeClass = active
+                    ? "text-[19px] font-medium text-white"
+                    : "text-[18px] text-white/30 hover:text-white/55";
+                  const lineContent =
+                    active && wordsCoverText(line) ? (
+                      <ActiveWords line={line} time={currentTime} />
+                    ) : (
+                      line.text
+                    );
+                  const editorBody =
+                    canEdit && onSaveLine ? (
+                      <InlineLineEditor
+                        original={line.text}
+                        canEdit={canEdit}
+                        onSave={(next) => onSaveLine(index, next)}
+                        onEditingChange={(editing) => {
+                          setEditingIndex(editing ? index : null);
+                          onEditingChange?.(editing);
+                        }}
+                        align="left"
+                        textClassName={
+                          active
+                            ? "text-[19px] font-medium text-white"
+                            : "text-[18px] text-white"
+                        }
+                      >
+                        {lineContent}
+                      </InlineLineEditor>
+                    ) : (
+                      lineContent
+                    );
                   return (
-                    <button
+                    <div
                       key={index}
-                      ref={active ? activeRef : undefined}
-                      type="button"
-                      onClick={() => onSeek(line.start)}
                       className={cn(
                         "block w-full text-balance text-left leading-[1.7] transition-all duration-200",
-                        active
-                          ? "text-[19px] font-medium text-white"
-                          : "text-[18px] text-white/30 hover:text-white/55",
+                        sizeClass,
                       )}
                     >
-                      {active && wordsCoverText(line) ? (
-                        <ActiveWords line={line} time={currentTime} />
-                      ) : (
-                        line.text
-                      )}
-                    </button>
+                      {/* Keep the wrapper span mounted across editing
+                          transitions so InlineLineEditor's internal state
+                          isn't wiped on the first pencil click. */}
+                      <span
+                        ref={active ? activeRef : undefined}
+                        role={isEditing ? undefined : "button"}
+                        tabIndex={isEditing ? -1 : 0}
+                        onClick={isEditing ? undefined : () => onSeek(line.start)}
+                        onKeyDown={
+                          isEditing
+                            ? undefined
+                            : (e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  onSeek(line.start);
+                                }
+                              }
+                        }
+                        className={cn(
+                          "inline text-inherit",
+                          isEditing ? "" : "cursor-pointer",
+                        )}
+                      >
+                        {editorBody}
+                      </span>
+                    </div>
                   );
                 })}
               </div>

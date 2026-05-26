@@ -3,9 +3,16 @@ import { AnimatePresence, motion, useMotionValue, useSpring } from "framer-motio
 import gsap from "gsap";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight, Check, FileAudio, Loader2, Upload, X } from "lucide-react";
-import { creditCost, isAcceptedExtension, MAX_DURATION_SECONDS, MAX_FILE_BYTES } from "@syllary/shared";
+import {
+  creditCost,
+  type GenerationMode,
+  isAcceptedExtension,
+  MAX_DURATION_SECONDS,
+  MAX_FILE_BYTES,
+} from "@syllary/shared";
 import { ApiError, uploadAndProcess } from "@/lib/api";
 import { extractMetadata, type AudioMeta } from "@/lib/metadata";
+import { ModeSelector } from "@/components/landing/mode-selector";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
 
@@ -41,6 +48,7 @@ export function UploadCard({ mode = "anonymous", credits = null, onStarted }: Up
   const [progress, setProgress] = useState(0);
   const [statusLabel, setStatusLabel] = useState("Uploading…");
   const [error, setError] = useState<string | null>(null);
+  const [genMode, setGenMode] = useState<GenerationMode>("pro");
 
   const rotateX = useMotionValue(0);
   const rotateY = useMotionValue(0);
@@ -48,7 +56,7 @@ export function UploadCard({ mode = "anonymous", credits = null, onStarted }: Up
   const springY = useSpring(rotateY, { stiffness: 150, damping: 15 });
 
   const isCredits = mode === "credits";
-  const cost = meta ? creditCost(meta.durationSeconds ?? 60) : 0;
+  const cost = meta ? creditCost(meta.durationSeconds ?? 60, genMode) : 0;
   const tooExpensive = isCredits && credits != null && cost > credits;
 
   function handlePointerMove(e: PointerEvent<HTMLDivElement>) {
@@ -144,10 +152,14 @@ export function UploadCard({ mode = "anonymous", credits = null, onStarted }: Up
           year: meta.year,
           durationSeconds: meta.durationSeconds,
           cover: meta.cover,
+          mode: genMode,
         },
         setProgress,
       );
       if (onStarted) onStarted(songId);
+      // Anonymous flow: take them straight to the result page (no library to
+      // land on). Signed-in flow uses onStarted (typically navigates to the
+      // library so they can watch the card progress alongside other tracks).
       else navigate(`/s/${songId}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong. Please try again.");
@@ -286,11 +298,21 @@ export function UploadCard({ mode = "anonymous", credits = null, onStarted }: Up
               </div>
             ) : (
               <>
+                <div className="mt-4">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[1.5px] text-white/40">
+                    Generation mode
+                  </label>
+                  <ModeSelector
+                    value={genMode}
+                    onChange={setGenMode}
+                    showCostMultiplier={isCredits}
+                  />
+                </div>
                 <button
                   type="button"
                   onClick={() => void startProcessing()}
                   disabled={tooExpensive}
-                  className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-pulse py-3 text-[14px] font-medium text-white shadow-[0_4px_24px_rgba(255,45,45,0.5)] transition-transform hover:scale-[1.02] disabled:opacity-50 disabled:hover:scale-100"
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-full bg-pulse py-3 text-[14px] font-medium text-white shadow-[0_4px_24px_rgba(255,45,45,0.5)] transition-transform hover:scale-[1.02] disabled:opacity-50 disabled:hover:scale-100"
                 >
                   {isCredits ? (
                     <>

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  AlertCircle,
   Check,
   Copy,
   Globe,
@@ -17,6 +18,7 @@ import {
 import type { SongSummary } from "@syllary/shared";
 import { useToast } from "@/components/ui/toast";
 import { Modal } from "@/components/ui/modal";
+import { ProcessingOverlay } from "@/components/dashboard/processing-overlay";
 import { cn } from "@/lib/utils";
 
 export type SongCardManage = {
@@ -33,7 +35,9 @@ function fmtDuration(s: number | null): string {
 function statusText(song: SongSummary): string {
   if (song.status === "ready") return `${song.lineCount} lines`;
   if (song.status === "failed") return "Failed";
-  return "Processing…";
+  if (song.stage === "separating") return "Isolating vocals…";
+  if (song.stage === "transcribing") return "Transcribing…";
+  return "Queued…";
 }
 
 const MENU_ITEM =
@@ -128,8 +132,18 @@ export function SongCard({ song, manage }: { song: SongSummary; manage?: SongCar
         </div>
       )}
       {!ready && song.status !== "failed" && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/55">
-          <Loader2 className="h-6 w-6 animate-spin text-pulse" />
+        <ProcessingOverlay
+          startedAt={song.processingStartedAt ?? song.createdAt}
+          stage={song.stage}
+        />
+      )}
+      {song.status === "failed" && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/70 p-3 text-center backdrop-blur-[1px]">
+          <AlertCircle className="h-6 w-6 text-pulse" />
+          <span className="text-[12px] font-medium text-white">Generation failed</span>
+          <span className="text-[11px] leading-snug text-white/55">
+            Open the track to retry with another mode.
+          </span>
         </div>
       )}
       {song.isPublic && (
@@ -178,7 +192,7 @@ export function SongCard({ song, manage }: { song: SongSummary; manage?: SongCar
         <X className="h-3.5 w-3.5" />
       </button>
     </div>
-  ) : ready ? (
+  ) : ready || song.status === "failed" ? (
     <Link to={`/s/${song.id}`} className="block truncate text-[13px] font-medium text-white hover:underline">
       {song.title}
     </Link>
@@ -186,10 +200,13 @@ export function SongCard({ song, manage }: { song: SongSummary; manage?: SongCar
     <div className="truncate text-[13px] font-medium text-white">{song.title}</div>
   );
 
+  // Failed songs are clickable too so the user can open the result page and
+  // retry via the regenerate banner.
+  const navigable = ready || song.status === "failed";
   return (
     <div className="relative">
       <div className="overflow-hidden rounded-[14px] border border-white/[0.07] bg-stage/50 transition-colors hover:border-white/15">
-        {ready ? (
+        {navigable ? (
           <Link to={`/s/${song.id}`} className="block">
             {cover}
           </Link>

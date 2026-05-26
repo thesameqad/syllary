@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import type { Lyrics, LyricLine } from "@syllary/shared";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { wordsCoverText } from "@/lib/lyrics";
+import { InlineLineEditor } from "@/components/result/inline-line-editor";
 import { cn } from "@/lib/utils";
 
 function clock(seconds: number): string {
@@ -96,12 +97,19 @@ export function DynamicLyrics({
   currentTime,
   onSeek,
   align = "center",
+  canEdit = false,
+  onSaveLine,
+  onEditingChange,
 }: {
   lyrics: Lyrics;
   currentTime: number;
   onSeek: (seconds: number) => void;
   align?: "center" | "left";
+  canEdit?: boolean;
+  onSaveLine?: (lineIndex: number, nextText: string) => Promise<void>;
+  onEditingChange?: (editing: boolean) => void;
 }) {
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const reduced = usePrefersReducedMotion();
   const lines = lyrics.lines;
   const left = align === "left";
@@ -160,34 +168,78 @@ export function DynamicLyrics({
         )}
       >
         <AnimatePresence mode="popLayout" initial={false}>
-          {slots.map(({ index, role }) => (
-            <motion.button
-              key={index}
-              layout
-              type="button"
-              onClick={() => onSeek(lines[index]!.start)}
-              initial={{ opacity: 0, y: 26, filter: "blur(4px)" }}
-              animate={{
-                opacity: role === "current" ? 1 : 0.35,
-                y: 0,
-                filter: "blur(0px)",
-              }}
-              exit={{ opacity: 0, y: -26, filter: "blur(4px)" }}
-              transition={transition}
-              className={cn(
-                "max-w-full text-balance px-4 leading-snug",
-                role === "current"
-                  ? "text-[clamp(20px,3.2vw,28px)] font-medium text-white"
-                  : "text-[clamp(15px,2.4vw,19px)] text-white/35",
-              )}
-            >
-              {role === "current" ? (
-                <HighlightLine line={lines[index]!} time={currentTime} />
+          {slots.map(({ index, role }) => {
+            const line = lines[index]!;
+            const isCurrent = role === "current";
+            const isEditing = editingIndex === index;
+            const lineContent = isCurrent ? (
+              <HighlightLine line={line} time={currentTime} />
+            ) : (
+              line.text
+            );
+            const sizeClass = isCurrent
+              ? "text-[clamp(20px,3.2vw,28px)] font-medium text-white"
+              : "text-[clamp(15px,2.4vw,19px)] text-white/35";
+            const editorBody =
+              canEdit && onSaveLine ? (
+                <InlineLineEditor
+                  original={line.text}
+                  canEdit={canEdit}
+                  onSave={(next) => onSaveLine(index, next)}
+                  onEditingChange={(editing) => {
+                    setEditingIndex(editing ? index : null);
+                    onEditingChange?.(editing);
+                  }}
+                  align={align}
+                  textClassName={sizeClass}
+                >
+                  {lineContent}
+                </InlineLineEditor>
               ) : (
-                lines[index]!.text
-              )}
-            </motion.button>
-          ))}
+                lineContent
+              );
+            return (
+              <motion.div
+                key={index}
+                layout
+                initial={{ opacity: 0, y: 26, filter: "blur(4px)" }}
+                animate={{
+                  opacity: isCurrent ? 1 : 0.35,
+                  y: 0,
+                  filter: "blur(0px)",
+                }}
+                exit={{ opacity: 0, y: -26, filter: "blur(4px)" }}
+                transition={transition}
+                className={cn("max-w-full text-balance px-4 leading-snug", sizeClass)}
+              >
+                {/* Wrapper stays mounted regardless of editing state so that
+                    InlineLineEditor's internal state isn't wiped when the
+                    user starts an edit. When editing we drop the seek
+                    interactions so the input can take focus cleanly. */}
+                <span
+                  role={isEditing ? undefined : "button"}
+                  tabIndex={isEditing ? -1 : 0}
+                  onClick={isEditing ? undefined : () => onSeek(line.start)}
+                  onKeyDown={
+                    isEditing
+                      ? undefined
+                      : (e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            onSeek(line.start);
+                          }
+                        }
+                  }
+                  className={cn(
+                    "inline text-inherit",
+                    isEditing ? "" : "cursor-pointer",
+                  )}
+                >
+                  {editorBody}
+                </span>
+              </motion.div>
+            );
+          })}
         </AnimatePresence>
       </div>
     </div>

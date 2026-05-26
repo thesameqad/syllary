@@ -17,6 +17,9 @@ const envSchema = z.object({
   REPLICATE_API_TOKEN: z.string().min(1),
   OPENROUTER_API_KEY: z.string().min(1),
   OPENROUTER_MODEL: z.string().default("google/gemini-2.5-flash"),
+  // Used for reconciling multiple transcripts into canonical lyrics. Opus
+  // handles explicit content reliably; Sonnet refuses some songs.
+  OPENROUTER_RECONCILE_MODEL: z.string().default("anthropic/claude-opus-4.1"),
   // Optional so the API still runs (anonymous-only) before auth/billing are configured.
   CLERK_SECRET_KEY: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),

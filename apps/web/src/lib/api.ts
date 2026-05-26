@@ -7,6 +7,7 @@ import {
   songSchema,
   type Account,
   type BillingPeriod,
+  type GenerationMode,
   type PresignRequest,
   type PresignResponse,
   type PublicSong,
@@ -90,6 +91,7 @@ type UploadOptions = {
   year?: number | null;
   durationSeconds: number | null;
   cover: { blob: Blob; contentType: string } | null;
+  mode?: GenerationMode;
 };
 
 /** Full upload flow: presign → PUT audio (+ cover) → start processing. */
@@ -118,17 +120,32 @@ export async function uploadAndProcess(
       // cover is best-effort
     }
   }
-  await processSong(presign.songId);
+  await processSong(presign.songId, opts.mode);
   return presign.songId;
 }
 
-export async function processSong(id: string): Promise<Song> {
+export async function processSong(id: string, mode?: GenerationMode): Promise<Song> {
   const res = await fetch(`${API_BASE}/api/songs/${id}/process`, {
     method: "POST",
-    headers: { ...(await authHeaders()) },
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(mode ? { mode } : {}),
   });
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not process track."), res.status);
+  return songSchema.parse(data);
+}
+
+/** Re-run the pipeline for an already-uploaded song with a different mode.
+ *  Reuses the R2 audio file (no upload), charges the new mode's token cost,
+ *  and resets the row to "processing". */
+export async function regenerateSong(id: string, mode: GenerationMode): Promise<Song> {
+  const res = await fetch(`${API_BASE}/api/songs/${id}/regenerate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ mode }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not regenerate."), res.status);
   return songSchema.parse(data);
 }
 

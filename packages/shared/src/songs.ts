@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { GENERATION_MODES } from "./constants.js";
 import { lyricsSchema } from "./lyrics.js";
 
 export const SONG_STATUSES = ["pending", "processing", "ready", "failed"] as const;
@@ -8,6 +9,13 @@ export type SongStatus = z.infer<typeof songStatusSchema>;
 export const SONG_STAGES = ["separating", "transcribing"] as const;
 export const songStageSchema = z.enum(SONG_STAGES);
 export type SongStage = z.infer<typeof songStageSchema>;
+
+export const generationModeSchema = z.enum(GENERATION_MODES);
+
+export const processSongSchema = z.object({
+  mode: generationModeSchema.optional(),
+});
+export type ProcessSongRequest = z.infer<typeof processSongSchema>;
 
 export const presignRequestSchema = z.object({
   filename: z.string().min(1).max(255),
@@ -77,6 +85,12 @@ export const songSchema = z.object({
   audioFeatures: audioFeaturesSchema.nullable().default(null),
   error: z.string().nullable(),
   createdAt: z.string(),
+  /** When the pipeline actually started (status → processing). Null if not yet
+   *  processed; we don't backfill legacy rows. Used by the progress overlay so
+   *  elapsed time doesn't count the upload-form linger time. */
+  processingStartedAt: z.string().nullable().default(null),
+  /** Mode used to generate the lyrics. null for legacy rows pre-mode-feature. */
+  mode: generationModeSchema.nullable().default(null),
   /** True when the requesting user owns this song and may edit it. */
   canEdit: z.boolean().default(false),
 });
@@ -86,12 +100,16 @@ export const songSummarySchema = z.object({
   id: z.string().uuid(),
   title: z.string(),
   status: songStatusSchema,
+  /** Sub-stage while status === "processing". null otherwise. */
+  stage: z.enum(["separating", "transcribing"]).nullable().default(null),
   durationSeconds: z.number().nullable(),
   coverUrl: z.string().url().nullable(),
   isPublic: z.boolean(),
   language: z.string().nullable(),
   lineCount: z.number(),
   createdAt: z.string(),
+  processingStartedAt: z.string().nullable().default(null),
+  mode: generationModeSchema.nullable().default(null),
 });
 export type SongSummary = z.infer<typeof songSummarySchema>;
 

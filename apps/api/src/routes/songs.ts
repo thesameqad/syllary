@@ -3,7 +3,9 @@ import { and, desc, eq, gte, isNotNull, ne, sql } from "drizzle-orm";
 import {
   creditCost,
   editLyricsSchema,
+  type GenerationMode,
   parseLyricsText,
+  processSongSchema,
   type PublicSong,
   type PublicTrackItem,
   rateSongSchema,
@@ -21,7 +23,7 @@ import { deleteObject, objectSize, presignGet } from "../lib/r2.js";
 import {
   getPrediction,
   startSeparation,
-  startTranscription,
+  startTranscriptionForMode,
   vocalsUrlFromOutput,
 } from "../lib/replicate.js";
 import { buildLyrics, realignFromText } from "../lib/transcript.js";
@@ -31,6 +33,17 @@ import { getOrCreateUser } from "../lib/users.js";
 
 // Two Replicate steps (Demucs + WhisperX), so allow more headroom than one.
 const PROCESSING_TIMEOUT_MS = 10 * 60 * 1000;
+
+// Atomic-claim marker for the separating→transcribing transition. We encode the
+// upstream demucs prediction ID so a crash between claim and the real IDs being
+// written can be recovered (next poll rolls back to "separating" with the same
+// demucs ID, re-fetching vocalsUrl without paying for separation again).
+const CLAIM_PREFIX = "claim:";
+const CLAIM_STALE_MS = 90 * 1000;
+// Atomic claim for the transcribing→ready finalize step. Encodes the prior
+// prediction IDs so a stale claim can be rolled back without losing them.
+const FINALIZE_PREFIX = "finalize:";
+const FINALIZE_STALE_MS = 60 * 1000;
 
 function startOfUtcDay(): Date {
   const now = new Date();
@@ -65,6 +78,8 @@ async function toSongDto(row: SongRow, canEdit = false): Promise<Song> {
     audioFeatures: row.audioFeatures ?? null,
     error: row.error,
     createdAt: row.createdAt.toISOString(),
+    processingStartedAt: row.processingStartedAt ? row.processingStartedAt.toISOString() : null,
+    mode: row.mode ?? null,
     canEdit,
   };
 }
@@ -75,12 +90,15 @@ async function toSongSummary(row: SongRow): Promise<SongSummary> {
     id: row.id,
     title: row.title ?? row.originalFilename,
     status: row.status,
+    stage: row.stage ?? null,
     durationSeconds: row.durationSeconds,
     coverUrl,
     isPublic: row.isPublic,
     language: row.language,
     lineCount: row.lyrics?.lines.length ?? 0,
     createdAt: row.createdAt.toISOString(),
+    processingStartedAt: row.processingStartedAt ? row.processingStartedAt.toISOString() : null,
+    mode: row.mode ?? null,
   };
 }
 
@@ -176,40 +194,139 @@ async function finalizeIfDone(row: SongRow): Promise<SongRow> {
   const predictionId = row.replicatePredictionId;
   if (!predictionId) return row;
 
-  if (Date.now() - row.createdAt.getTime() > PROCESSING_TIMEOUT_MS) {
+  // Time out from when processing actually started, not from row creation —
+  // a regenerated song's createdAt is the original upload time and would
+  // wrongly trigger an immediate timeout.
+  const startedAt = row.processingStartedAt ?? row.createdAt;
+  if (Date.now() - startedAt.getTime() > PROCESSING_TIMEOUT_MS) {
     return (await markFailed(row.id, "Processing timed out.")) ?? row;
   }
 
-  const prediction = await getPrediction(predictionId);
-  if (prediction.status === "failed" || prediction.status === "canceled") {
-    const what = row.stage === "separating" ? "Vocal isolation" : "Transcription";
-    return (await markFailed(row.id, prediction.error ?? `${what} failed.`)) ?? row;
-  }
-  if (prediction.status !== "succeeded") return row;
-
-  // Stage 1 done: hand the isolated vocals to WhisperX.
+  // Stage 1 (separating): a single Demucs prediction ID.
   if (row.stage === "separating") {
+    const prediction = await getPrediction(predictionId);
+    if (prediction.status === "failed" || prediction.status === "canceled") {
+      return (await markFailed(row.id, prediction.error ?? "Vocal isolation failed.")) ?? row;
+    }
+    if (prediction.status !== "succeeded") return row;
+
     const vocalsUrl = vocalsUrlFromOutput(prediction.output);
     if (!vocalsUrl) {
       return (await markFailed(row.id, "Vocal isolation produced no output.")) ?? row;
     }
-    let transcriptionId: string;
+
+    // Atomically claim the stage transition so only one concurrent poll fires
+    // the (expensive) triple WhisperX kickoff. The marker encodes the demucs
+    // prediction ID so a crash between claim and write can be auto-recovered.
+    const claimMarker = `${CLAIM_PREFIX}${predictionId}`;
+    const [claimed] = await db
+      .update(songs)
+      .set({
+        stage: "transcribing",
+        replicatePredictionId: claimMarker,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(songs.id, row.id), eq(songs.status, "processing"), eq(songs.stage, "separating")))
+      .returning();
+    if (!claimed) {
+      // Another poll won the claim — bail out, let the next poll see the new state.
+      return (await getSongRow(row.id)) ?? row;
+    }
+
+    // Default legacy rows (mode=null) to pro so behavior is unchanged.
+    const mode: GenerationMode = row.mode ?? "pro";
+    const mixUrl = await presignGet(row.r2Key);
+    let transcriptionIds: string[];
     try {
-      transcriptionId = await startTranscription(vocalsUrl);
-    } catch {
-      // Likely transient (rate limit); leave as-is and retry on the next poll.
-      return row;
+      transcriptionIds = await startTranscriptionForMode(vocalsUrl, mixUrl, mode);
+    } catch (err) {
+      // All retries exhausted — roll back the claim so the next poll can retry.
+      await db
+        .update(songs)
+        .set({ stage: "separating", replicatePredictionId: predictionId, updatedAt: new Date() })
+        .where(and(eq(songs.id, row.id), eq(songs.replicatePredictionId, claimMarker)));
+      throw err;
     }
     const [updated] = await db
       .update(songs)
-      .set({ stage: "transcribing", replicatePredictionId: transcriptionId, updatedAt: new Date() })
-      .where(and(eq(songs.id, row.id), eq(songs.status, "processing"), eq(songs.stage, "separating")))
+      .set({
+        // 1 ID (fast/normal) or 3 IDs (pro). Stored comma-separated to avoid a
+        // schema migration. Pro order: vocals, mix(t=0), mix(t=0.4).
+        replicatePredictionId: transcriptionIds.join(","),
+        updatedAt: new Date(),
+      })
+      .where(and(eq(songs.id, row.id), eq(songs.replicatePredictionId, claimMarker)))
       .returning();
     return updated ?? (await getSongRow(row.id)) ?? row;
   }
 
-  // Stage 2 done: build and store lyrics + an AI "about this song" insight.
-  const lyrics = await buildLyrics(prediction.output);
+  // Stage 2 (transcribing): 1 or 3 WhisperX predictions depending on mode.
+  // A "claim:<demucsId>" marker means a previous poll started the claim and
+  // crashed before writing real IDs — if stale, roll back so the next poll
+  // re-kicks transcription using the (still cached, succeeded) demucs run.
+  if (predictionId.startsWith(CLAIM_PREFIX)) {
+    const age = Date.now() - row.updatedAt.getTime();
+    if (age < CLAIM_STALE_MS) return row;
+    const demucsId = predictionId.slice(CLAIM_PREFIX.length);
+    const [reset] = await db
+      .update(songs)
+      .set({ stage: "separating", replicatePredictionId: demucsId, updatedAt: new Date() })
+      .where(and(eq(songs.id, row.id), eq(songs.replicatePredictionId, predictionId)))
+      .returning();
+    return reset ?? row;
+  }
+
+  // A "finalize:<ids>" marker means another poll is currently running the LLM
+  // build step. If it's stale (process crashed / fetch aborted), roll back so
+  // this poll can retry.
+  if (predictionId.startsWith(FINALIZE_PREFIX)) {
+    const age = Date.now() - row.updatedAt.getTime();
+    if (age < FINALIZE_STALE_MS) return row;
+    const ids = predictionId.slice(FINALIZE_PREFIX.length);
+    const [reset] = await db
+      .update(songs)
+      .set({ replicatePredictionId: ids, updatedAt: new Date() })
+      .where(and(eq(songs.id, row.id), eq(songs.replicatePredictionId, predictionId)))
+      .returning();
+    return reset ?? row;
+  }
+
+  const ids = predictionId.split(",");
+  if (ids.length !== 1 && ids.length !== 3) {
+    return (await markFailed(row.id, "Transcription state corrupted.")) ?? row;
+  }
+  const predictions = await Promise.all(ids.map((id) => getPrediction(id)));
+  for (const p of predictions) {
+    if (p.status === "failed" || p.status === "canceled") {
+      return (await markFailed(row.id, p.error ?? "Transcription failed.")) ?? row;
+    }
+  }
+  if (predictions.some((p) => p.status !== "succeeded")) return row;
+
+  // Atomically claim the finalize step. Concurrent polls would otherwise each
+  // run buildLyrics (= multiple LLM calls) and the first one to UPDATE wins —
+  // if it happens to be the one that hit a transient blip, the row gets saved
+  // with null-structured lyrics. The claim ensures exactly one poll runs it.
+  const finalizeMarker = `${FINALIZE_PREFIX}${predictionId}`;
+  const [claimed] = await db
+    .update(songs)
+    .set({ replicatePredictionId: finalizeMarker, updatedAt: new Date() })
+    .where(and(eq(songs.id, row.id), eq(songs.replicatePredictionId, predictionId)))
+    .returning();
+  if (!claimed) return (await getSongRow(row.id)) ?? row;
+
+  const outputs = predictions.map((p) => p.output);
+  let lyrics;
+  try {
+    lyrics = await buildLyrics(outputs);
+  } catch (err) {
+    // Roll back the finalize claim so the next poll can retry.
+    await db
+      .update(songs)
+      .set({ replicatePredictionId: predictionId, updatedAt: new Date() })
+      .where(and(eq(songs.id, row.id), eq(songs.replicatePredictionId, finalizeMarker)));
+    throw err;
+  }
   const lastEnd = lyrics.lines.at(-1)?.end;
   const duration =
     row.durationSeconds ?? (typeof lastEnd === "number" ? Math.round(lastEnd) : null);
@@ -223,9 +340,10 @@ async function finalizeIfDone(row: SongRow): Promise<SongRow> {
       insights,
       language: lyrics.language,
       durationSeconds: duration,
+      replicatePredictionId: null,
       updatedAt: new Date(),
     })
-    .where(and(eq(songs.id, row.id), eq(songs.status, "processing"), eq(songs.stage, "transcribing")))
+    .where(and(eq(songs.id, row.id), eq(songs.replicatePredictionId, finalizeMarker)))
     .returning();
 
   // Funnel: record one "generated" event for the call that actually finalized
@@ -252,10 +370,16 @@ export async function songsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "Upload not found. Please try again." });
     }
 
+    const bodyParse = processSongSchema.safeParse(req.body ?? {});
+    if (!bodyParse.success) {
+      return reply.code(400).send({ error: "Invalid mode." });
+    }
+    const mode: GenerationMode = bodyParse.data.mode ?? "pro";
+
     // Server-side check before any Replicate call (rule #2).
     const clerkId = await getAuthUserId(req);
     let authedUser: UserRow | null = null;
-    const cost = creditCost(row.durationSeconds ?? 60);
+    const cost = creditCost(row.durationSeconds ?? 60, mode);
     if (clerkId) {
       authedUser = await getOrCreateUser(clerkId);
       if (authedUser.credits < cost) {
@@ -287,7 +411,7 @@ export async function songsRoutes(app: FastifyInstance) {
     let predictionId: string;
     try {
       // Step 1: isolate vocals (Demucs); WhisperX runs on the stem in finalize.
-      predictionId = await startSeparation(audioUrl);
+      predictionId = await startSeparation(audioUrl, mode);
     } catch (err) {
       req.log.error(err);
       await db
@@ -297,13 +421,16 @@ export async function songsRoutes(app: FastifyInstance) {
       return reply.code(502).send({ error: "Could not start processing." });
     }
 
+    const startedAt = new Date();
     const [updated] = await db
       .update(songs)
       .set({
         status: "processing",
         stage: "separating",
+        mode,
         replicatePredictionId: predictionId,
-        updatedAt: new Date(),
+        processingStartedAt: startedAt,
+        updatedAt: startedAt,
       })
       .where(and(eq(songs.id, row.id), eq(songs.status, "pending")))
       .returning();
@@ -321,6 +448,81 @@ export async function songsRoutes(app: FastifyInstance) {
     }
 
     return reply.send(await toSongDto(updated ?? row));
+  });
+
+  // Regenerate a previously-processed song with a different mode. Reuses the
+  // existing R2 audio file (no re-upload) and the cover art. Charges credits
+  // for the new mode and resets the lyrics/insights so the result page shows
+  // the new transcript when polling completes.
+  app.post<{ Params: { id: string } }>("/songs/:id/regenerate", async (req, reply) => {
+    const clerkId = await getAuthUserId(req);
+    if (!clerkId) return reply.code(401).send({ error: "Sign in to regenerate." });
+    const user = await getOrCreateUser(clerkId);
+
+    const row = await getSongRow(req.params.id);
+    if (!row || row.userId !== user.id) {
+      return reply.code(404).send({ error: "Not found." });
+    }
+    if (row.status === "processing") {
+      return reply.code(409).send({ error: "This track is already being processed." });
+    }
+
+    const bodyParse = processSongSchema.safeParse(req.body ?? {});
+    if (!bodyParse.success || !bodyParse.data.mode) {
+      return reply.code(400).send({ error: "A mode is required to regenerate." });
+    }
+    const mode: GenerationMode = bodyParse.data.mode;
+
+    const size = await objectSize(row.r2Key);
+    if (size === null) {
+      return reply.code(400).send({ error: "Original upload no longer available." });
+    }
+
+    const cost = creditCost(row.durationSeconds ?? 60, mode);
+    if (user.credits < cost) {
+      return reply.code(402).send({
+        error: `Not enough tokens — regenerating this track costs ${cost}. Upgrade for more.`,
+      });
+    }
+
+    const audioUrl = await presignGet(row.r2Key);
+    let predictionId: string;
+    try {
+      predictionId = await startSeparation(audioUrl, mode);
+    } catch (err) {
+      req.log.error(err);
+      return reply.code(502).send({ error: "Could not start regeneration." });
+    }
+
+    const startedAt = new Date();
+    const [updated] = await db
+      .update(songs)
+      .set({
+        status: "processing",
+        stage: "separating",
+        mode,
+        replicatePredictionId: predictionId,
+        processingStartedAt: startedAt,
+        // Clear the previous run's output so the result page shows the new
+        // processing state instead of the stale ready/failed view.
+        lyrics: null,
+        insights: null,
+        error: null,
+        updatedAt: startedAt,
+      })
+      .where(eq(songs.id, row.id))
+      .returning();
+
+    await db
+      .update(users)
+      .set({
+        credits: sql`GREATEST(${users.credits} - ${cost}, 0)`,
+        songsLifetime: sql`${users.songsLifetime} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, user.id));
+
+    return reply.send(await toSongDto(updated ?? row, true));
   });
 
   // Popular public songs (most recent ready public tracks).

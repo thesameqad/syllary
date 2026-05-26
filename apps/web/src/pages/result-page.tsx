@@ -1,14 +1,25 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useAuth } from "@clerk/clerk-react";
-import { AlertCircle, ArrowLeft, ExternalLink, Pencil, SlidersHorizontal } from "lucide-react";
-import type { Song } from "@syllary/shared";
-import { ApiError, getSong } from "@/lib/api";
+import {
+  AlertCircle,
+  ArrowLeft,
+  ExternalLink,
+  Pencil,
+  Sparkles,
+  SlidersHorizontal,
+  Wand2,
+  Zap,
+} from "lucide-react";
+import { lyricsToText, MODE_INFO, type Song } from "@syllary/shared";
+import { ApiError, getSong, updateSongLyrics } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 import { LogoWordmark } from "@/components/logo";
 import { LyricsPlayer } from "@/components/result/lyrics-player";
 import { LyricsEditModal } from "@/components/result/lyrics-editor";
 import { PublicDetailsModal } from "@/components/result/public-details-modal";
 import { ProcessingView } from "@/components/result/processing-view";
+import { RegenerateBanner } from "@/components/result/regenerate-banner";
 import { DashboardChrome } from "@/components/dashboard/dashboard-layout";
 import { authConfigured } from "@/lib/auth";
 
@@ -63,6 +74,20 @@ function ResultPageAuthAware() {
   return <ResultPageInner signedIn={isLoaded && !!isSignedIn} />;
 }
 
+// Signed-in users get the dashboard chrome; anonymous visitors the standalone
+// shell. Defined at module scope so the component reference is stable across
+// re-renders — otherwise React unmounts/remounts the subtree (including the
+// WaveSurfer player) on every parent re-render, which would reset playback.
+function Frame({ signedIn, children }: { signedIn: boolean; children: ReactNode }) {
+  return signedIn ? (
+    <DashboardChrome>
+      <div className="mx-auto max-w-[860px]">{children}</div>
+    </DashboardChrome>
+  ) : (
+    <StandaloneShell>{children}</StandaloneShell>
+  );
+}
+
 function ResultPageInner({ signedIn }: { signedIn: boolean }) {
   const { songId } = useParams<{ songId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -70,16 +95,7 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
-
-  // Signed-in users get the dashboard chrome; anonymous visitors the standalone shell.
-  const Frame = ({ children }: { children: ReactNode }) =>
-    signedIn ? (
-      <DashboardChrome>
-        <div className="mx-auto max-w-[860px]">{children}</div>
-      </DashboardChrome>
-    ) : (
-      <StandaloneShell>{children}</StandaloneShell>
-    );
+  const toast = useToast();
 
   // Auto-open the editor when arriving via `?edit=1` (e.g. the library menu),
   // but only for the owner. Clear the param so reloads don't reopen it.
@@ -91,6 +107,9 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
     }
   }, [wantsEdit, song?.status, song?.canEdit, setSearchParams]);
 
+  // Polling re-runs whenever status transitions to/from processing — so a
+  // regenerate (ready → processing) automatically restarts the poll chain.
+  const status = song?.status;
   useEffect(() => {
     if (!songId) return;
     let active = true;
@@ -114,11 +133,11 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
       active = false;
       clearTimeout(timer);
     };
-  }, [songId]);
+  }, [songId, status]);
 
   if (error) {
     return (
-      <Frame>
+      <Frame signedIn={signedIn}>
         <Centered>
           <AlertCircle className="mb-4 h-8 w-8 text-pulse" />
           <h1 className="text-[22px] font-medium">{error}</h1>
@@ -132,7 +151,7 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
 
   if (!song || song.status === "pending" || song.status === "processing") {
     return (
-      <Frame>
+      <Frame signedIn={signedIn}>
         <ProcessingView
           stage={song?.stage ?? null}
           filename={song?.originalFilename ?? "Working on it"}
@@ -143,19 +162,32 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
 
   if (song.status === "failed") {
     return (
-      <Frame>
-        <Centered>
-          <AlertCircle className="mb-4 h-8 w-8 text-pulse" />
-          <h1 className="text-[22px] font-medium tracking-[-0.5px]">
-            We couldn&apos;t process that track
-          </h1>
-          <p className="mt-2 max-w-[420px] text-[14px] text-white/50">
-            {song.error ?? "Something went wrong during transcription."}
-          </p>
-          <Link to="/" className="mt-6 rounded-full bg-pulse px-6 py-2.5 text-[14px] font-medium text-white">
-            Try another track
-          </Link>
-        </Centered>
+      <Frame signedIn={signedIn}>
+        <div className="mx-auto max-w-[560px]">
+          <div className="flex flex-col items-center text-center">
+            <AlertCircle className="mb-4 h-8 w-8 text-pulse" />
+            <h1 className="text-[22px] font-medium tracking-[-0.5px]">
+              We couldn&apos;t process that track
+            </h1>
+            <p className="mt-2 max-w-[420px] text-[14px] text-white/50">
+              {song.error ?? "Something went wrong during transcription."}
+            </p>
+            <Link
+              to="/"
+              className="mt-6 rounded-full border border-white/15 bg-white/[0.04] px-6 py-2.5 text-[14px] font-medium text-white/80 transition-colors hover:bg-white/[0.08]"
+            >
+              Try another track
+            </Link>
+          </div>
+          {song.canEdit && (
+            <RegenerateBanner
+              songId={song.id}
+              currentMode={song.mode ?? "fast"}
+              durationSeconds={song.durationSeconds}
+              variant="retry-failed"
+            />
+          )}
+        </div>
       </Frame>
     );
   }
@@ -169,8 +201,36 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
     .filter(Boolean)
     .join(" · ");
 
+  // Apply a server-side update without re-rendering the audio element. R2
+  // presigns a fresh signature on every response, but the underlying audio
+  // file is unchanged. Swapping the URL would tear down and re-init WaveSurfer
+  // (resetting playback to 0), so we keep the URL we mounted with.
+  function applyUpdate(updated: Song) {
+    setSong((prev) => ({ ...updated, audioUrl: prev?.audioUrl ?? updated.audioUrl }));
+  }
+
+  // Persist a single inline edit by rebuilding the editable text document with
+  // the one line swapped and PATCHing the existing /songs/:id/lyrics endpoint
+  // (which already realigns text against the original word timestamps).
+  async function saveLine(lineIndex: number, nextText: string): Promise<void> {
+    if (!song) return;
+    const current = song.lyrics;
+    if (!current) return;
+    const nextLines = current.lines.map((l, i) =>
+      i === lineIndex ? { ...l, text: nextText } : l,
+    );
+    const text = lyricsToText({ language: current.language, lines: nextLines });
+    try {
+      const updated = await updateSongLyrics(song.id, text);
+      applyUpdate(updated);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't save that edit.", "error");
+      throw e;
+    }
+  }
+
   return (
-    <Frame>
+    <Frame signedIn={signedIn}>
       <LyricsPlayer
         audioUrl={song.audioUrl}
         lyrics={lyrics}
@@ -178,11 +238,26 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
         meta={meta}
         baseName={baseNameOf(song.originalFilename)}
         showDownloads
+        canEdit={song.canEdit}
+        onSaveLine={song.canEdit ? saveLine : undefined}
         badge={
-          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-success/[0.12] px-3 py-[5px] text-[11px] font-medium text-success">
-            <span className="h-[5px] w-[5px] rounded-full bg-success" />
-            Platform-ready
-          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            {song.mode && (
+              <span
+                title={MODE_INFO[song.mode].description}
+                className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-[5px] text-[11px] font-medium text-white/80"
+              >
+                {song.mode === "fast" && <Zap className="h-3 w-3 text-pulse" />}
+                {song.mode === "normal" && <Wand2 className="h-3 w-3 text-pulse" />}
+                {song.mode === "pro" && <Sparkles className="h-3 w-3 text-pulse" />}
+                {MODE_INFO[song.mode].label} mode
+              </span>
+            )}
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-success/[0.12] px-3 py-[5px] text-[11px] font-medium text-success">
+              <span className="h-[5px] w-[5px] rounded-full bg-success" />
+              Platform-ready
+            </span>
+          </div>
         }
         toolbarLeft={
           song.canEdit || song.isPublic ? (
@@ -221,6 +296,15 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
             </div>
           ) : undefined
         }
+        belowLyrics={
+          song.canEdit && song.mode && song.mode !== "pro" ? (
+            <RegenerateBanner
+              songId={song.id}
+              currentMode={song.mode}
+              durationSeconds={song.durationSeconds}
+            />
+          ) : undefined
+        }
       />
 
       <footer className="mt-10 text-center text-[12px] text-white/30">
@@ -238,7 +322,7 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
             song={song}
             onClose={() => setEditorOpen(false)}
             onSaved={(updated) => {
-              setSong(updated);
+              applyUpdate(updated);
               setEditorOpen(false);
             }}
           />
@@ -247,7 +331,7 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
             song={song}
             onClose={() => setDetailsOpen(false)}
             onSaved={(updated) => {
-              setSong(updated);
+              applyUpdate(updated);
               setDetailsOpen(false);
             }}
           />

@@ -10,7 +10,13 @@ import {
   unique,
   uuid,
 } from "drizzle-orm/pg-core";
-import type { AudioFeatures, Lyrics, SongInsights, SongLink } from "@syllary/shared";
+import type {
+  AudioFeatures,
+  GenerationMode,
+  Lyrics,
+  SongInsights,
+  SongLink,
+} from "@syllary/shared";
 
 // Keep in sync with SONG_STATUSES in @syllary/shared.
 export const songStatus = pgEnum("song_status", ["pending", "processing", "ready", "failed"]);
@@ -37,6 +43,12 @@ export const songs = pgTable("songs", {
   isAnonymous: boolean("is_anonymous").notNull().default(true),
   isPublic: boolean("is_public").notNull().default(false),
   replicatePredictionId: text("replicate_prediction_id"),
+  // Generation mode the row was processed with. Null for legacy rows.
+  mode: text("mode").$type<GenerationMode>(),
+  // Set when status transitions to "processing" (the moment the pipeline
+  // actually starts). Distinct from createdAt, which is the upload-presign
+  // time and can be much earlier if the user lingered on the upload form.
+  processingStartedAt: timestamp("processing_started_at", { withTimezone: true }),
   lyrics: jsonb("lyrics").$type<Lyrics>(),
   insights: jsonb("insights").$type<SongInsights>(),
   audioFeatures: jsonb("audio_features").$type<AudioFeatures>(),

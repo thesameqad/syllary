@@ -64,6 +64,13 @@
       "when": 1779411748678,
       "tag": "0008_brainy_impossible_man",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1779835823281,
+      "tag": "0009_panoramic_professor_monster",
+      "breakpoints": true
     }
   ]
 }

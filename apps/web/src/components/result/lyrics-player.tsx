@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Pause, Play } from "lucide-react";
+import { Pause, Pencil, Play } from "lucide-react";
 import type { Lyrics } from "@syllary/shared";
 import { useWavesurfer } from "@/hooks/use-wavesurfer";
 import { DynamicLyrics } from "@/components/result/dynamic-lyrics";
@@ -23,6 +23,8 @@ export function LyricsPlayer({
   showViewLabel = false,
   belowLyrics,
   downloadsSlot,
+  canEdit = false,
+  onSaveLine,
 }: {
   audioUrl: string | null;
   lyrics: Lyrics;
@@ -37,14 +39,28 @@ export function LyricsPlayer({
   showViewLabel?: boolean;
   belowLyrics?: ReactNode;
   downloadsSlot?: ReactNode;
+  /** When true, lyric lines render a pencil-on-hover and become inline editable. */
+  canEdit?: boolean;
+  /** Called when the user commits an inline edit for a single line. Should
+   *  persist the change (typically PATCH /songs/:id/lyrics with the full
+   *  reconstructed text). Throw to keep the editor open. */
+  onSaveLine?: (lineIndex: number, nextText: string) => Promise<void>;
 }) {
   const { containerRef, isPlaying, currentTime, playPause, seek } = useWavesurfer(audioUrl);
   const [mode, setMode] = useState<LyricsMode>("dynamic");
+  const [editing, setEditing] = useState(false);
 
   // Switch to the focused karaoke view when playback starts.
   useEffect(() => {
     if (isPlaying) setMode("dynamic");
   }, [isPlaying]);
+
+  // Auto-pause when the user starts editing — so the active line doesn't move
+  // out from under them mid-edit. We don't auto-resume on exit: let the user
+  // decide when to keep listening.
+  useEffect(() => {
+    if (editing && isPlaying) playPause();
+  }, [editing, isPlaying, playPause]);
 
   const hasLyrics = lyrics.lines.length > 0;
 
@@ -108,15 +124,31 @@ export function LyricsPlayer({
                 </div>
               </div>
             </div>
+            {canEdit && onSaveLine && (
+              <p className="-mt-1 mb-3 inline-flex items-center gap-1.5 text-[11px] text-white/40">
+                <Pencil className="h-3 w-3 text-pulse" />
+                Hover any line to edit it in place.
+              </p>
+            )}
             {mode === "dynamic" ? (
               <DynamicLyrics
                 lyrics={lyrics}
                 currentTime={currentTime}
                 onSeek={seek}
                 align={lyricsAlign}
+                canEdit={canEdit}
+                onSaveLine={onSaveLine}
+                onEditingChange={setEditing}
               />
             ) : (
-              <SyncedLyrics lyrics={lyrics} currentTime={currentTime} onSeek={seek} />
+              <SyncedLyrics
+                lyrics={lyrics}
+                currentTime={currentTime}
+                onSeek={seek}
+                canEdit={canEdit}
+                onSaveLine={onSaveLine}
+                onEditingChange={setEditing}
+              />
             )}
             {belowLyrics}
           </>

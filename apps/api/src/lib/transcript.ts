@@ -1,5 +1,5 @@
 import type { Lyrics, LyricLine, LyricWord, ParsedLyricsText } from "@syllary/shared";
-import { structureLyrics } from "./openrouter.js";
+import { reconcileLyrics, structureLyrics } from "./openrouter.js";
 
 type WhisperxWord = { word?: string; text?: string; start?: number; end?: number };
 type WhisperxSegment = { start?: number; end?: number; text?: string; words?: WhisperxWord[] };
@@ -171,22 +171,92 @@ export function realignFromText(old: Lyrics, parsed: ParsedLyricsText): Lyrics {
   return { language: old.language, lines };
 }
 
-export async function buildLyrics(output: unknown): Promise<Lyrics> {
+/** Extract the segment-level texts WhisperX produced (one entry per detected
+ *  utterance). Used as input to the LLM reconciler. */
+function segmentTexts(output: unknown): string[] {
+  const o = (output ?? {}) as { segments?: { text?: string }[] };
+  return (o.segments ?? [])
+    .map((s) => (typeof s.text === "string" ? s.text.trim() : ""))
+    .filter((s) => s.length > 0);
+}
+
+/** Union the word-level timestamps from multiple WhisperX outputs, sorted by
+ *  start time. Used as the alignment pool so reconciled lines (which may have
+ *  originated from any source) get accurate timings. */
+function mergeWords(outputs: unknown[]): LyricWord[] {
+  const all: LyricWord[] = [];
+  for (const out of outputs) all.push(...mapWhisperx(out).lines.flatMap((l) => l.words));
+  all.sort((a, b) => a.start - b.start);
+  return all;
+}
+
+/** Single-source build path used by Fast and Normal modes: clean rough lines
+ *  via the lightweight structuring LLM, then realign against the original word
+ *  timestamps. */
+async function buildLyricsSingle(output: unknown): Promise<Lyrics> {
   const raw = mapWhisperx(output);
   if (raw.lines.length === 0) return raw;
-
   const words = raw.lines.flatMap((l) => l.words);
-  // No word-level timing → can't realign; keep the rough lines.
   if (words.length === 0) return raw;
-
   const structured = await structureLyrics(raw.lines.map((l) => l.text));
   if (!structured) return raw;
-
   const sectionByIndex = new Map(structured.sections.map((s) => [s.index, s.label]));
   const aligned = alignLines(structured.lines, words).map((line, i) => ({
     ...line,
     section: sectionByIndex.get(i) ?? null,
   }));
-
   return { language: raw.language, lines: aligned };
+}
+
+/** Pro-mode build path: reconcile three independent WhisperX transcripts
+ *  (vocals stem + mix at t=0 + mix at t=0.4) via a frontier LLM. Falls back to
+ *  single-source structuring on the most-populated transcript if reconciliation
+ *  fails (e.g. content-policy refusal). */
+async function buildLyricsTriple(
+  vocalsOutput: unknown,
+  mixOutput: unknown,
+  mixTOutput: unknown,
+): Promise<Lyrics> {
+  const vocalsRaw = mapWhisperx(vocalsOutput);
+  const language = vocalsRaw.language ?? mapWhisperx(mixOutput).language ?? null;
+
+  const reconciled = await reconcileLyrics({
+    vocals: segmentTexts(vocalsOutput),
+    mix: segmentTexts(mixOutput),
+    mix_t04: segmentTexts(mixTOutput),
+  });
+
+  if (!reconciled) {
+    const vocalsLines = vocalsRaw.lines;
+    const mixLines = mapWhisperx(mixOutput).lines;
+    const fallback = vocalsLines.length >= mixLines.length ? vocalsOutput : mixOutput;
+    return buildLyricsSingle(fallback);
+  }
+
+  const words = mergeWords([vocalsOutput, mixOutput, mixTOutput]);
+  if (words.length === 0) {
+    const lines: LyricLine[] = reconciled.lines.map((text, i) => {
+      const section = reconciled.sections.find((s) => s.index === i)?.label ?? null;
+      return { text, start: 0, end: 0, words: [], section };
+    });
+    return { language, lines };
+  }
+
+  const sectionByIndex = new Map(reconciled.sections.map((s) => [s.index, s.label]));
+  const aligned = alignLines(reconciled.lines, words).map((line, i) => ({
+    ...line,
+    section: sectionByIndex.get(i) ?? null,
+  }));
+  return { language, lines: aligned };
+}
+
+/**
+ * Build canonical lyrics from the WhisperX outputs for a given mode. Fast and
+ * Normal pass a single output; Pro passes [vocals, mix, mixT].
+ */
+export async function buildLyrics(outputs: unknown[]): Promise<Lyrics> {
+  if (outputs.length === 3) return buildLyricsTriple(outputs[0], outputs[1], outputs[2]);
+  if (outputs.length === 1) return buildLyricsSingle(outputs[0]);
+  // Defensive: an empty / unexpected output array just yields empty lyrics.
+  return { language: null, lines: [] };
 }
