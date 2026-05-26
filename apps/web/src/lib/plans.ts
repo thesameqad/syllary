@@ -49,6 +49,7 @@ export const PLAN_TIERS: PlanTier[] = [
     features: [
       { text: "15,000 tokens / month — 3× Starter" },
       { text: "Everything in Starter" },
+      { text: "API access", comingSoon: true },
       { text: "Cancel or upgrade anytime" },
     ],
     featured: true,
@@ -62,7 +63,6 @@ export const PLAN_TIERS: PlanTier[] = [
     features: [
       { text: "60,000 tokens / month — 4× Creator" },
       { text: "Everything in Creator" },
-      { text: "API access", comingSoon: true },
       { text: "Early access to new features", comingSoon: true },
     ],
   },
