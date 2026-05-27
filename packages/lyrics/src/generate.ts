@@ -1,4 +1,4 @@
-import type { Lyrics, LyricLine } from "@syllary/shared";
+import { toDisplayLine, type Lyrics, type LyricLine } from "@syllary/shared";
 
 export type LyricFormat = "lrc" | "lrc-enhanced" | "ttml" | "srt" | "vtt" | "txt" | "json";
 
@@ -49,13 +49,16 @@ export function toTxt(lyrics: Lyrics): string {
 }
 
 export function toLrc(lyrics: Lyrics): string {
-  return lyrics.lines.map((l) => `[${lrcTime(l.start)}]${l.text}`).join("\n") + "\n";
+  return lyrics.lines.map((l) => `[${lrcTime(l.start)}]${toDisplayLine(l.text)}`).join("\n") + "\n";
 }
 
 export function toEnhancedLrc(lyrics: Lyrics): string {
   const line = (l: LyricLine): string => {
-    if (l.words.length === 0) return `[${lrcTime(l.start)}]${l.text}`;
-    const inline = l.words.map((w) => `<${lrcTime(w.start)}>${w.text}`).join(" ");
+    if (l.words.length === 0) return `[${lrcTime(l.start)}]${toDisplayLine(l.text)}`;
+    const last = l.words.length - 1;
+    const inline = l.words
+      .map((w, i) => `<${lrcTime(w.start)}>${i === last ? toDisplayLine(w.text) : w.text}`)
+      .join(" ");
     return `[${lrcTime(l.start)}]${inline}`;
   };
   return lyrics.lines.map(line).join("\n") + "\n";
@@ -85,13 +88,14 @@ export function toTtml(lyrics: Lyrics): string {
       const begin = fullTime(l.start, ".");
       const end = fullTime(l.end, ".");
       if (l.words.length === 0) {
-        return `      <p begin="${begin}" end="${end}">${escapeXml(l.text)}</p>`;
+        return `      <p begin="${begin}" end="${end}">${escapeXml(toDisplayLine(l.text))}</p>`;
       }
+      const last = l.words.length - 1;
       const spans = l.words
-        .map(
-          (w) =>
-            `<span begin="${fullTime(w.start, ".")}" end="${fullTime(w.end, ".")}">${escapeXml(w.text)}</span>`,
-        )
+        .map((w, i) => {
+          const text = i === last ? toDisplayLine(w.text) : w.text;
+          return `<span begin="${fullTime(w.start, ".")}" end="${fullTime(w.end, ".")}">${escapeXml(text)}</span>`;
+        })
         .join(" ");
       return `      <p begin="${begin}" end="${end}">${spans}</p>`;
     })

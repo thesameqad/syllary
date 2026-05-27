@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Play } from "lucide-react";
-import type { Lyrics, LyricLine } from "@syllary/shared";
+import { toDisplayLine, type Lyrics, type LyricLine } from "@syllary/shared";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { wordsCoverText } from "@/lib/lyrics";
 import { InlineLineEditor } from "@/components/result/inline-line-editor";
@@ -35,10 +35,11 @@ function ActiveWords({ line, time }: { line: LyricLine; time: number }) {
     <>
       {line.words.map((word, i) => {
         const on = time >= word.start && time < word.end;
+        const isLast = i === line.words.length - 1;
         return (
           <span key={i} className={cn(on && "text-pulse")}>
-            {word.text}
-            {i < line.words.length - 1 ? " " : ""}
+            {isLast ? toDisplayLine(word.text) : word.text}
+            {isLast ? "" : " "}
           </span>
         );
       })}
@@ -131,7 +132,7 @@ export function SyncedLyrics({
                     active && wordsCoverText(line) ? (
                       <ActiveWords line={line} time={currentTime} />
                     ) : (
-                      line.text
+                      toDisplayLine(line.text)
                     );
                   const editorBody =
                     canEdit && onSaveLine ? (

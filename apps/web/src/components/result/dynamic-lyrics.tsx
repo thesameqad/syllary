@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import type { Lyrics, LyricLine } from "@syllary/shared";
+import { toDisplayLine, type Lyrics, type LyricLine } from "@syllary/shared";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { wordsCoverText } from "@/lib/lyrics";
 import { InlineLineEditor } from "@/components/result/inline-line-editor";
@@ -58,7 +58,7 @@ function HighlightLine({ line, time }: { line: LyricLine; time: number }) {
     return () => window.removeEventListener("resize", measure);
   }, [measure]);
 
-  if (!wordsCoverText(line)) return <>{line.text}</>;
+  if (!wordsCoverText(line)) return <>{toDisplayLine(line.text)}</>;
 
   return (
     <span ref={containerRef} className="relative inline">
@@ -75,19 +75,22 @@ function HighlightLine({ line, time }: { line: LyricLine; time: number }) {
         }}
         transition={reduced ? { duration: 0 } : { type: "spring", stiffness: 360, damping: 28 }}
       />
-      {line.words.map((word, i) => (
-        <Fragment key={i}>
-          <span
-            ref={(el) => {
-              wordRefs.current[i] = el;
-            }}
-            className="relative text-white"
-          >
-            {word.text}
-          </span>
-          {i < line.words.length - 1 ? " " : ""}
-        </Fragment>
-      ))}
+      {line.words.map((word, i) => {
+        const isLast = i === line.words.length - 1;
+        return (
+          <Fragment key={i}>
+            <span
+              ref={(el) => {
+                wordRefs.current[i] = el;
+              }}
+              className="relative text-white"
+            >
+              {isLast ? toDisplayLine(word.text) : word.text}
+            </span>
+            {isLast ? "" : " "}
+          </Fragment>
+        );
+      })}
     </span>
   );
 }
@@ -175,7 +178,7 @@ export function DynamicLyrics({
             const lineContent = isCurrent ? (
               <HighlightLine line={line} time={currentTime} />
             ) : (
-              line.text
+              toDisplayLine(line.text)
             );
             const sizeClass = isCurrent
               ? "text-[clamp(20px,3.2vw,28px)] font-medium text-white"
