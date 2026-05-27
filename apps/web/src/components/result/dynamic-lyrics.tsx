@@ -103,6 +103,7 @@ export function DynamicLyrics({
   canEdit = false,
   onSaveLine,
   onEditingChange,
+  highlight = "word",
 }: {
   lyrics: Lyrics;
   currentTime: number;
@@ -111,6 +112,11 @@ export function DynamicLyrics({
   canEdit?: boolean;
   onSaveLine?: (lineIndex: number, nextText: string) => Promise<void>;
   onEditingChange?: (editing: boolean) => void;
+  /** "word" floats a red pill from word to word inside the active line
+   *  (karaoke-style, experimental — depends on word-level timing accuracy).
+   *  "line" tints the entire active line red and walks line-by-line — much
+   *  more forgiving of imperfect word timings. */
+  highlight?: "word" | "line";
 }) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const reduced = usePrefersReducedMotion();
@@ -175,13 +181,22 @@ export function DynamicLyrics({
             const line = lines[index]!;
             const isCurrent = role === "current";
             const isEditing = editingIndex === index;
-            const lineContent = isCurrent ? (
-              <HighlightLine line={line} time={currentTime} />
-            ) : (
-              toDisplayLine(line.text)
-            );
+            const lineContent =
+              isCurrent && highlight === "word" ? (
+                <HighlightLine line={line} time={currentTime} />
+              ) : (
+                toDisplayLine(line.text)
+              );
+            // In "line" highlight mode, the entire active line is tinted red
+            // (the same pulse color the word pill uses) — robust to word-
+            // level timing inaccuracies because we never need to know where
+            // the singer is *within* the line.
+            const currentColor =
+              highlight === "line"
+                ? "text-pulse [text-shadow:0_0_24px_rgba(255,45,45,0.4)]"
+                : "text-white";
             const sizeClass = isCurrent
-              ? "text-[clamp(20px,3.2vw,28px)] font-medium text-white"
+              ? `text-[clamp(20px,3.2vw,28px)] font-medium ${currentColor}`
               : "text-[clamp(15px,2.4vw,19px)] text-white/35";
             const editorBody =
               canEdit && onSaveLine ? (

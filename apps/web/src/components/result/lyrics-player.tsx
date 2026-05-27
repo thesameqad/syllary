@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Pause, Pencil, Play } from "lucide-react";
+import { AlertTriangle, Pause, Pencil, Play } from "lucide-react";
 import type { Lyrics } from "@syllary/shared";
 import { useWavesurfer } from "@/hooks/use-wavesurfer";
 import { DynamicLyrics } from "@/components/result/dynamic-lyrics";
@@ -7,7 +7,13 @@ import { SyncedLyrics } from "@/components/result/synced-lyrics";
 import { DownloadBar } from "@/components/result/download-bar";
 import { cn } from "@/lib/utils";
 
-type LyricsMode = "dynamic" | "full";
+type LyricsMode = "word" | "line" | "full";
+
+const MODE_LABELS: Record<LyricsMode, string> = {
+  word: "Word",
+  line: "Line",
+  full: "Full",
+};
 
 export function LyricsPlayer({
   audioUrl,
@@ -47,12 +53,15 @@ export function LyricsPlayer({
   onSaveLine?: (lineIndex: number, nextText: string) => Promise<void>;
 }) {
   const { containerRef, isPlaying, currentTime, playPause, seek } = useWavesurfer(audioUrl);
-  const [mode, setMode] = useState<LyricsMode>("dynamic");
+  // Default to "word" (experimental karaoke). Auto-switch to "word" on play
+  // — same intent as before — but the user can switch to "line" or "full"
+  // any time, and we don't override their choice once they've made it.
+  const [mode, setMode] = useState<LyricsMode>("word");
   const [editing, setEditing] = useState(false);
 
   // Switch to the focused karaoke view when playback starts.
   useEffect(() => {
-    if (isPlaying) setMode("dynamic");
+    if (isPlaying) setMode("word");
   }, [isPlaying]);
 
   // Auto-pause when the user starts editing — so the active line doesn't move
@@ -108,19 +117,34 @@ export function LyricsPlayer({
                   <span className="text-[10px] uppercase tracking-[1.5px] text-white/40">View</span>
                 )}
                 <div className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-[#0a0a0a] p-0.5 text-[11px]">
-                  {(["dynamic", "full"] as const).map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      onClick={() => setMode(m)}
-                      className={cn(
-                        "rounded-full px-3 py-1 capitalize transition-colors",
-                        mode === m ? "bg-white text-[#0a0a0a]" : "text-white/55 hover:text-white",
-                      )}
-                    >
-                      {m}
-                    </button>
-                  ))}
+                  {(["word", "line", "full"] as const).map((m) => {
+                    const active = mode === m;
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setMode(m)}
+                        className={cn(
+                          "inline-flex items-center gap-1.5 rounded-full px-3 py-1 transition-colors",
+                          active ? "bg-white text-[#0a0a0a]" : "text-white/55 hover:text-white",
+                        )}
+                      >
+                        {MODE_LABELS[m]}
+                        {m === "word" && (
+                          <span
+                            className={cn(
+                              "rounded-sm px-1 py-px text-[8px] font-semibold uppercase tracking-wider",
+                              active
+                                ? "bg-pulse/15 text-pulse"
+                                : "bg-white/[0.08] text-white/55",
+                            )}
+                          >
+                            Beta
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -130,7 +154,17 @@ export function LyricsPlayer({
                 Hover any line to edit it in place.
               </p>
             )}
-            {mode === "dynamic" ? (
+            {mode === "word" && (
+              <p className="-mt-1 mb-3 inline-flex items-start gap-1.5 text-[11px] text-white/45">
+                <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-pulse/80" />
+                <span>
+                  Word-level karaoke is experimental — timing can drift on screamed
+                  or whispered vocals. Switch to <span className="text-white/70">Line</span> for a
+                  more reliable highlight while we improve it.
+                </span>
+              </p>
+            )}
+            {mode === "word" || mode === "line" ? (
               <DynamicLyrics
                 lyrics={lyrics}
                 currentTime={currentTime}
@@ -139,6 +173,7 @@ export function LyricsPlayer({
                 canEdit={canEdit}
                 onSaveLine={onSaveLine}
                 onEditingChange={setEditing}
+                highlight={mode}
               />
             ) : (
               <SyncedLyrics
