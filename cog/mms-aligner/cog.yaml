@@ -1,0 +1,17 @@
+build:
+  # NOTE: gpu:false for local-dev. Torch 2.4 (cog's CUDA-12.1 base) lacks
+  # sm_120 kernels, so on RTX 5000-series the predict worker segfaults
+  # silently. For Replicate deploy bump torch >=2.5 + CUDA >=12.6 and flip
+  # this to true. The aligner runs in ~60s on CPU on a 3-min song which is
+  # acceptable for the validation loop.
+  gpu: false
+  python_version: "3.11"
+  python_packages:
+    - "torch==2.4.0"
+    - "torchaudio==2.4.0"
+    - "ctc-forced-aligner"
+    - "transformers>=4.40.0"
+    - "soundfile"
+  system_packages:
+    - "ffmpeg"
+predict: "predict.py:Predictor"
