@@ -1,3 +1,11 @@
 .cog/
 __pycache__/
 *.pyc
+
+# Validation artifacts produced by apps/api/src/scripts/test-mms-*.ts
+mms-input.json
+mms-output.json
+staged-lyrics.json
+whisperx-segments.json
+docker-run.log
+sentinel.txt
