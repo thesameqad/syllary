@@ -1,0 +1,20 @@
+# torch 2.8.x + cu126 wheels ship cuDNN 9; matches the cuda: "12.6" in
+# cog.yaml. ctranslate2 4.6+ also targets cuDNN 9, so no version mismatch
+# at runtime — which is the failure mode that killed the worker silently
+# on every prior combo.
+torch==2.8.0
+torchaudio==2.8.0
+ctranslate2==4.6.0
+faster-whisper==1.2.0
+transformers==4.53.3
+pytorch-lightning==2.5.2
+pyannote-audio==3.3.2
+# whisperx 3.7.9 is the sweet spot: pins pyannote-audio<4.0.0,>=3.3.2
+# (so we keep your local's exact pyannote 3.3.2 — the version whose VAD
+# chunks DO catch all 8 chorus reps) AND ctranslate2>=4.5.0 (so the
+# cuDNN-9 stack above is compatible). whisperx 3.8.x would force a
+# pyannote 4.x upgrade and change the VAD behaviour we depend on.
+whisperx==3.7.9
+# Transitive of pyannote.core (visualization helpers). Not auto-pulled in
+# minimal Replicate env; pin so import doesn't fail at container start.
+matplotlib

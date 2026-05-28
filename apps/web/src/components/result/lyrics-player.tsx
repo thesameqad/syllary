@@ -25,6 +25,8 @@ export function LyricsPlayer({
   downloadsSlot,
   canEdit = false,
   onSaveLine,
+  onInterceptEdit,
+  onInterceptDownload,
 }: {
   audioUrl: string | null;
   lyrics: Lyrics;
@@ -45,6 +47,12 @@ export function LyricsPlayer({
    *  persist the change (typically PATCH /songs/:id/lyrics with the full
    *  reconstructed text). Throw to keep the editor open. */
   onSaveLine?: (lineIndex: number, nextText: string) => Promise<void>;
+  /** When provided and returns true, the pencil click is intercepted before
+   *  entering inline edit mode (anonymous viewer → sign-in popup). */
+  onInterceptEdit?: () => boolean;
+  /** When provided and returns true, download button clicks are intercepted
+   *  (anonymous viewer → sign-in popup). */
+  onInterceptDownload?: () => boolean;
 }) {
   const { containerRef, isPlaying, currentTime, playPause, seek } = useWavesurfer(audioUrl);
   const [mode, setMode] = useState<LyricsMode>("dynamic");
@@ -139,6 +147,7 @@ export function LyricsPlayer({
                 canEdit={canEdit}
                 onSaveLine={onSaveLine}
                 onEditingChange={setEditing}
+                onInterceptEdit={onInterceptEdit}
               />
             ) : (
               <SyncedLyrics
@@ -148,6 +157,7 @@ export function LyricsPlayer({
                 canEdit={canEdit}
                 onSaveLine={onSaveLine}
                 onEditingChange={setEditing}
+                onInterceptEdit={onInterceptEdit}
               />
             )}
             {belowLyrics}
@@ -164,7 +174,9 @@ export function LyricsPlayer({
           <h2 className="mb-3 text-[11px] uppercase tracking-[1.8px] text-white/40">
             Download for every platform
           </h2>
-          {downloadsSlot ?? <DownloadBar lyrics={lyrics} baseName={baseName} />}
+          {downloadsSlot ?? (
+            <DownloadBar lyrics={lyrics} baseName={baseName} onIntercept={onInterceptDownload} />
+          )}
         </div>
       )}
     </div>

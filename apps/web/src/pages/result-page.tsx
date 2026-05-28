@@ -17,9 +17,14 @@ import { useToast } from "@/components/ui/toast";
 import { LogoWordmark } from "@/components/logo";
 import { LyricsPlayer } from "@/components/result/lyrics-player";
 import { LyricsEditModal } from "@/components/result/lyrics-editor";
+import { ManualSyncEditor } from "@/components/result/manual-sync-editor";
 import { PublicDetailsModal } from "@/components/result/public-details-modal";
 import { ProcessingView } from "@/components/result/processing-view";
 import { RegenerateBanner } from "@/components/result/regenerate-banner";
+import {
+  SignInPromptModal,
+  type SignInPromptReason,
+} from "@/components/result/sign-in-prompt-modal";
 import { DashboardChrome } from "@/components/dashboard/dashboard-layout";
 import { authConfigured } from "@/lib/auth";
 
@@ -95,7 +100,23 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [signInPromptReason, setSignInPromptReason] = useState<SignInPromptReason | null>(null);
   const toast = useToast();
+
+  // Anonymous viewers see the same affordances as the owner (Edit lyrics, Edit
+  // public details, inline edit, regenerate, downloads) but every action opens
+  // the sign-in prompt instead of mutating server state.
+  const promptSignIn = (reason: SignInPromptReason) => {
+    setSignInPromptReason(reason);
+  };
+  const interceptFor =
+    (reason: SignInPromptReason) =>
+    (): boolean => {
+      if (signedIn) return false;
+      promptSignIn(reason);
+      return true;
+    };
 
   // Auto-open the editor when arriving via `?edit=1` (e.g. the library menu),
   // but only for the owner. Clear the param so reloads don't reopen it.
@@ -179,15 +200,21 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
               Try another track
             </Link>
           </div>
-          {song.canEdit && (
+          {(song.canEdit || !signedIn) && (
             <RegenerateBanner
               songId={song.id}
               currentMode={song.mode ?? "fast"}
               durationSeconds={song.durationSeconds}
               variant="retry-failed"
+              onIntercept={!signedIn ? interceptFor("regenerate") : undefined}
             />
           )}
         </div>
+        <SignInPromptModal
+          open={signInPromptReason !== null}
+          reason={signInPromptReason ?? "regenerate"}
+          onClose={() => setSignInPromptReason(null)}
+        />
       </Frame>
     );
   }
@@ -229,6 +256,11 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
     }
   }
 
+  // Anonymous viewers get the same edit/regenerate UI as the owner; the
+  // intercept callbacks open the sign-in popup instead of mutating state.
+  const showOwnerUi = song.canEdit || !signedIn;
+  const showInlineEdit = song.canEdit || !signedIn;
+
   return (
     <Frame signedIn={signedIn}>
       <LyricsPlayer
@@ -238,8 +270,21 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
         meta={meta}
         baseName={baseNameOf(song.originalFilename)}
         showDownloads
-        canEdit={song.canEdit}
-        onSaveLine={song.canEdit ? saveLine : undefined}
+        canEdit={showInlineEdit}
+        onSaveLine={
+          song.canEdit
+            ? saveLine
+            : !signedIn
+              ? async () => {
+                  // Should not be reachable because onInterceptEdit blocks the
+                  // pencil click before edit mode opens. Keep a safe no-op so
+                  // the inline editor still renders its UI affordance.
+                  promptSignIn("inline-edit");
+                }
+              : undefined
+        }
+        onInterceptEdit={!signedIn ? interceptFor("inline-edit") : undefined}
+        onInterceptDownload={!signedIn ? interceptFor("download") : undefined}
         badge={
           <div className="flex shrink-0 items-center gap-2">
             {song.mode && (
@@ -260,26 +305,43 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
           </div>
         }
         toolbarLeft={
-          song.canEdit || song.isPublic ? (
+          showOwnerUi || song.isPublic ? (
             <div className="flex items-center gap-2">
-              {song.canEdit && (
+              {showOwnerUi && (
                 <button
                   type="button"
-                  onClick={() => setEditorOpen(true)}
+                  onClick={() =>
+                    song.canEdit ? setEditorOpen(true) : promptSignIn("edit-lyrics")
+                  }
                   className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
                 >
                   <Pencil className="h-3.5 w-3.5 text-pulse" />
                   Edit lyrics
                 </button>
               )}
-              {song.canEdit && (
+              {showOwnerUi && (
                 <button
                   type="button"
-                  onClick={() => setDetailsOpen(true)}
+                  onClick={() =>
+                    song.canEdit ? setDetailsOpen(true) : promptSignIn("edit-details")
+                  }
                   className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
                 >
                   <SlidersHorizontal className="h-3.5 w-3.5 text-pulse" />
                   Edit public details
+                </button>
+              )}
+              {showOwnerUi && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    song.canEdit ? setSyncOpen(true) : promptSignIn("sync-timing")
+                  }
+                  title="Drag each word into place on a full-song timeline"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
+                >
+                  <Wand2 className="h-3.5 w-3.5 text-pulse" />
+                  Fine-tune timing
                 </button>
               )}
               {song.isPublic && (
@@ -297,11 +359,12 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
           ) : undefined
         }
         belowLyrics={
-          song.canEdit && song.mode && song.mode !== "pro" ? (
+          showOwnerUi && song.mode && song.mode !== "pro" ? (
             <RegenerateBanner
               songId={song.id}
               currentMode={song.mode}
               durationSeconds={song.durationSeconds}
+              onIntercept={!signedIn ? interceptFor("regenerate") : undefined}
             />
           ) : undefined
         }
@@ -314,6 +377,12 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
         </Link>{" "}
         — turn any song into synced lyric files.
       </footer>
+
+      <SignInPromptModal
+        open={signInPromptReason !== null}
+        reason={signInPromptReason ?? "download"}
+        onClose={() => setSignInPromptReason(null)}
+      />
 
       {song.canEdit && (
         <>
@@ -333,6 +402,15 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
             onSaved={(updated) => {
               applyUpdate(updated);
               setDetailsOpen(false);
+            }}
+          />
+          <ManualSyncEditor
+            open={syncOpen}
+            song={song}
+            onClose={() => setSyncOpen(false)}
+            onSaved={(updated) => {
+              applyUpdate(updated);
+              setSyncOpen(false);
             }}
           />
         </>

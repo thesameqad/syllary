@@ -103,6 +103,7 @@ export function DynamicLyrics({
   canEdit = false,
   onSaveLine,
   onEditingChange,
+  onInterceptEdit,
 }: {
   lyrics: Lyrics;
   currentTime: number;
@@ -111,6 +112,7 @@ export function DynamicLyrics({
   canEdit?: boolean;
   onSaveLine?: (lineIndex: number, nextText: string) => Promise<void>;
   onEditingChange?: (editing: boolean) => void;
+  onInterceptEdit?: () => boolean;
 }) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const reduced = usePrefersReducedMotion();
@@ -183,8 +185,11 @@ export function DynamicLyrics({
             const sizeClass = isCurrent
               ? "text-[clamp(20px,3.2vw,28px)] font-medium text-white"
               : "text-[clamp(15px,2.4vw,19px)] text-white/35";
+            // Only the current line gets the inline editor. Editing prev/next
+            // is confusing (they keep moving as playback advances) and the
+            // pencil hover-target on the small dimmed lines was a click trap.
             const editorBody =
-              canEdit && onSaveLine ? (
+              canEdit && onSaveLine && isCurrent ? (
                 <InlineLineEditor
                   original={line.text}
                   canEdit={canEdit}
@@ -193,6 +198,7 @@ export function DynamicLyrics({
                     setEditingIndex(editing ? index : null);
                     onEditingChange?.(editing);
                   }}
+                  onInterceptStart={onInterceptEdit}
                   align={align}
                   textClassName={sizeClass}
                 >
@@ -213,7 +219,16 @@ export function DynamicLyrics({
                 }}
                 exit={{ opacity: 0, y: -26, filter: "blur(4px)" }}
                 transition={transition}
-                className={cn("max-w-full text-balance px-4 leading-snug", sizeClass)}
+                className={cn(
+                  "max-w-full text-balance px-4 leading-snug",
+                  // Editing the current line replaces the text with an input
+                  // that wants 100% of its parent. Without an explicit width
+                  // the column-flex parent collapses the wrapper to the
+                  // input's intrinsic (tiny) width — force full width here
+                  // so the input matches the line it's replacing.
+                  isCurrent && isEditing ? "w-full" : undefined,
+                  sizeClass,
+                )}
               >
                 {/* Wrapper stays mounted regardless of editing state so that
                     InlineLineEditor's internal state isn't wiped when the

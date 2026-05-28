@@ -53,7 +53,7 @@ export function ProcessingOverlay({
   const fillPct = Math.min(0.95, fillRatio) * 100;
 
   return (
-    <div className="absolute inset-0 flex flex-col bg-gradient-to-t from-black/80 via-black/40 to-black/25 backdrop-blur-[1px]">
+    <div className="absolute inset-0 flex flex-col bg-gradient-to-t from-black/85 via-black/70 to-black/55 backdrop-blur-md">
       {/* Top region: animated equalizer + soft radial glow. Sits above the
           progress panel so the two never overlap. */}
       <div className="relative flex flex-1 items-center justify-center overflow-hidden">

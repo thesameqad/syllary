@@ -131,6 +131,13 @@ export const editLyricsSchema = z.object({
 });
 export type EditLyrics = z.infer<typeof editLyricsSchema>;
 
+/** Payload for the manual fine-tune timing editor: a full Lyrics object with
+ *  per-word start/end timestamps the owner has hand-corrected. */
+export const syncLyricsSchema = z.object({
+  lyrics: lyricsSchema,
+});
+export type SyncLyrics = z.infer<typeof syncLyricsSchema>;
+
 export const ratingSummarySchema = z.object({
   averageRating: z.number(),
   ratingCount: z.number(),

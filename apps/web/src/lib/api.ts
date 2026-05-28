@@ -8,6 +8,7 @@ import {
   type Account,
   type BillingPeriod,
   type GenerationMode,
+  type Lyrics,
   type PresignRequest,
   type PresignResponse,
   type PublicSong,
@@ -220,6 +221,18 @@ export async function updateSongLyrics(id: string, text: string): Promise<Song> 
   });
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not save lyrics."), res.status);
+  return songSchema.parse(data);
+}
+
+/** Save hand-corrected word timestamps from the fine-tune timing editor. */
+export async function syncSongLyrics(id: string, lyrics: Lyrics): Promise<Song> {
+  const res = await fetch(`${API_BASE}/api/songs/${id}/sync`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ lyrics }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not save timing."), res.status);
   return songSchema.parse(data);
 }
 

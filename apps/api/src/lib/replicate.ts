@@ -98,13 +98,18 @@ async function startOneTranscription(
 ): Promise<string> {
   const slug = whisperxSlugFor(mode);
   const version = await modelVersion(slug.owner, slug.name);
-  // Aggressive VAD (0.05) so we don't miss quiet/screamed/rapped sections;
-  // language:"en" skips detection (faster, no false positives).
+  // Asymmetric VAD: aggressive ONSET (0.05) keeps quiet/whispered/rapped
+  // vocals from being missed at chunk boundaries; OFFSET at pyannote's
+  // default (0.363) so segments close between phrases instead of gluing
+  // adjacent chorus repetitions into one long chunk. Long repetitive chunks
+  // trip Whisper's compression-ratio fallback, which discards the whole
+  // segment and produces phantom forced-aligned phrases — the failure mode
+  // seen on heavily-repetitive songs. language:"en" skips language detection.
   return createPrediction(version, {
     audio_file: audioUrl,
     align_output: true,
     vad_onset: 0.05,
-    vad_offset: 0.05,
+    vad_offset: 0.363,
     language: "en",
     temperature,
   });

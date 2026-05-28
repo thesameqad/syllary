@@ -29,3 +29,8 @@ coverage/
 
 # local test audio
 uploads/
+
+# diagnostic dumps from this morning's transcription experiments
+apps/api/debug/
+apps/api/src/scripts/debug-local/
+infra/whisperx-cog/predict-test-output.json

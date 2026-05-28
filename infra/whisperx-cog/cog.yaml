@@ -1,0 +1,29 @@
+# Replicate Cog model: Syllary's pinned WhisperX stack.
+#
+# Mirrors the exact versions we validated locally (where Whisper caught all 8
+# chorus reps on uploads/4.mp3 while the public victor-upmeet/whisperx wrapper
+# caught only 4). The version pin that actually matters here is pyannote.audio
+# 3.3.2 — its VAD splits song audio into chunk shapes that don't trigger
+# Whisper's repetition suppression.
+#
+# Build + push:
+#   cog login
+#   cog push r8.im/<your-handle>/syllary-whisperx
+build:
+  gpu: true
+  # whisperx 3.8.x lifts the ctranslate2<4.5 pin and requires torchaudio~=2.8,
+  # which means torch 2.8.x + CUDA 12.6 + ctranslate2 4.6 + cuDNN 9 are all
+  # aligned (no cuDNN 8 vs 9 mismatch). This is the cleanest GPU stack.
+  cuda: "12.6"
+  python_version: "3.10"
+  system_packages:
+    - "ffmpeg"
+  python_requirements: requirements.txt
+  # Pre-download model weights at build time so cold-starts don't pay the
+  # ~3 GB download tax. Both lines use the default HuggingFace cache
+  # (~/.cache/huggingface/hub) which gets baked into the image.
+  run:
+    - python -c "from faster_whisper import WhisperModel; WhisperModel('large-v2', device='cpu', compute_type='int8')"
+    - python -c "import whisperx; whisperx.load_align_model(language_code='en', device='cpu')"
+# Top-level entrypoint — used to be `predict:` (now deprecated).
+run: "predict.py:Predictor"

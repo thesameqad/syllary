@@ -15,6 +15,9 @@ const envSchema = z.object({
   R2_ENDPOINT: z.string().url(),
   R2_PUBLIC_URL: z.string().url(),
   REPLICATE_API_TOKEN: z.string().min(1),
+  // fal.ai key — used for ElevenLabs Scribe speech-to-text. Required for
+  // transcription (the WhisperX flow on Replicate is no longer used).
+  FAL_AI_KEY: z.string().min(1),
   OPENROUTER_API_KEY: z.string().min(1),
   OPENROUTER_MODEL: z.string().default("google/gemini-2.5-flash"),
   // Used for reconciling multiple transcripts into canonical lyrics. Opus

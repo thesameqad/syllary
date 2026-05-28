@@ -48,7 +48,10 @@ export function UploadCard({ mode = "anonymous", credits = null, onStarted }: Up
   const [progress, setProgress] = useState(0);
   const [statusLabel, setStatusLabel] = useState("Uploading…");
   const [error, setError] = useState<string | null>(null);
-  const [genMode, setGenMode] = useState<GenerationMode>("pro");
+  // Fast by default everywhere: it's good enough for the vast majority of
+  // songs and keeps wait time short. Users who want sharper vocal isolation
+  // on hard material can still pick Normal/Pro.
+  const [genMode, setGenMode] = useState<GenerationMode>("fast");
 
   const rotateX = useMotionValue(0);
   const rotateY = useMotionValue(0);

@@ -54,6 +54,7 @@ export function SyncedLyrics({
   canEdit = false,
   onSaveLine,
   onEditingChange,
+  onInterceptEdit,
 }: {
   lyrics: Lyrics;
   currentTime: number;
@@ -61,6 +62,7 @@ export function SyncedLyrics({
   canEdit?: boolean;
   onSaveLine?: (lineIndex: number, nextText: string) => Promise<void>;
   onEditingChange?: (editing: boolean) => void;
+  onInterceptEdit?: () => boolean;
 }) {
   const reduced = usePrefersReducedMotion();
   const activeRef = useRef<HTMLSpanElement>(null);
@@ -144,6 +146,7 @@ export function SyncedLyrics({
                           setEditingIndex(editing ? index : null);
                           onEditingChange?.(editing);
                         }}
+                        onInterceptStart={onInterceptEdit}
                         align="left"
                         textClassName={
                           active

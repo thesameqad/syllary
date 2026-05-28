@@ -1,5 +1,6 @@
 import type { Lyrics, LyricLine, LyricWord, ParsedLyricsText } from "@syllary/shared";
 import { reconcileLyrics, structureLyrics } from "./openrouter.js";
+import type { ScribeResponse } from "./fal-stt.js";
 
 type WhisperxWord = { word?: string; text?: string; start?: number; end?: number };
 type WhisperxSegment = { start?: number; end?: number; text?: string; words?: WhisperxWord[] };
@@ -188,6 +189,67 @@ function mergeWords(outputs: unknown[]): LyricWord[] {
   for (const out of outputs) all.push(...mapWhisperx(out).lines.flatMap((l) => l.words));
   all.sort((a, b) => a.start - b.start);
   return all;
+}
+
+/**
+ * Adapt an ElevenLabs Scribe response into Syllary's Lyrics intermediate
+ * shape (same one mapWhisperx produces), so the rest of the pipeline
+ * (structureLyrics → alignLines) works unchanged. Scribe returns a flat
+ * `words[]` array of word / spacing / audio_event entries — we keep only the
+ * real words, group them into rough lines on a 1.0s gap, and emit lines in
+ * the format buildLyricsSingle expects. Bracketed audio events like
+ * "[rock music]" are dropped here (they're useful but not part of lyrics).
+ */
+export function mapScribe(output: ScribeResponse): Lyrics {
+  const language = output.language_code ?? null;
+  const allEntries = Array.isArray(output.words) ? output.words : [];
+  const realWords: LyricWord[] = [];
+  for (const w of allEntries) {
+    if (w.type && w.type !== "word") continue;
+    const text = (w.text ?? "").trim();
+    if (!text || text.startsWith("[") || text.startsWith("(")) continue;
+    if (typeof w.start !== "number" || typeof w.end !== "number") continue;
+    realWords.push({ text, start: w.start, end: w.end });
+  }
+  if (realWords.length === 0) return { language, lines: [] };
+
+  const lines: LyricLine[] = [];
+  let current: LyricWord[] = [];
+  for (const word of realWords) {
+    if (current.length === 0) {
+      current.push(word);
+      continue;
+    }
+    const prev = current[current.length - 1]!;
+    const gap = word.start - prev.end;
+    const lineDuration = word.end - current[0]!.start;
+    if (gap > LINE_GAP_SECONDS || current.length >= MAX_WORDS_PER_LINE || lineDuration > MAX_LINE_SECONDS) {
+      lines.push(makeLine(current));
+      current = [word];
+    } else {
+      current.push(word);
+    }
+  }
+  if (current.length > 0) lines.push(makeLine(current));
+  return { language, lines };
+}
+
+/** Build canonical Lyrics from a Scribe response — runs the same gentle
+ *  Gemini cleanup + realignment as the Whisper path so the rest of the app
+ *  sees a uniform Lyrics shape regardless of which engine produced it. */
+export async function buildLyricsFromScribe(output: ScribeResponse): Promise<Lyrics> {
+  const raw = mapScribe(output);
+  if (raw.lines.length === 0) return raw;
+  const words = raw.lines.flatMap((l) => l.words);
+  if (words.length === 0) return raw;
+  const structured = await structureLyrics(raw.lines.map((l) => l.text));
+  if (!structured) return raw;
+  const sectionByIndex = new Map(structured.sections.map((s) => [s.index, s.label]));
+  const aligned = alignLines(structured.lines, words).map((line, i) => ({
+    ...line,
+    section: sectionByIndex.get(i) ?? null,
+  }));
+  return { language: raw.language, lines: aligned };
 }
 
 /** Single-source build path used by Fast and Normal modes: clean rough lines

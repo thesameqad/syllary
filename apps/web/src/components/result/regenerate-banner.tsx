@@ -21,6 +21,7 @@ export function RegenerateBanner({
   currentMode,
   durationSeconds,
   variant = "accuracy-hint",
+  onIntercept,
 }: {
   songId: string;
   currentMode: GenerationMode;
@@ -28,6 +29,9 @@ export function RegenerateBanner({
   /** "accuracy-hint": offer modes strictly above currentMode (default, used on
    *  a ready song). "retry-failed": offer all modes (used after a failure). */
   variant?: "accuracy-hint" | "retry-failed";
+  /** When set and returns true, the regenerate click is intercepted (e.g.
+   *  anonymous viewer → sign-in popup) and no API call is made. */
+  onIntercept?: () => boolean;
 }) {
   const toast = useToast();
   const navigate = useNavigate();
@@ -41,6 +45,7 @@ export function RegenerateBanner({
   if (choices.length === 0) return null;
 
   async function run(mode: GenerationMode) {
+    if (onIntercept?.()) return;
     setBusy(mode);
     try {
       await regenerateSong(songId, mode);

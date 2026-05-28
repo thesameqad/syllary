@@ -8,10 +8,21 @@ function fileNameFor(format: { id: LyricFormat; extension: string }, baseName: s
   return format.id === "lrc-enhanced" ? `${baseName}-enhanced.lrc` : `${baseName}.${format.extension}`;
 }
 
-export function DownloadBar({ lyrics, baseName }: { lyrics: Lyrics; baseName: string }) {
+export function DownloadBar({
+  lyrics,
+  baseName,
+  onIntercept,
+}: {
+  lyrics: Lyrics;
+  baseName: string;
+  /** Optional gate: when set and returns true, the click is intercepted (e.g.
+   *  anonymous viewer → sign-in popup) and no file is generated. */
+  onIntercept?: () => boolean;
+}) {
   const [zipping, setZipping] = useState(false);
 
   async function downloadAll() {
+    if (onIntercept?.()) return;
     setZipping(true);
     try {
       await downloadZip(
@@ -34,7 +45,10 @@ export function DownloadBar({ lyrics, baseName }: { lyrics: Lyrics; baseName: st
           <button
             key={format.id}
             type="button"
-            onClick={() => downloadText(filename, generate(format.id, lyrics), format.mime)}
+            onClick={() => {
+              if (onIntercept?.()) return;
+              downloadText(filename, generate(format.id, lyrics), format.mime);
+            }}
             className="inline-flex items-center gap-1.5 rounded-[10px] border-[0.5px] border-white/10 bg-white/[0.04] px-3.5 py-2.5 font-mono text-[12px] text-white transition-colors hover:border-pulse/50 hover:bg-white/[0.07]"
           >
             <Download className="h-3.5 w-3.5 text-pulse" />

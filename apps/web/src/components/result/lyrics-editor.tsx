@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Wand2 } from "lucide-react";
 import { lyricsToText, type Song } from "@syllary/shared";
 import { ApiError, updateSongLyrics } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { Modal } from "@/components/ui/modal";
+import { ManualSyncEditor } from "@/components/result/manual-sync-editor";
 
 export function LyricsEditModal({
   open,
@@ -20,6 +21,7 @@ export function LyricsEditModal({
   const initial = song.lyrics ? lyricsToText(song.lyrics) : "";
   const [text, setText] = useState(initial);
   const [saving, setSaving] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
 
   useEffect(() => {
     if (open) setText(song.lyrics ? lyricsToText(song.lyrics) : "");
@@ -59,25 +61,47 @@ export function LyricsEditModal({
         className="h-[46vh] min-h-[300px] w-full resize-none rounded-[12px] border border-white/10 bg-black/30 p-4 font-mono text-[14px] leading-[1.7] text-white/90 outline-none transition-colors focus:border-pulse/50 disabled:opacity-60"
       />
 
-      <div className="mt-4 flex items-center justify-end gap-2">
+      <div className="mt-4 flex items-center justify-between gap-2">
         <button
           type="button"
           disabled={saving}
-          onClick={onClose}
-          className="rounded-full px-5 py-2.5 text-[14px] text-white/70 transition-colors hover:bg-white/[0.06] hover:text-white disabled:opacity-60"
+          onClick={() => setSyncOpen(true)}
+          title="Hand-correct each word's start and end times on a timeline"
+          className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-[13px] text-white/75 transition-colors hover:border-pulse/40 hover:text-white disabled:opacity-50"
         >
-          Cancel
+          <Wand2 className="h-3.5 w-3.5 text-pulse" />
+          Fine-tune timing
         </button>
-        <button
-          type="button"
-          disabled={saving || !dirty}
-          onClick={() => void save()}
-          className="inline-flex items-center gap-2 rounded-full bg-pulse px-6 py-2.5 text-[14px] font-medium text-white transition-transform hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-          {saving ? "Saving…" : "Save lyrics"}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={saving}
+            onClick={onClose}
+            className="rounded-full px-5 py-2.5 text-[14px] text-white/70 transition-colors hover:bg-white/[0.06] hover:text-white disabled:opacity-60"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={saving || !dirty}
+            onClick={() => void save()}
+            className="inline-flex items-center gap-2 rounded-full bg-pulse px-6 py-2.5 text-[14px] font-medium text-white transition-transform hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+            {saving ? "Saving…" : "Save lyrics"}
+          </button>
+        </div>
       </div>
+
+      <ManualSyncEditor
+        open={syncOpen}
+        song={song}
+        onClose={() => setSyncOpen(false)}
+        onSaved={(updated) => {
+          setSyncOpen(false);
+          onSaved(updated);
+        }}
+      />
     </Modal>
   );
 }

@@ -1,16 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { count, eq } from "drizzle-orm";
+import { and, count, eq, isNotNull } from "drizzle-orm";
 import {
   extensionOf,
   FREE_SONG_LIMIT,
   isAcceptedExtension,
   MAX_DURATION_SECONDS,
   MAX_FILE_BYTES,
+  PLAN_CREDITS,
   presignRequestSchema,
 } from "@syllary/shared";
 import { db } from "../db/client.js";
 import { songs } from "../db/schema.js";
+import { env } from "../env.js";
 import { getAuthUserId } from "../lib/clerk.js";
 import { ownerHash } from "../lib/hash.js";
 import { presignPut } from "../lib/r2.js";
@@ -40,6 +42,28 @@ export async function uploadsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "Track is over 3 minutes. Sign up to remove the limit." });
     }
 
+    const hash = clerkId ? `clerk:${clerkId}` : ownerHash(req.ip, req.headers["user-agent"] ?? "");
+
+    // Anonymous: enforce the lifetime free-song limit at presign time too, so
+    // a second upload is rejected before bytes are sent to R2. /process has
+    // the same check (rule #2 — defense in depth, never trust just one gate).
+    if (!clerkId) {
+      const [usage] = await db
+        .select({ value: count() })
+        .from(songs)
+        .where(and(eq(songs.ownerHash, hash), isNotNull(songs.processingStartedAt)));
+      const prior = usage?.value ?? 0;
+      req.log.info(
+        { ownerHash: hash, prior, limit: env.ANONYMOUS_DAILY_LIMIT },
+        "presign-anonymous-quota",
+      );
+      if (prior >= env.ANONYMOUS_DAILY_LIMIT) {
+        return reply.code(429).send({
+          error: `Free limit reached. Sign up free for ${PLAN_CREDITS.free} credits, or upgrade for more.`,
+        });
+      }
+    }
+
     // Free tier may keep at most FREE_SONG_LIMIT songs in their library.
     if (userRow && userRow.plan === "free") {
       const rows = await db
@@ -55,7 +79,6 @@ export async function uploadsRoutes(app: FastifyInstance) {
 
     const id = randomUUID();
     const key = `uploads/${id}${extensionOf(filename)}`;
-    const hash = clerkId ? `clerk:${clerkId}` : ownerHash(req.ip, req.headers["user-agent"] ?? "");
 
     let coverImageKey: string | null = null;
     let coverUploadUrl: string | undefined;

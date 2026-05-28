@@ -20,6 +20,7 @@ export function InlineLineEditor({
   canEdit,
   onSave,
   onEditingChange,
+  onInterceptStart,
   align = "center",
   textClassName,
   children,
@@ -28,6 +29,9 @@ export function InlineLineEditor({
   canEdit: boolean;
   onSave: (next: string) => Promise<void>;
   onEditingChange?: (editing: boolean) => void;
+  /** If provided and returns true, the click is intercepted (e.g. anonymous
+   *  viewer gets a sign-in popup) and edit mode is not entered. */
+  onInterceptStart?: () => boolean;
   align?: "center" | "left";
   textClassName?: string;
   children: React.ReactNode;
@@ -58,6 +62,7 @@ export function InlineLineEditor({
   function startEdit(e: React.MouseEvent) {
     e.stopPropagation();
     e.preventDefault();
+    if (onInterceptStart?.()) return;
     setDraft(original);
     setEditing(true);
   }

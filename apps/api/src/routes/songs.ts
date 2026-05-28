@@ -1,10 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq, gte, isNotNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, ne, sql } from "drizzle-orm";
 import {
   creditCost,
   editLyricsSchema,
   type GenerationMode,
   parseLyricsText,
+  PLAN_CREDITS,
   processSongSchema,
   type PublicSong,
   type PublicTrackItem,
@@ -12,6 +13,7 @@ import {
   type RatingSummary,
   type Song,
   type SongSummary,
+  syncLyricsSchema,
   type Uploader,
   updateSongSchema,
 } from "@syllary/shared";
@@ -23,10 +25,10 @@ import { deleteObject, objectSize, presignGet } from "../lib/r2.js";
 import {
   getPrediction,
   startSeparation,
-  startTranscriptionForMode,
   vocalsUrlFromOutput,
 } from "../lib/replicate.js";
-import { buildLyrics, realignFromText } from "../lib/transcript.js";
+import { transcribeWithScribe } from "../lib/fal-stt.js";
+import { buildLyricsFromScribe, realignFromText } from "../lib/transcript.js";
 import { summarizeSong } from "../lib/openrouter.js";
 import { estimateGenerationCost, recordEvent } from "../lib/analytics.js";
 import { getOrCreateUser } from "../lib/users.js";
@@ -34,21 +36,15 @@ import { getOrCreateUser } from "../lib/users.js";
 // Two Replicate steps (Demucs + WhisperX), so allow more headroom than one.
 const PROCESSING_TIMEOUT_MS = 10 * 60 * 1000;
 
-// Atomic-claim marker for the separating→transcribing transition. We encode the
-// upstream demucs prediction ID so a crash between claim and the real IDs being
-// written can be recovered (next poll rolls back to "separating" with the same
-// demucs ID, re-fetching vocalsUrl without paying for separation again).
+// Atomic-claim marker for the separating→transcribing transition. We encode
+// the upstream demucs prediction ID so a crash mid-fal-call can be rolled
+// back to "separating" with the same demucs ID intact, re-using the cached
+// vocals stem (no need to pay for separation again).
 const CLAIM_PREFIX = "claim:";
+// Grace period before treating a claim as stale and rolling it back. fal.ai's
+// Scribe is normally ~3-5s but can take longer on cold-boot or large audio,
+// so we wait ~90s before assuming the call died.
 const CLAIM_STALE_MS = 90 * 1000;
-// Atomic claim for the transcribing→ready finalize step. Encodes the prior
-// prediction IDs so a stale claim can be rolled back without losing them.
-const FINALIZE_PREFIX = "finalize:";
-const FINALIZE_STALE_MS = 60 * 1000;
-
-function startOfUtcDay(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-}
 
 async function getSongRow(id: string): Promise<SongRow | undefined> {
   const [row] = await db.select().from(songs).where(eq(songs.id, id)).limit(1);
@@ -202,7 +198,7 @@ async function finalizeIfDone(row: SongRow): Promise<SongRow> {
     return (await markFailed(row.id, "Processing timed out.")) ?? row;
   }
 
-  // Stage 1 (separating): a single Demucs prediction ID.
+  // Stage 1 (separating): poll the Demucs prediction.
   if (row.stage === "separating") {
     const prediction = await getPrediction(predictionId);
     if (prediction.status === "failed" || prediction.status === "canceled") {
@@ -215,9 +211,11 @@ async function finalizeIfDone(row: SongRow): Promise<SongRow> {
       return (await markFailed(row.id, "Vocal isolation produced no output.")) ?? row;
     }
 
-    // Atomically claim the stage transition so only one concurrent poll fires
-    // the (expensive) triple WhisperX kickoff. The marker encodes the demucs
-    // prediction ID so a crash between claim and write can be auto-recovered.
+    // Atomically claim the transcription step so only one concurrent poll
+    // calls fal.ai. The marker encodes the demucs prediction ID so a crash
+    // mid-call can be rolled back without losing the (still cached) demucs
+    // output. fal.ai's Scribe is synchronous (~3-5s), so the entire
+    // transcribe → buildLyrics → save path happens inside this one poll tick.
     const claimMarker = `${CLAIM_PREFIX}${predictionId}`;
     const [claimed] = await db
       .update(songs)
@@ -229,41 +227,61 @@ async function finalizeIfDone(row: SongRow): Promise<SongRow> {
       .where(and(eq(songs.id, row.id), eq(songs.status, "processing"), eq(songs.stage, "separating")))
       .returning();
     if (!claimed) {
-      // Another poll won the claim — bail out, let the next poll see the new state.
+      // Another poll won the claim — let it finish.
       return (await getSongRow(row.id)) ?? row;
     }
 
-    // Default legacy rows (mode=null) to pro so behavior is unchanged.
-    const mode: GenerationMode = row.mode ?? "pro";
-    const mixUrl = await presignGet(row.r2Key);
-    let transcriptionIds: string[];
+    let lyrics;
     try {
-      transcriptionIds = await startTranscriptionForMode(vocalsUrl, mixUrl, mode);
+      const scribe = await transcribeWithScribe(vocalsUrl);
+      lyrics = await buildLyricsFromScribe(scribe);
     } catch (err) {
-      // All retries exhausted — roll back the claim so the next poll can retry.
+      // Roll back the claim so the next poll can retry against the same
+      // (cached, succeeded) demucs prediction.
       await db
         .update(songs)
         .set({ stage: "separating", replicatePredictionId: predictionId, updatedAt: new Date() })
         .where(and(eq(songs.id, row.id), eq(songs.replicatePredictionId, claimMarker)));
       throw err;
     }
+
+    const lastEnd = lyrics.lines.at(-1)?.end;
+    const duration =
+      row.durationSeconds ?? (typeof lastEnd === "number" ? Math.round(lastEnd) : null);
+    const insights = await summarizeSong(lyrics.lines.map((l) => l.text));
+
     const [updated] = await db
       .update(songs)
       .set({
-        // 1 ID (fast/normal) or 3 IDs (pro). Stored comma-separated to avoid a
-        // schema migration. Pro order: vocals, mix(t=0), mix(t=0.4).
-        replicatePredictionId: transcriptionIds.join(","),
+        status: "ready",
+        stage: null,
+        lyrics,
+        insights,
+        language: lyrics.language,
+        durationSeconds: duration,
+        replicatePredictionId: null,
         updatedAt: new Date(),
       })
       .where(and(eq(songs.id, row.id), eq(songs.replicatePredictionId, claimMarker)))
       .returning();
+
+    // Funnel event — fires once because the guarded UPDATE only matches once.
+    if (updated) {
+      const cost = estimateGenerationCost(duration, lyrics);
+      await recordEvent("generated", {
+        ownerHash: updated.ownerHash,
+        userId: updated.userId,
+        props: { songId: updated.id, url: `${env.APP_URL}/s/${updated.id}`, durationSeconds: duration, ...cost },
+      });
+    }
     return updated ?? (await getSongRow(row.id)) ?? row;
   }
 
-  // Stage 2 (transcribing): 1 or 3 WhisperX predictions depending on mode.
-  // A "claim:<demucsId>" marker means a previous poll started the claim and
-  // crashed before writing real IDs — if stale, roll back so the next poll
-  // re-kicks transcription using the (still cached, succeeded) demucs run.
+  // Stage 2 (transcribing): a "claim:<demucsId>" marker means an earlier
+  // poll started the fal.ai call and never wrote the result back (process
+  // crashed, network died, etc.). After a grace period, roll the row back
+  // to stage="separating" so the next poll re-runs transcription against
+  // the same already-succeeded demucs prediction.
   if (predictionId.startsWith(CLAIM_PREFIX)) {
     const age = Date.now() - row.updatedAt.getTime();
     if (age < CLAIM_STALE_MS) return row;
@@ -276,87 +294,11 @@ async function finalizeIfDone(row: SongRow): Promise<SongRow> {
     return reset ?? row;
   }
 
-  // A "finalize:<ids>" marker means another poll is currently running the LLM
-  // build step. If it's stale (process crashed / fetch aborted), roll back so
-  // this poll can retry.
-  if (predictionId.startsWith(FINALIZE_PREFIX)) {
-    const age = Date.now() - row.updatedAt.getTime();
-    if (age < FINALIZE_STALE_MS) return row;
-    const ids = predictionId.slice(FINALIZE_PREFIX.length);
-    const [reset] = await db
-      .update(songs)
-      .set({ replicatePredictionId: ids, updatedAt: new Date() })
-      .where(and(eq(songs.id, row.id), eq(songs.replicatePredictionId, predictionId)))
-      .returning();
-    return reset ?? row;
-  }
-
-  const ids = predictionId.split(",");
-  if (ids.length !== 1 && ids.length !== 3) {
-    return (await markFailed(row.id, "Transcription state corrupted.")) ?? row;
-  }
-  const predictions = await Promise.all(ids.map((id) => getPrediction(id)));
-  for (const p of predictions) {
-    if (p.status === "failed" || p.status === "canceled") {
-      return (await markFailed(row.id, p.error ?? "Transcription failed.")) ?? row;
-    }
-  }
-  if (predictions.some((p) => p.status !== "succeeded")) return row;
-
-  // Atomically claim the finalize step. Concurrent polls would otherwise each
-  // run buildLyrics (= multiple LLM calls) and the first one to UPDATE wins —
-  // if it happens to be the one that hit a transient blip, the row gets saved
-  // with null-structured lyrics. The claim ensures exactly one poll runs it.
-  const finalizeMarker = `${FINALIZE_PREFIX}${predictionId}`;
-  const [claimed] = await db
-    .update(songs)
-    .set({ replicatePredictionId: finalizeMarker, updatedAt: new Date() })
-    .where(and(eq(songs.id, row.id), eq(songs.replicatePredictionId, predictionId)))
-    .returning();
-  if (!claimed) return (await getSongRow(row.id)) ?? row;
-
-  const outputs = predictions.map((p) => p.output);
-  let lyrics;
-  try {
-    lyrics = await buildLyrics(outputs);
-  } catch (err) {
-    // Roll back the finalize claim so the next poll can retry.
-    await db
-      .update(songs)
-      .set({ replicatePredictionId: predictionId, updatedAt: new Date() })
-      .where(and(eq(songs.id, row.id), eq(songs.replicatePredictionId, finalizeMarker)));
-    throw err;
-  }
-  const lastEnd = lyrics.lines.at(-1)?.end;
-  const duration =
-    row.durationSeconds ?? (typeof lastEnd === "number" ? Math.round(lastEnd) : null);
-  const insights = await summarizeSong(lyrics.lines.map((l) => l.text));
-  const [updated] = await db
-    .update(songs)
-    .set({
-      status: "ready",
-      stage: null,
-      lyrics,
-      insights,
-      language: lyrics.language,
-      durationSeconds: duration,
-      replicatePredictionId: null,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(songs.id, row.id), eq(songs.replicatePredictionId, finalizeMarker)))
-    .returning();
-
-  // Funnel: record one "generated" event for the call that actually finalized
-  // the song (the guarded UPDATE only matches once), with an approx cost.
-  if (updated) {
-    const cost = estimateGenerationCost(duration, lyrics);
-    await recordEvent("generated", {
-      ownerHash: updated.ownerHash,
-      userId: updated.userId,
-      props: { songId: updated.id, url: `${env.APP_URL}/s/${updated.id}`, durationSeconds: duration, ...cost },
-    });
-  }
-  return updated ?? (await getSongRow(row.id)) ?? row;
+  // Any other predictionId shape here is a row that was mid-transcription
+  // under the old WhisperX-poll architecture during the engine swap. Mark
+  // failed so the user can re-upload; in-flight legacy state isn't worth the
+  // backwards-compat complexity for a one-time deploy crossover.
+  return (await markFailed(row.id, "In-flight job from a previous engine; please retry the upload.")) ?? row;
 }
 
 export async function songsRoutes(app: FastifyInstance) {
@@ -388,21 +330,29 @@ export async function songsRoutes(app: FastifyInstance) {
         });
       }
     } else {
-      // Anonymous: ANONYMOUS_DAILY_LIMIT transcription per UTC day, by IP+UA hash.
+      // Anonymous: ANONYMOUS_DAILY_LIMIT transcription LIFETIME per IP+UA hash
+      // (landing page promises "1 free song", not "1 per day"). Count any prior
+      // row from this owner that has started processing — processingStartedAt
+      // is set atomically when /process kicks the pipeline and never cleared,
+      // so completed songs stay counted.
       const [usage] = await db
         .select({ count: sql<number>`count(*)::int` })
         .from(songs)
         .where(
           and(
             eq(songs.ownerHash, row.ownerHash),
-            gte(songs.createdAt, startOfUtcDay()),
-            isNotNull(songs.replicatePredictionId),
+            isNotNull(songs.processingStartedAt),
             ne(songs.id, row.id),
           ),
         );
-      if ((usage?.count ?? 0) >= env.ANONYMOUS_DAILY_LIMIT) {
+      const prior = usage?.count ?? 0;
+      req.log.info(
+        { ownerHash: row.ownerHash, prior, limit: env.ANONYMOUS_DAILY_LIMIT },
+        "anonymous-quota-check",
+      );
+      if (prior >= env.ANONYMOUS_DAILY_LIMIT) {
         return reply.code(429).send({
-          error: "Free limit reached: 1 song per day. Sign up for 3 free, or upgrade for more.",
+          error: `Free limit reached. Sign up free for ${PLAN_CREDITS.free} credits, or upgrade for more.`,
         });
       }
     }
@@ -659,6 +609,28 @@ export async function songsRoutes(app: FastifyInstance) {
     const [updated] = await db
       .update(songs)
       .set({ lyrics, updatedAt: new Date() })
+      .where(eq(songs.id, row.id))
+      .returning();
+    return reply.send(await toSongDto(updated ?? row, true));
+  });
+
+  // Overwrite lyrics with hand-corrected word timestamps from the fine-tune
+  // timing editor. Skips text-realignment — the client owns the data here.
+  app.patch<{ Params: { id: string } }>("/songs/:id/sync", async (req, reply) => {
+    const clerkId = await getAuthUserId(req);
+    if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+    const user = await getOrCreateUser(clerkId);
+    const parsed = syncLyricsSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid request." });
+    const row = await getSongRow(req.params.id);
+    if (!row || row.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+    if (row.status !== "ready") {
+      return reply.code(400).send({ error: "This track isn't ready to edit yet." });
+    }
+
+    const [updated] = await db
+      .update(songs)
+      .set({ lyrics: parsed.data.lyrics, updatedAt: new Date() })
       .where(eq(songs.id, row.id))
       .returning();
     return reply.send(await toSongDto(updated ?? row, true));

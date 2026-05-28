@@ -46,3 +46,7 @@ await app.register(billingRoutes, { prefix: "/api" });
 await app.register(webhookRoutes, { prefix: "/api" });
 
 await app.listen({ port: env.PORT, host: "0.0.0.0" });
+app.log.info(
+  { anonymousLimit: env.ANONYMOUS_DAILY_LIMIT, quotaMode: "lifetime-per-hash" },
+  "syllary-api-ready",
+);
