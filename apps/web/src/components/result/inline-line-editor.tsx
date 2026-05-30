@@ -45,9 +45,23 @@ export function InlineLineEditor({
   // the commit logic. Track whether we've already initiated a commit.
   const finishingRef = useRef(false);
 
+  // Keep the latest onEditingChange callback in a ref so the effect below
+  // can call it without subscribing to its identity. When this component
+  // lives inside a list (Full lyrics view), the parent re-renders on every
+  // editingIndex change and gives us a NEW onEditingChange function each
+  // time — if we depended on it directly, the effect would fire for EVERY
+  // editor on every keystroke and the non-editing ones would each call
+  // onEditingChange(false), racing the active editor and clearing
+  // editingIndex mid-keypress. That re-enabled the parent wrapper's
+  // space-intercept handler and ate every space the user typed.
+  const onEditingChangeRef = useRef(onEditingChange);
+  useEffect(() => {
+    onEditingChangeRef.current = onEditingChange;
+  });
+
   useEffect(() => {
     if (editing) {
-      onEditingChange?.(true);
+      onEditingChangeRef.current?.(true);
       finishingRef.current = false;
       const id = window.setTimeout(() => {
         inputRef.current?.focus();
@@ -55,9 +69,9 @@ export function InlineLineEditor({
       }, 0);
       return () => window.clearTimeout(id);
     }
-    onEditingChange?.(false);
+    onEditingChangeRef.current?.(false);
     return undefined;
-  }, [editing, onEditingChange]);
+  }, [editing]);
 
   function startEdit(e: React.MouseEvent) {
     e.stopPropagation();
