@@ -1,0 +1,1 @@
+ALTER TABLE "video_jobs" ADD COLUMN "image_size" text DEFAULT '2K' NOT NULL;

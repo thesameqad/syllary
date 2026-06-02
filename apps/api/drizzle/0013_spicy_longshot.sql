@@ -1,0 +1,1 @@
+ALTER TABLE "video_jobs" ALTER COLUMN "image_size" SET DEFAULT '1K';

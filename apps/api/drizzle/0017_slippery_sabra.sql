@@ -1,0 +1,1 @@
+ALTER TABLE "video_jobs" ADD COLUMN "scene_brief" text;

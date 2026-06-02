@@ -1,0 +1,1 @@
+ALTER TYPE "public"."video_job_status" ADD VALUE 'review' BEFORE 'ready';
