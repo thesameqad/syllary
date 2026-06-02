@@ -20,7 +20,7 @@
     "db:studio": "pnpm --filter @syllary/api run db:studio"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": ["esbuild", "ffmpeg-static"]
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

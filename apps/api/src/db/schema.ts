@@ -13,9 +13,14 @@ import {
 import type {
   AudioFeatures,
   GenerationMode,
+  ImageQuality,
+  ImageSize,
   Lyrics,
   SongInsights,
   SongLink,
+  VideoModel,
+  VideoPipelineMode,
+  VideoSegment,
 } from "@syllary/shared";
 
 // Keep in sync with SONG_STATUSES in @syllary/shared.
@@ -52,12 +57,92 @@ export const songs = pgTable("songs", {
   lyrics: jsonb("lyrics").$type<Lyrics>(),
   insights: jsonb("insights").$type<SongInsights>(),
   audioFeatures: jsonb("audio_features").$type<AudioFeatures>(),
+  // R2 key of the most recently generated lyric video (legacy; superseded by
+  // the song_videos table, which holds one finished video per style).
+  latestVideoKey: text("latest_video_key"),
+  // Which lyric-video style is shown on the public page. Null = none chosen.
+  publicVideoModel: text("public_video_model").$type<VideoModel>(),
   error: text("error"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export type SongRow = typeof songs.$inferSelect;
+
+// Keep in sync with VIDEO_JOB_STATUSES in @syllary/shared.
+export const videoJobStatus = pgEnum("video_job_status", [
+  "pending",
+  "processing",
+  "review",
+  "ready",
+  "failed",
+]);
+
+// A lyric-video generation job. Long-running (per-line image gen + ffmpeg
+// stitch), tracked here and advanced by an in-process pipeline; the client
+// polls GET /api/video-jobs/:id.
+export const videoJobs = pgTable(
+  "video_jobs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    songId: uuid("song_id")
+      .notNull()
+      .references(() => songs.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    status: videoJobStatus("status").notNull().default("pending"),
+    // autopilot | manual
+    mode: text("mode").$type<VideoPipelineMode>().notNull().default("autopilot"),
+    // Render-engine tier: fast | normal | pro (only fast ships in v1).
+    model: text("model").$type<VideoModel>().notNull().default("fast"),
+    styleDescription: text("style_description").notNull(),
+    aspectRatio: text("aspect_ratio").notNull().default("16:9"),
+    // Backdrop resolution: 1K | 2K | 4K.
+    imageSize: text("image_size").$type<ImageSize>().notNull().default("1K"),
+    // Backdrop image-model tier: fast (Nano Banana 2) | pro (Nano Banana Pro).
+    imageQuality: text("image_quality").$type<ImageQuality>().notNull().default("fast"),
+    // ffmpeg (Ken-Burns) | ai (Wan/Kling, deferred). Swappable per the plan.
+    motionMode: text("motion_mode").notNull().default("ffmpeg"),
+    // True when this job renders only a short preview (not the full song).
+    isPreview: boolean("is_preview").notNull().default(false),
+    // One-time AI "art brief" (who/what the song depicts) injected into every
+    // per-line image prompt so the model gets the subject/POV right.
+    sceneBrief: text("scene_brief"),
+    totalSegments: integer("total_segments").notNull().default(0),
+    completedSegments: integer("completed_segments").notNull().default(0),
+    segments: jsonb("segments").$type<VideoSegment[]>(),
+    // R2 key of the finished MP4 (null until ready).
+    videoKey: text("video_key"),
+    error: text("error"),
+    tokensCharged: integer("tokens_charged").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ songIdx: index("video_jobs_song_idx").on(t.songId) }),
+);
+
+export type VideoJobRow = typeof videoJobs.$inferSelect;
+
+// One finished lyric video per song per style. Upserted when a job completes, so
+// a song can hold several saved videos (one per style) and the owner picks which
+// one is public (songs.publicVideoModel).
+export const songVideos = pgTable(
+  "song_videos",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    songId: uuid("song_id")
+      .notNull()
+      .references(() => songs.id, { onDelete: "cascade" }),
+    model: text("model").$type<VideoModel>().notNull(),
+    videoKey: text("video_key").notNull(),
+    // True when the saved video for this style is only a preview sample.
+    isPreview: boolean("is_preview").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ uniqueSongModel: unique("song_videos_song_model_unique").on(t.songId, t.model) }),
+);
+
+export type SongVideoRow = typeof songVideos.$inferSelect;
 
 export const users = pgTable("users", {
   id: uuid("id").defaultRandom().primaryKey(),

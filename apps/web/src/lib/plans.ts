@@ -1,17 +1,30 @@
 import type { Plan } from "@syllary/shared";
 
-export const PLAN_ORDER: Record<Plan, number> = { free: 0, starter: 1, creator: 2, pro: 3 };
+export const PLAN_ORDER: Record<Plan, number> = {
+  free: 0,
+  starter: 1,
+  creator: 2,
+  pro: 3,
+  reel: 4,
+  studio: 5,
+  premiere: 6,
+};
 export const PLAN_LABEL: Record<Plan, string> = {
   free: "Free",
   starter: "Starter",
   creator: "Creator",
   pro: "Pro",
+  reel: "Reel",
+  studio: "Studio",
+  premiere: "Premiere",
 };
 
 export type PlanFeature = { text: string; comingSoon?: boolean };
 
 export type PlanTier = {
-  id: "starter" | "creator" | "pro";
+  id: "starter" | "creator" | "pro" | "reel" | "studio" | "premiere";
+  /** Which pricing family the plan belongs to. */
+  category: "lyrics" | "video";
   name: string;
   desc: string;
   monthly: number;
@@ -29,6 +42,7 @@ export type PlanTier = {
 export const PLAN_TIERS: PlanTier[] = [
   {
     id: "starter",
+    category: "lyrics",
     name: "Starter",
     desc: "For trying it out",
     monthly: 6,
@@ -42,6 +56,7 @@ export const PLAN_TIERS: PlanTier[] = [
   },
   {
     id: "creator",
+    category: "lyrics",
     name: "Creator",
     desc: "For active releases",
     monthly: 14,
@@ -56,6 +71,7 @@ export const PLAN_TIERS: PlanTier[] = [
   },
   {
     id: "pro",
+    category: "lyrics",
     name: "Pro",
     desc: "For labels & studios",
     monthly: 29,
@@ -66,4 +82,52 @@ export const PLAN_TIERS: PlanTier[] = [
       { text: "Early access to new features", comingSoon: true },
     ],
   },
+  {
+    id: "reel",
+    category: "video",
+    name: "Reel",
+    desc: "For the occasional video",
+    monthly: 39,
+    annual: 390,
+    features: [
+      { text: "80,000 tokens / month" },
+      { text: "≈ 2–3 music videos" },
+      { text: "All 3 video styles" },
+      { text: "Unlimited lyric files" },
+    ],
+  },
+  {
+    id: "studio",
+    category: "video",
+    name: "Studio",
+    desc: "For regular creators",
+    monthly: 99,
+    annual: 990,
+    features: [
+      { text: "220,000 tokens / month" },
+      { text: "≈ 5–9 music videos" },
+      { text: "Everything in Reel" },
+      { text: "Unlimited lyric files" },
+    ],
+    featured: true,
+  },
+  {
+    id: "premiere",
+    category: "video",
+    name: "Premiere",
+    desc: "For studios & heavy output",
+    monthly: 199,
+    annual: 1990,
+    features: [
+      { text: "620,000 tokens / month" },
+      { text: "≈ 20–36 music videos" },
+      { text: "Best token value (2× rate)" },
+      { text: "Everything in Studio" },
+    ],
+  },
 ];
+
+/** Lyrics-generation plans (cheap, modest token grants). */
+export const LYRICS_TIERS = PLAN_TIERS.filter((t) => t.category === "lyrics");
+/** Music-video plans (large token grants for video-heavy users). */
+export const VIDEO_TIERS = PLAN_TIERS.filter((t) => t.category === "video");

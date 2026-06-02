@@ -61,6 +61,171 @@ export function creditCost(durationSeconds: number, mode: GenerationMode = "pro"
   return Math.round(base * MODE_MULTIPLIER[mode]);
 }
 
+// ===========================================================================
+// Lyrics video generation
+// ===========================================================================
+
+/** The three lyric-video styles, in ascending order of motion. Internal keys are
+ *  stable DB values; user-facing names are friendly and non-technical.
+ *    fast   → Slideshow     (still frames + gentle ffmpeg drift)
+ *    normal → Living Scenes (the whole scene moves, via Grok)
+ *    pro    → Cinematic     (full AI-directed clip, via Kling) */
+export const VIDEO_MODELS = ["fast", "normal", "pro"] as const;
+export type VideoModel = (typeof VIDEO_MODELS)[number];
+
+export const VIDEO_MODEL_INFO: Record<
+  VideoModel,
+  {
+    label: string;
+    tagline: string;
+    description: string;
+    eta: string;
+    costHint: string;
+    /** Seconds of the song this style renders for now (cost control), or null
+     *  for the full song. The AI-video styles are capped; slideshow is not. */
+    previewSeconds: number | null;
+    enabled: boolean;
+    /** Still rough / unpredictable — surfaced as an "Experimental" badge. */
+    experimental?: boolean;
+  }
+> = {
+  fast: {
+    label: "Slideshow",
+    tagline: "Still scenes, gentle drift",
+    description:
+      "A gorgeous AI scene for every line, with your lyrics woven right into the artwork. Each scene slowly drifts and glides — clean, elegant, and the quickest way to a finished video.",
+    eta: "Ready in a few minutes",
+    costHint: "Lowest cost",
+    previewSeconds: null,
+    enabled: true,
+  },
+  normal: {
+    label: "Living Scenes",
+    tagline: "The whole scene moves",
+    description:
+      "A separate moving scene for each line — light shifts, clouds and traffic drift, the world comes alive behind your lyrics. Lots of motion, with each line its own standalone shot.",
+    eta: "Takes a few minutes",
+    costHint: "Higher cost",
+    previewSeconds: null,
+    enabled: true,
+  },
+  pro: {
+    label: "Cinematic",
+    tagline: "A real music video",
+    description:
+      "One continuous film — an AI director makes every shot flow smoothly into the next, with dynamic camera moves and evolving scenes, like a true music video. The richest, most premium result.",
+    eta: "The most involved to create",
+    costHint: "Premium",
+    previewSeconds: null,
+    enabled: true,
+    experimental: true,
+  },
+};
+
+/** Seconds rendered for a preview — a cheap sample starting at the first lyric
+ *  line, so users can try a style before committing to the full spend. */
+export const PREVIEW_SECONDS = 10;
+
+/** Autopilot renders the whole video end-to-end; manual lets the owner review
+ *  and regenerate each line before stitching. */
+export const VIDEO_PIPELINE_MODES = ["autopilot", "manual"] as const;
+export type VideoPipelineMode = (typeof VIDEO_PIPELINE_MODES)[number];
+
+/** Backdrop image-model tier, orthogonal to resolution. Fast = Nano Banana 2
+ *  (cheaper, near-Pro quality); Pro = Nano Banana Pro (best embedded-text
+ *  rendering, pricier). Internal keys are stable DB values. The actual token
+ *  price is computed per-song from real cost — see `estimateVideoCost` in
+ *  video-plan.ts. */
+export const IMAGE_QUALITIES = ["fast", "pro"] as const;
+export type ImageQuality = (typeof IMAGE_QUALITIES)[number];
+
+export const IMAGE_QUALITY_INFO: Record<
+  ImageQuality,
+  { label: string; description: string; enabled: boolean }
+> = {
+  fast: {
+    label: "Fast",
+    description: "Cheapest, beautiful scenes — but the lyric text can occasionally render with typos.",
+    enabled: true,
+  },
+  pro: {
+    label: "Pro",
+    description: "Renders the lyric text precisely (far fewer typos), plus the sharpest detail. Costs more.",
+    enabled: true,
+  },
+};
+
+
+/** One-tap visual style presets for the lyric-video generator. `description` is
+ *  the short, friendly line shown to the user; `prompt` is the full art-direction
+ *  text actually sent to the image model (NOT shown, to avoid confusing them). A
+ *  preview image is served from `/presets/{id}.jpg`. */
+export type VideoStylePreset = {
+  id: string;
+  name: string;
+  description: string;
+  prompt: string;
+};
+
+export const VIDEO_STYLE_PRESETS: VideoStylePreset[] = [
+  {
+    id: "sunny-suburbs",
+    name: "Sunny Suburbs",
+    description: "Warm golden-hour homes and blue-sky nostalgia",
+    prompt:
+      "A sunny day in the suburbs: golden-hour sunlight, manicured green lawns, white picket fences, pastel-colored houses, clear blue sky with soft clouds, warm cheerful nostalgic Americana, gentle lens flares, cinematic depth of field, high detail",
+  },
+  {
+    id: "cyberpunk-neon",
+    name: "Cyberpunk Neon",
+    description: "Rain-slick streets glowing with neon",
+    prompt:
+      "Cyberpunk megacity at night: rain-slick streets, towering skyscrapers drenched in glowing neon signage and holograms, magenta and cyan light, volumetric haze, reflections, Blade Runner mood, moody cinematic, ultra detailed",
+  },
+  {
+    id: "nyc-night",
+    name: "NYC After Dark",
+    description: "The glossy night streets of New York",
+    prompt:
+      "The night streets of New York City: glossy wet asphalt, yellow-cab light trails, steam rising from manhole covers, towering lit skyscrapers and bodega signs, moody cinematic street photography, deep contrast, atmospheric, film-grain",
+  },
+  {
+    id: "japanese-manga",
+    name: "Japanese Manga",
+    description: "Bold black-and-white ink panels",
+    prompt:
+      "Japanese manga art style: bold black-and-white ink linework, dramatic screentones and halftones, expressive speed lines, high-contrast monochrome shading, dynamic hand-drawn comic energy",
+  },
+  {
+    id: "comic-book",
+    name: "Comic Book",
+    description: "Vivid inked panels with halftone pop",
+    prompt:
+      "Classic American comic book art: bold black ink outlines, vibrant saturated colors, Ben-Day halftone dots, dramatic cel shading, pop-art energy, dynamic poster composition",
+  },
+  {
+    id: "3d-cartoon",
+    name: "3D Cartoon",
+    description: "Playful, glossy animated-movie look",
+    prompt:
+      "Playful 3D animated cartoon style: soft rounded shapes, bright cheerful colors, glossy Pixar-like rendering, charming whimsical world, soft global illumination, shallow depth of field, high quality render",
+  },
+];
+
+/** Backdrop resolution from Nano Banana Pro. 1K is ~1376px (soft once scaled to
+ *  1080p), 2K (~2048px) is crisp at 1080p, 4K is maximum detail. */
+export const IMAGE_SIZES = ["1K", "2K", "4K"] as const;
+export type ImageSize = (typeof IMAGE_SIZES)[number];
+
+export const IMAGE_SIZE_INFO: Record<
+  ImageSize,
+  { label: string; description: string; enabled: boolean }
+> = {
+  "1K": { label: "1K", description: "Fastest, lowest cost — a little soft at 1080p.", enabled: true },
+  "2K": { label: "2K", description: "Crisp at 1080p. The best balance.", enabled: true },
+  "4K": { label: "4K", description: "Maximum detail. Slower and pricier.", enabled: true },
+};
+
 export const ACCEPTED_EXTENSIONS = [".mp3", ".wav", ".flac"] as const;
 
 export const ACCEPTED_MIME_TYPES = [

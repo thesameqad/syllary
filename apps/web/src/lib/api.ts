@@ -1,5 +1,9 @@
 import {
   accountSchema,
+  coverPresignResponseSchema,
+  type CreateVideoRequest,
+  type MetaSuggestions,
+  metaSuggestionsSchema,
   presignResponseSchema,
   publicSongSchema,
   ratingSummarySchema,
@@ -7,15 +11,21 @@ import {
   songSchema,
   type Account,
   type BillingPeriod,
+  type CheckoutRequest,
   type GenerationMode,
   type Lyrics,
   type PresignRequest,
   type PresignResponse,
   type PublicSong,
   type RatingSummary,
+  type ReviewSegment,
+  reviewSegmentSchema,
   type Song,
   type SongSummary,
   type UpdateSong,
+  type VideoJob,
+  videoJobSchema,
+  type VideoModel,
 } from "@syllary/shared";
 
 const API_BASE =
@@ -175,7 +185,7 @@ function urlFrom(data: unknown): string {
 }
 
 export async function startCheckout(
-  tier: "starter" | "creator" | "pro",
+  tier: CheckoutRequest["tier"],
   billingPeriod: BillingPeriod,
 ): Promise<string> {
   const res = await fetch(`${API_BASE}/api/billing/checkout`, {
@@ -211,6 +221,42 @@ export async function updateSong(id: string, body: UpdateSong): Promise<Song> {
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not update the song."), res.status);
   return songSchema.parse(data);
+}
+
+/** Replace a song's cover image: presign → direct PUT to R2 → commit. The
+ *  blob is a square JPEG produced by the cropper. Returns the updated song. */
+export async function uploadCover(songId: string, blob: Blob): Promise<Song> {
+  const presignRes = await fetch(`${API_BASE}/api/songs/${songId}/cover/presign`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ contentType: "image/jpeg" }),
+  });
+  const presignData: unknown = await presignRes.json();
+  if (!presignRes.ok) {
+    throw new ApiError(errorMessage(presignData, "Couldn't start the image upload."), presignRes.status);
+  }
+  const { uploadUrl, key } = coverPresignResponseSchema.parse(presignData);
+
+  await uploadToR2(uploadUrl, blob, "image/jpeg", () => {});
+
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/cover`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ key }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't save the image."), res.status);
+  return songSchema.parse(data);
+}
+
+/** Distinct artist/album values from the user's other songs, for autosuggest. */
+export async function getMetaSuggestions(): Promise<MetaSuggestions> {
+  const res = await fetch(`${API_BASE}/api/songs/meta-suggestions`, {
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't load suggestions."), res.status);
+  return metaSuggestionsSchema.parse(data);
 }
 
 export async function updateSongLyrics(id: string, text: string): Promise<Song> {
@@ -278,6 +324,96 @@ export async function rateSong(id: string, stars: number): Promise<RatingSummary
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't save your rating."), res.status);
   return ratingSummarySchema.parse(data);
+}
+
+/** Kick off lyric-video generation for a song. Returns the created job. */
+export async function createLyricsVideo(
+  songId: string,
+  body: CreateVideoRequest,
+): Promise<VideoJob> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/video`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(body),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not start the video."), res.status);
+  return videoJobSchema.parse(data);
+}
+
+/** Manual mode: regenerate one line's image (optionally with an edited prompt). */
+export async function regenerateSegment(
+  jobId: string,
+  index: number,
+  prompt?: string,
+): Promise<ReviewSegment> {
+  const res = await fetch(`${API_BASE}/api/video-jobs/${jobId}/segments/${index}/regenerate`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(prompt ? { prompt } : {}),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not regenerate this scene."), res.status);
+  return reviewSegmentSchema.parse(data);
+}
+
+/** Promote a preview to the full music video, reusing its exact settings. */
+export async function generateFullVideo(songId: string, model: VideoModel): Promise<VideoJob> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/videos/${model}/full`, {
+    method: "POST",
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not start the full video."), res.status);
+  return videoJobSchema.parse(data);
+}
+
+/** Manual mode: assemble the final video from the approved per-line images. */
+export async function finalizeVideoJob(jobId: string): Promise<VideoJob> {
+  const res = await fetch(`${API_BASE}/api/video-jobs/${jobId}/finalize`, {
+    method: "POST",
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not start the final video."), res.status);
+  return videoJobSchema.parse(data);
+}
+
+/** Choose which generated lyric-video style is public (or null for none). */
+export async function setPublicVideo(songId: string, model: VideoModel | null): Promise<Song> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/public-video`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ model }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not update the public video."), res.status);
+  return songSchema.parse(data);
+}
+
+/** Poll a video job for progress / the finished video URL. */
+export async function getVideoJob(jobId: string): Promise<VideoJob> {
+  const res = await fetch(`${API_BASE}/api/video-jobs/${jobId}`, {
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not load the video job."), res.status);
+  return videoJobSchema.parse(data);
+}
+
+/** Switch an existing subscriber to a different plan (Stripe portal confirm flow). */
+export async function changePlan(
+  tier: CheckoutRequest["tier"],
+  billingPeriod: BillingPeriod,
+): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/billing/change-plan`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ tier, billingPeriod }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not change your plan."), res.status);
+  return urlFrom(data);
 }
 
 export async function openBillingPortal(): Promise<string> {

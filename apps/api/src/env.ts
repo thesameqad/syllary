@@ -23,6 +23,26 @@ const envSchema = z.object({
   // Used for reconciling multiple transcripts into canonical lyrics. Opus
   // handles explicit content reliably; Sonnet refuses some songs.
   OPENROUTER_RECONCILE_MODEL: z.string().default("anthropic/claude-opus-4.1"),
+  // Per-line backdrop generator for lyric videos, "Pro" quality tier. Gemini 3
+  // Pro Image ("Nano Banana Pro") — best-in-class embedded-text rendering.
+  OPENROUTER_IMAGE_MODEL: z.string().default("google/gemini-3-pro-image-preview"),
+  // "Fast" quality tier (the default): Gemini 3.1 Flash Image ("Nano Banana 2")
+  // — ~50% cheaper image generation at near-Pro quality. Users opt up to the Pro
+  // model above (3× tokens) when they want the sharpest baked-in lyrics.
+  OPENROUTER_IMAGE_MODEL_FAST: z.string().default("google/gemini-3.1-flash-image-preview"),
+  // Cheap image-to-video model for Cinemagraph + Living Scenes. Grok Imagine is
+  // the cheapest (~$0.05/s) AND supports short 1–15s clips, so we generate a
+  // brief clip and loop it — far cheaper than Wan's forced 5/10s clips.
+  OPENROUTER_VIDEO_MODEL: z.string().default("x-ai/grok-imagine-video"),
+  // Image-to-video model for the "Cinematic" style. MUST support a last_frame
+  // (Cinematic morphs each line's frame → the next line's frame for seamless,
+  // scene-changing shots) — Grok does NOT (first_frame only), Seedance/Wan/Kling
+  // do. Seedance 2.0 Fast is the cheapest confirmed first+last option.
+  OPENROUTER_CINEMATIC_MODEL: z.string().default("bytedance/seedance-2.0-fast"),
+  // Override the ffmpeg binary path. Defaults to the bundled ffmpeg-static
+  // binary (works on Render's native runtime, no Docker); set this to use a
+  // system install locally.
+  FFMPEG_PATH: z.string().optional(),
   // Optional so the API still runs (anonymous-only) before auth/billing are configured.
   CLERK_SECRET_KEY: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),
@@ -33,6 +53,13 @@ const envSchema = z.object({
   STRIPE_PRICE_CREATOR_YEARLY: z.string().optional(),
   STRIPE_PRICE_PRO_MONTHLY: z.string().optional(),
   STRIPE_PRICE_PRO_YEARLY: z.string().optional(),
+  // Music-video plans (large token grants; no song cap).
+  STRIPE_PRICE_REEL_MONTHLY: z.string().optional(),
+  STRIPE_PRICE_REEL_YEARLY: z.string().optional(),
+  STRIPE_PRICE_STUDIO_MONTHLY: z.string().optional(),
+  STRIPE_PRICE_STUDIO_YEARLY: z.string().optional(),
+  STRIPE_PRICE_PREMIERE_MONTHLY: z.string().optional(),
+  STRIPE_PRICE_PREMIERE_YEARLY: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

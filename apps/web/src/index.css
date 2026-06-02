@@ -125,6 +125,42 @@
 }
 
 /* =============================================================================
+   Theater mode — drifting aurora blobs behind the video (color set inline).
+   ========================================================================== */
+.theater-blob {
+  position: absolute;
+  width: 130vw;
+  height: 130vw;
+  border-radius: 9999px;
+  filter: blur(150px);
+  opacity: 0.9;
+  animation: theater-drift 16s ease-in-out infinite;
+}
+.theater-blob-2 {
+  animation-duration: 21s;
+  animation-direction: reverse;
+}
+.theater-blob-3 {
+  width: 100vw;
+  height: 100vw;
+  animation-duration: 26s;
+}
+@keyframes theater-drift {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(7%, -5%) scale(1.12);
+  }
+  66% {
+    transform: translate(-6%, 6%) scale(0.92);
+  }
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+/* =============================================================================
    Landing-page motion primitives. Heavy choreography is GSAP/Framer (JS-gated
    on prefers-reduced-motion); these are the CSS-only ambient pieces.
    ========================================================================== */

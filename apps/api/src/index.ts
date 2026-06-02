@@ -7,6 +7,7 @@ import { seoRoutes } from "./routes/seo.js";
 import { songsRoutes } from "./routes/songs.js";
 import { trackRoutes } from "./routes/track.js";
 import { uploadsRoutes } from "./routes/uploads.js";
+import { videoRoutes } from "./routes/video.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 
 const app = Fastify({ logger: true, trustProxy: true });
@@ -41,6 +42,7 @@ await app.register(seoRoutes);
 
 await app.register(uploadsRoutes, { prefix: "/api" });
 await app.register(songsRoutes, { prefix: "/api" });
+await app.register(videoRoutes, { prefix: "/api" });
 await app.register(trackRoutes, { prefix: "/api" });
 await app.register(billingRoutes, { prefix: "/api" });
 await app.register(webhookRoutes, { prefix: "/api" });

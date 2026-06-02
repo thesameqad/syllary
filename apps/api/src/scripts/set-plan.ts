@@ -7,13 +7,21 @@ import { users } from "../db/schema.js";
 // Manually grant a paid plan to a user (for testers), bypassing Stripe. The user
 // must have signed up first. Safe: we leave stripe_customer_id NULL so the /me
 // reconcile never runs and never resets the plan.
-//   DATABASE_URL=<prod-pooler-url> npx tsx src/scripts/set-plan.ts <email> <starter|creator|pro>
+//   DATABASE_URL=<prod-pooler-url> npx tsx src/scripts/set-plan.ts <email> <starter|creator|pro|reel|studio|premiere>
 
-const SONG_QUOTA: Record<Exclude<Plan, "free">, number> = { starter: 30, creator: 100, pro: 400 };
+// Monthly song cap per paid plan; null = unlimited (video plans are token-gated).
+const SONG_QUOTA: Record<Exclude<Plan, "free">, number | null> = {
+  starter: 30,
+  creator: 100,
+  pro: 400,
+  reel: null,
+  studio: null,
+  premiere: null,
+};
 
 const [email, tierArg] = process.argv.slice(2);
 if (!email || !tierArg || !PLANS.includes(tierArg as Plan) || tierArg === "free") {
-  console.error("Usage: tsx src/scripts/set-plan.ts <email> <starter|creator|pro>");
+  console.error("Usage: tsx src/scripts/set-plan.ts <email> <starter|creator|pro|reel|studio|premiere>");
   process.exit(1);
 }
 const tier = tierArg as Exclude<Plan, "free">;
@@ -37,5 +45,6 @@ if (!updated) {
   console.error(`No user found with email ${email}. Have them sign up first, then re-run.`);
   process.exit(1);
 }
-console.log(`✓ ${email} → ${tier} (credits ${PLAN_CREDITS[tier]}, quota ${SONG_QUOTA[tier]}/mo, valid 1 year)`);
+const quotaLabel = SONG_QUOTA[tier] === null ? "unlimited songs" : `${SONG_QUOTA[tier]} songs/mo`;
+console.log(`✓ ${email} → ${tier} (credits ${PLAN_CREDITS[tier]}, ${quotaLabel}, valid 1 year)`);
 process.exit(0);

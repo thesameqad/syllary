@@ -3,18 +3,11 @@ import { Link, Navigate } from "react-router-dom";
 import { SignedIn, SignedOut, UserButton } from "@clerk/clerk-react";
 import { Check, ExternalLink, Loader2 } from "lucide-react";
 import type { Account, BillingPeriod } from "@syllary/shared";
-import { ApiError, getAccount, openBillingPortal, startCheckout } from "@/lib/api";
+import { ApiError, changePlan, getAccount, openBillingPortal, startCheckout } from "@/lib/api";
 import { authConfigured } from "@/lib/auth";
-import { PLAN_TIERS, type PlanTier } from "@/lib/plans";
+import { LYRICS_TIERS, PLAN_LABEL, type PlanTier, VIDEO_TIERS } from "@/lib/plans";
 import { LogoWordmark } from "@/components/logo";
 import { cn } from "@/lib/utils";
-
-const PLAN_LABELS: Record<Account["plan"], string> = {
-  free: "Free",
-  starter: "Starter",
-  creator: "Creator",
-  pro: "Pro",
-};
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -51,9 +44,10 @@ function PlanCard({
     setBusy(true);
     onError("");
     try {
-      // Existing subscribers change plans through the Stripe portal (handles proration).
+      // Existing subscribers go straight to a Stripe confirm screen for this
+      // specific plan (proration handled); free users start a fresh checkout.
       const url = account.hasSubscription
-        ? await openBillingPortal()
+        ? await changePlan(tier.id, period)
         : await startCheckout(tier.id, period);
       window.location.href = url;
     } catch (e) {
@@ -75,7 +69,9 @@ function PlanCard({
     >
       <div className="flex items-center justify-between">
         <span className="text-[14px] font-medium">{tier.name}</span>
-        {isCurrent && <span className="text-[10px] uppercase tracking-[1.5px] text-pulse">Current</span>}
+        {isCurrent && (
+          <span className="text-[10px] uppercase tracking-[1.5px] text-pulse">Current</span>
+        )}
       </div>
       <div className="mt-2 text-[26px] font-medium tracking-[-1px]">
         ${price}
@@ -87,10 +83,7 @@ function PlanCard({
         {tier.features.map((f) => (
           <li key={f.text} className="flex items-center gap-1.5">
             <Check
-              className={cn(
-                "h-3 w-3 shrink-0",
-                f.comingSoon ? "text-white/30" : "text-success",
-              )}
+              className={cn("h-3 w-3 shrink-0", f.comingSoon ? "text-white/30" : "text-success")}
             />
             <span className={cn(f.comingSoon && "text-white/35")}>{f.text}</span>
             {f.comingSoon && (
@@ -114,7 +107,13 @@ function PlanCard({
               : "bg-white/10 text-white hover:bg-white/[0.16]",
         )}
       >
-        {isCurrent ? "Current plan" : busy ? "Redirecting…" : account.hasSubscription ? "Switch" : "Choose"}
+        {isCurrent
+          ? "Current plan"
+          : busy
+            ? "Redirecting…"
+            : account.hasSubscription
+              ? "Switch"
+              : "Choose"}
       </button>
     </div>
   );
@@ -166,7 +165,7 @@ function AccountInner() {
         <div className="flex items-center justify-between">
           <div>
             <div className="text-[12px] uppercase tracking-[1.5px] text-white/40">Current plan</div>
-            <div className="mt-1 text-[20px] font-medium">{PLAN_LABELS[account.plan]}</div>
+            <div className="mt-1 text-[20px] font-medium">{PLAN_LABEL[account.plan]}</div>
           </div>
           {account.hasSubscription && (
             <button
@@ -209,21 +208,38 @@ function AccountInner() {
             ))}
           </div>
         </div>
-        <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
-          {PLAN_TIERS.map((tier) => (
-            <PlanCard
-              key={tier.id}
-              tier={tier}
-              period={period}
-              account={account}
-              onError={(m) => setError(m || null)}
-            />
+        <div className="space-y-8">
+          {(
+            [
+              { label: "Lyrics plans", tiers: LYRICS_TIERS },
+              { label: "Music-video plans", tiers: VIDEO_TIERS },
+            ] as const
+          ).map((group) => (
+            <div key={group.label}>
+              <p className="mb-3 text-[11px] uppercase tracking-[1.5px] text-white/35">
+                {group.label}
+              </p>
+              <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
+                {group.tiers.map((tier) => (
+                  <PlanCard
+                    key={tier.id}
+                    tier={tier}
+                    period={period}
+                    account={account}
+                    onError={(m) => setError(m || null)}
+                  />
+                ))}
+              </div>
+            </div>
           ))}
         </div>
         {error && <p className="mt-3 text-[12px] text-pulse">{error}</p>}
       </div>
 
-      <Link to="/" className="inline-block text-[13px] text-white/50 transition-colors hover:text-white">
+      <Link
+        to="/"
+        className="inline-block text-[13px] text-white/50 transition-colors hover:text-white"
+      >
         ← Back to Syllary
       </Link>
     </div>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { createPortal } from "react-dom";
+import { motion } from "framer-motion";
 import { Check, ChevronDown, Sparkles, Wand2, Zap } from "lucide-react";
 import {
   GENERATION_MODES,
@@ -29,17 +30,33 @@ export function ModeSelector({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLUListElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const ActiveIcon = ICONS[value];
   const active = MODE_INFO[value];
 
-  // Click-outside to close.
+  // The menu is rendered in a portal (fixed position) so it escapes the landing
+  // card's 3D/backdrop-blur context, which otherwise clips the dropdown.
   useEffect(() => {
     if (!open) return;
+    const reposition = () => {
+      const r = ref.current?.getBoundingClientRect();
+      if (r) setPos({ top: r.bottom + 8, left: r.left, width: r.width });
+    };
+    reposition();
     function onPointerDown(e: PointerEvent) {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (ref.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
     }
     window.addEventListener("pointerdown", onPointerDown);
-    return () => window.removeEventListener("pointerdown", onPointerDown);
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
   }, [open]);
 
   return (
@@ -72,15 +89,17 @@ export function ModeSelector({
         />
       </button>
 
-      <AnimatePresence>
-        {open && (
+      {open &&
+        pos &&
+        createPortal(
           <motion.ul
+            ref={menuRef}
             role="listbox"
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.12 }}
-            className="absolute left-0 right-0 z-30 mt-2 overflow-hidden rounded-[12px] border border-white/10 bg-[#141414] shadow-[0_20px_60px_rgba(0,0,0,0.65)]"
+            style={{ position: "fixed", top: pos.top, left: pos.left, width: pos.width }}
+            className="z-[80] overflow-hidden rounded-[12px] border border-white/10 bg-[#141414] shadow-[0_20px_60px_rgba(0,0,0,0.65)]"
           >
             {GENERATION_MODES.map((mode) => {
               const info = MODE_INFO[mode];
@@ -133,9 +152,9 @@ export function ModeSelector({
                 </li>
               );
             })}
-          </motion.ul>
+          </motion.ul>,
+          document.body,
         )}
-      </AnimatePresence>
     </div>
   );
 }

@@ -1,6 +1,16 @@
 import { z } from "zod";
 import { GENERATION_MODES } from "./constants.js";
 import { lyricsSchema } from "./lyrics.js";
+import { videoJobSchema, videoModelSchema } from "./video.js";
+
+/** A finished lyric video saved on a song, for one style. */
+export const songVideoSchema = z.object({
+  model: videoModelSchema,
+  url: z.string().url(),
+  /** True when this saved video is only a short preview, not the full song. */
+  isPreview: z.boolean().default(false),
+});
+export type SongVideo = z.infer<typeof songVideoSchema>;
 
 export const SONG_STATUSES = ["pending", "processing", "ready", "failed"] as const;
 export const songStatusSchema = z.enum(SONG_STATUSES);
@@ -65,6 +75,31 @@ export const presignResponseSchema = z.object({
 });
 export type PresignResponse = z.infer<typeof presignResponseSchema>;
 
+/** Replace an existing song's cover image: presign a direct-to-R2 PUT, then
+ *  commit the uploaded key. */
+export const coverPresignSchema = z.object({
+  contentType: z.enum(["image/jpeg", "image/png", "image/webp"]),
+});
+export type CoverPresignRequest = z.infer<typeof coverPresignSchema>;
+
+export const coverPresignResponseSchema = z.object({
+  uploadUrl: z.string().url(),
+  key: z.string(),
+});
+export type CoverPresignResponse = z.infer<typeof coverPresignResponseSchema>;
+
+export const coverCommitSchema = z.object({
+  key: z.string().min(1).max(300),
+});
+export type CoverCommitRequest = z.infer<typeof coverCommitSchema>;
+
+/** Distinct artist/album values from the user's other songs, for autosuggest. */
+export const metaSuggestionsSchema = z.object({
+  artists: z.array(z.string()),
+  albums: z.array(z.string()),
+});
+export type MetaSuggestions = z.infer<typeof metaSuggestionsSchema>;
+
 export const songSchema = z.object({
   id: z.string().uuid(),
   status: songStatusSchema,
@@ -91,6 +126,13 @@ export const songSchema = z.object({
   processingStartedAt: z.string().nullable().default(null),
   /** Mode used to generate the lyrics. null for legacy rows pre-mode-feature. */
   mode: generationModeSchema.nullable().default(null),
+  /** Finished lyric videos, one per generated style. Drives the edit-mode tabs. */
+  videos: z.array(songVideoSchema).default([]),
+  /** A lyric-video job still rendering for this song, if any — so the page can
+   *  show its in-progress tab again after a reload/navigation. */
+  activeVideoJob: videoJobSchema.nullable().default(null),
+  /** Which video style is shown on the public page (null = none chosen). */
+  publicVideoModel: videoModelSchema.nullable().default(null),
   /** True when the requesting user owns this song and may edit it. */
   canEdit: z.boolean().default(false),
 });
@@ -110,6 +152,19 @@ export const songSummarySchema = z.object({
   createdAt: z.string(),
   processingStartedAt: z.string().nullable().default(null),
   mode: generationModeSchema.nullable().default(null),
+  /** Lyric-video styles that have finished for this song. */
+  videoModels: z.array(videoModelSchema).default([]),
+  /** A lyric video still rendering (for the Music Videos card progress). */
+  videoActive: z
+    .object({
+      model: videoModelSchema,
+      completedSegments: z.number(),
+      totalSegments: z.number(),
+    })
+    .nullable()
+    .default(null),
+  /** Most recent video activity (finished or in-progress), for latest-first sort. */
+  videoLatestAt: z.string().nullable().default(null),
 });
 export type SongSummary = z.infer<typeof songSummarySchema>;
 
@@ -151,6 +206,12 @@ export const rateSongSchema = z.object({
 });
 export type RateSong = z.infer<typeof rateSongSchema>;
 
+/** Choose which lyric-video style is public (or null to make none public). */
+export const setPublicVideoSchema = z.object({
+  model: videoModelSchema.nullable(),
+});
+export type SetPublicVideo = z.infer<typeof setPublicVideoSchema>;
+
 export const publicTrackItemSchema = z.object({
   id: z.string().uuid(),
   title: z.string(),
@@ -180,6 +241,8 @@ export const publicSongSchema = z.object({
   lyrics: lyricsSchema.nullable(),
   insights: songInsightsSchema.nullable(),
   audioFeatures: audioFeaturesSchema.nullable(),
+  /** The lyric video the owner chose as public, if any. */
+  lyricVideoUrl: z.string().url().nullable(),
   createdAt: z.string(),
   rating: ratingSummarySchema,
   /** The uploader account, or null for anonymous uploads. */

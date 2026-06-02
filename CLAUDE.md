@@ -7,6 +7,13 @@ musician needs to ship to streaming platforms (Spotify, Apple Music, YouTube
 Music, etc.) via any distributor. Output formats: .lrc, enhanced .lrc,
 .ttml, .srt, .vtt, .txt, .json.
 
+It also generates **lyric videos** (16:9 1080p MP4) from a track: a per-line AI
+backdrop (Gemini 3 Pro Image via OpenRouter) with ffmpeg Ken-Burns motion and
+synced lyric text composited on top, muxed with the original audio. ffmpeg runs
+via the bundled `ffmpeg-static` binary (no Docker on Render). An optional
+AI-motion path (Wan 2.6 via OpenRouter) is scaffolded behind a constant for the
+deferred "Normal/Pro" tiers.
+
 ## Target user
 
 Independent musicians shipping releases via DistroKid, CD Baby, TuneCore,
@@ -100,7 +107,6 @@ syllary/
 
 ## Out of scope for v1 (don't build, don't suggest)
 
-- MP4 lyric video export
 - Mobile app
 - Team / multi-seat accounts
 - API access for users (Pro tier shows it as "coming soon")

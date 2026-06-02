@@ -1,9 +1,11 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useAuth } from "@clerk/clerk-react";
+import { motion } from "framer-motion";
 import {
   AlertCircle,
   ArrowLeft,
+  Clapperboard,
   ExternalLink,
   Pencil,
   Sparkles,
@@ -11,12 +13,16 @@ import {
   Wand2,
   Zap,
 } from "lucide-react";
-import { lyricsToText, MODE_INFO, type Song } from "@syllary/shared";
+import { lyricsToText, MODE_INFO, type Song, type VideoJob } from "@syllary/shared";
 import { ApiError, getSong, updateSongLyrics } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
+import { Modal } from "@/components/ui/modal";
+import { Button3D } from "@/components/ui/button-3d";
 import { LogoWordmark } from "@/components/logo";
 import { LyricsPlayer } from "@/components/result/lyrics-player";
 import { LyricsEditModal } from "@/components/result/lyrics-editor";
+import { GenerateVideoModal } from "@/components/result/generate-video-modal";
+import { VideoTabs } from "@/components/result/video-tabs";
 import { ManualSyncEditor } from "@/components/result/manual-sync-editor";
 import { PublicDetailsModal } from "@/components/result/public-details-modal";
 import { ProcessingView } from "@/components/result/processing-view";
@@ -101,6 +107,10 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
+  const [videoOpen, setVideoOpen] = useState(false);
+  const [activeVideoJob, setActiveVideoJob] = useState<VideoJob | null>(null);
+  const [videoNoticeOpen, setVideoNoticeOpen] = useState(false);
+  const videoSectionRef = useRef<HTMLDivElement>(null);
   const [signInPromptReason, setSignInPromptReason] = useState<SignInPromptReason | null>(null);
   const toast = useToast();
 
@@ -141,6 +151,8 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
         const s = await getSong(songId);
         if (!active) return;
         setSong(s);
+        // Resume an in-progress lyric-video job after a reload/navigation.
+        setActiveVideoJob((prev) => prev ?? s.activeVideoJob);
         if (s.status === "pending" || s.status === "processing") {
           timer = setTimeout(() => void poll(), 3000);
         }
@@ -155,6 +167,36 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
       clearTimeout(timer);
     };
   }, [songId, status]);
+
+  // Lyric-video generation: the modal kicks off the job, then hands it here so
+  // progress shows inside the video player while the user is free to roam.
+  const handleVideoStarted = useCallback((job: VideoJob) => {
+    setActiveVideoJob(job);
+    setVideoOpen(false);
+    setVideoNoticeOpen(true);
+    setTimeout(
+      () => videoSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }),
+      200,
+    );
+  }, []);
+
+  const handleVideoDone = useCallback(() => {
+    setActiveVideoJob(null);
+    if (songId) {
+      void getSong(songId)
+        .then((s) => setSong((prev) => ({ ...s, audioUrl: prev?.audioUrl ?? s.audioUrl })))
+        .catch(() => undefined);
+    }
+    toast("Your lyric video is ready 🎬");
+  }, [songId, toast]);
+
+  const handleVideoFailed = useCallback(
+    (message: string) => {
+      setActiveVideoJob(null);
+      toast(message, "error");
+    },
+    [toast],
+  );
 
   if (error) {
     return (
@@ -306,14 +348,28 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
         }
         toolbarLeft={
           showOwnerUi || song.isPublic ? (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {song.canEdit && (
+                <motion.button
+                  type="button"
+                  onClick={() => setVideoOpen(true)}
+                  style={{ transformPerspective: 600 }}
+                  whileHover={{ y: -2, rotateX: -7, scale: 1.04 }}
+                  whileTap={{ scale: 0.96 }}
+                  transition={{ type: "spring", stiffness: 420, damping: 22 }}
+                  className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-gradient-to-b from-[#ff5151] to-[#d81818] px-3.5 py-1.5 text-[12px] font-medium text-white shadow-[0_8px_20px_-8px_rgba(255,45,45,0.7),inset_0_1px_0_rgba(255,255,255,0.35)]"
+                >
+                  <Clapperboard className="h-3.5 w-3.5" />
+                  Generate video
+                </motion.button>
+              )}
               {showOwnerUi && (
                 <button
                   type="button"
                   onClick={() =>
                     song.canEdit ? setEditorOpen(true) : promptSignIn("edit-lyrics")
                   }
-                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
+                  className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
                 >
                   <Pencil className="h-3.5 w-3.5 text-pulse" />
                   Edit lyrics
@@ -325,10 +381,10 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
                   onClick={() =>
                     song.canEdit ? setDetailsOpen(true) : promptSignIn("edit-details")
                   }
-                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
+                  className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
                 >
                   <SlidersHorizontal className="h-3.5 w-3.5 text-pulse" />
-                  Edit public details
+                  Public details
                 </button>
               )}
               {showOwnerUi && (
@@ -338,10 +394,10 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
                     song.canEdit ? setSyncOpen(true) : promptSignIn("sync-timing")
                   }
                   title="Drag each word into place on a full-song timeline"
-                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
+                  className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
                 >
                   <Wand2 className="h-3.5 w-3.5 text-pulse" />
-                  Fine-tune timing
+                  Timing
                 </button>
               )}
               {song.isPublic && (
@@ -349,24 +405,37 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
                   href={`/p/${song.id}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
+                  className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
                 >
                   <ExternalLink className="h-3.5 w-3.5 text-pulse" />
-                  Open public view
+                  Public view
                 </a>
               )}
             </div>
           ) : undefined
         }
         belowLyrics={
-          showOwnerUi && song.mode && song.mode !== "pro" ? (
-            <RegenerateBanner
-              songId={song.id}
-              currentMode={song.mode}
-              durationSeconds={song.durationSeconds}
-              onIntercept={!signedIn ? interceptFor("regenerate") : undefined}
-            />
-          ) : undefined
+          <>
+            {song.canEdit && (song.videos.length > 0 || activeVideoJob) && (
+              <div ref={videoSectionRef}>
+                <VideoTabs
+                  song={song}
+                  activeJob={activeVideoJob}
+                  onUpdate={applyUpdate}
+                  onJobComplete={handleVideoDone}
+                  onJobFailed={handleVideoFailed}
+                />
+              </div>
+            )}
+            {showOwnerUi && song.mode && song.mode !== "pro" ? (
+              <RegenerateBanner
+                songId={song.id}
+                currentMode={song.mode}
+                durationSeconds={song.durationSeconds}
+                onIntercept={!signedIn ? interceptFor("regenerate") : undefined}
+              />
+            ) : null}
+          </>
         }
       />
 
@@ -413,8 +482,39 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
               setSyncOpen(false);
             }}
           />
+          <GenerateVideoModal
+            open={videoOpen}
+            song={song}
+            onClose={() => setVideoOpen(false)}
+            onStarted={handleVideoStarted}
+          />
         </>
       )}
+
+      <Modal
+        open={videoNoticeOpen}
+        onClose={() => setVideoNoticeOpen(false)}
+        title="Your video is on the way"
+        widthClass="max-w-[460px]"
+      >
+        <div className="text-center">
+          <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-pulse to-[#8B0000] text-white shadow-[0_8px_22px_-6px_rgba(255,45,45,0.6)]">
+            <Clapperboard className="h-6 w-6" />
+          </span>
+          <h3 className="text-[16px] font-medium text-white">We&apos;re creating your video</h3>
+          <p className="mx-auto mt-2 max-w-[380px] text-[13px] leading-relaxed text-white/55">
+            This takes a few minutes. While you wait, why not explore lyric videos and tracks shared
+            by other artists in the <span className="text-white/80">public music</span> section? We&apos;ll
+            pop a note here the moment it&apos;s ready — the progress is showing in the player below.
+          </p>
+          <div className="mt-5 flex items-center justify-center gap-2">
+            <Link to="/dashboard">
+              <Button3D variant="secondary">Browse public music</Button3D>
+            </Link>
+            <Button3D onClick={() => setVideoNoticeOpen(false)}>Got it</Button3D>
+          </div>
+        </div>
+      </Modal>
     </Frame>
   );
 }

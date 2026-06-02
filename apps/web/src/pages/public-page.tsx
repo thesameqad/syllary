@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { motion, useMotionValue, useSpring } from "framer-motion";
 import { useAuth } from "@clerk/clerk-react";
-import { AlertCircle, Check, Code2, Copy, ExternalLink, Loader2, Music, Pause, Play, Share2 } from "lucide-react";
+import { AlertCircle, Check, Code2, Copy, ExternalLink, Loader2, Maximize2, Music, Pause, Play, Share2 } from "lucide-react";
 import type { AudioFeatures, Lyrics, PublicSong, SongLink } from "@syllary/shared";
 import { ApiError, getPublicSong, rateSong } from "@/lib/api";
 import { useWavesurfer } from "@/hooks/use-wavesurfer";
@@ -10,6 +10,7 @@ import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { LogoWordmark } from "@/components/logo";
 import { DynamicLyrics } from "@/components/result/dynamic-lyrics";
 import { SyncedLyrics } from "@/components/result/synced-lyrics";
+import { TheaterMode } from "@/components/result/theater-mode";
 import { PublicDownloadRow } from "@/components/result/public-download-row";
 import { StarRating } from "@/components/result/star-rating";
 import { Modal } from "@/components/ui/modal";
@@ -85,6 +86,7 @@ function PublicPageInner({ signedIn }: { signedIn: boolean }) {
   const toast = useToast();
   const [song, setSong] = useState<PublicSong | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [theaterOpen, setTheaterOpen] = useState(false);
 
   useEffect(() => {
     if (!songId) return;
@@ -278,6 +280,35 @@ function PublicPageInner({ signedIn }: { signedIn: boolean }) {
             </div>
           )}
         </div>
+
+        {song.lyricVideoUrl && (
+          <div className="mt-6 overflow-hidden rounded-[16px] border-[0.5px] border-white/[0.06] bg-[#0d0d0d] p-4 sm:p-5">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-[11px] uppercase tracking-[1.8px] text-white/40">Lyric video</h2>
+              <button
+                type="button"
+                onClick={() => setTheaterOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
+              >
+                <Maximize2 className="h-3.5 w-3.5 text-pulse" />
+                Theater
+              </button>
+            </div>
+            <video
+              src={song.lyricVideoUrl}
+              controls
+              playsInline
+              crossOrigin="anonymous"
+              className="aspect-video w-full overflow-hidden rounded-[12px] border border-white/10 bg-black"
+            />
+            <TheaterMode
+              open={theaterOpen}
+              src={song.lyricVideoUrl}
+              title={song.title}
+              onClose={() => setTheaterOpen(false)}
+            />
+          </div>
+        )}
 
         {song.links.length > 0 && <ListenOn links={song.links} />}
 

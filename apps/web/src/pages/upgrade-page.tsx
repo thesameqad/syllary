@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import type { Account, BillingPeriod } from "@syllary/shared";
-import { ApiError, getAccount, openBillingPortal, startCheckout } from "@/lib/api";
-import { PLAN_LABEL, PLAN_ORDER, PLAN_TIERS } from "@/lib/plans";
+import { ApiError, changePlan, getAccount, startCheckout } from "@/lib/api";
+import { PLAN_LABEL, PLAN_ORDER, PLAN_TIERS, type PlanTier } from "@/lib/plans";
 import { cn } from "@/lib/utils";
 
 export function UpgradePage() {
@@ -12,7 +12,9 @@ export function UpgradePage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    getAccount().then(setAccount).catch(() => setError("Could not load your plan."));
+    getAccount()
+      .then(setAccount)
+      .catch(() => setError("Could not load your plan."));
   }, []);
 
   if (!account) {
@@ -25,14 +27,14 @@ export function UpgradePage() {
 
   const higher = PLAN_TIERS.filter((t) => PLAN_ORDER[t.id] > PLAN_ORDER[account.plan]);
 
-  async function choose(tierId: "starter" | "creator" | "pro") {
+  async function choose(tierId: PlanTier["id"]) {
     setBusy(tierId);
     setError(null);
     try {
-      // Existing subscribers change plans via the Stripe portal (proration);
-      // free users start a fresh checkout.
+      // Existing subscribers go straight to a Stripe confirm screen for the
+      // chosen plan (proration handled); free users start a fresh checkout.
       const url = account!.hasSubscription
-        ? await openBillingPortal()
+        ? await changePlan(tierId, period)
         : await startCheckout(tierId, period);
       window.location.href = url;
     } catch (e) {
@@ -77,57 +79,84 @@ export function UpgradePage() {
             ))}
           </div>
 
-          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
-            {higher.map((tier) => (
-              <div
-                key={tier.id}
-                className={cn(
-                  "rounded-[16px] border p-6 text-left",
-                  tier.featured
-                    ? "border-pulse/40 bg-[linear-gradient(180deg,#1a0a0a_0%,#0a0303_100%)]"
-                    : "border-white/[0.08] bg-stage/50",
-                )}
-              >
-                <div className="text-[14px] font-medium text-white">{tier.name}</div>
-                <div className="mb-[18px] text-[11px] text-white/40">{tier.desc}</div>
-                <div className="text-[30px] font-medium tracking-[-1px] text-white">
-                  ${period === "monthly" ? tier.monthly : tier.annual}
-                  <span className="text-[12px] font-normal text-white/40">
-                    /{period === "monthly" ? "mo" : "yr"}
-                  </span>
-                </div>
-                <ul className="mt-4 space-y-1 text-[11px] leading-[1.6] text-white/50">
-                  {tier.features.map((f) => (
-                    <li key={f.text} className="flex items-center gap-1.5">
-                      <Check
-                        className={cn(
-                          "h-3 w-3 shrink-0",
-                          f.comingSoon ? "text-white/30" : "text-success",
-                        )}
-                      />
-                      <span className={cn(f.comingSoon && "text-white/35")}>{f.text}</span>
-                      {f.comingSoon && (
-                        <span className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.6px] text-white/55">
-                          Soon
-                        </span>
+          {(
+            [
+              {
+                label: "Lyrics plans",
+                blurb:
+                  "More monthly tokens for synced lyric files — pick the volume that fits your release schedule.",
+                tiers: higher.filter((t) => t.category === "lyrics"),
+              },
+              {
+                label: "Music-video plans",
+                blurb:
+                  "Video generation isn't cheap — a typical lyrics plan's tokens run out fast. If you plan to make music videos, we strongly recommend one of these plans for far more headroom.",
+                tiers: higher.filter((t) => t.category === "video"),
+              },
+            ] as const
+          )
+            .filter((group) => group.tiers.length > 0)
+            .map((group) => (
+              <div key={group.label} className="mb-8 last:mb-0">
+                <p className="text-[11px] uppercase tracking-[1.5px] text-white/35">
+                  {group.label}
+                </p>
+                <p className="mb-3 mt-1 text-[12px] leading-snug text-white/45">{group.blurb}</p>
+                <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
+                  {group.tiers.map((tier) => (
+                    <div
+                      key={tier.id}
+                      className={cn(
+                        "rounded-[16px] border p-6 text-left",
+                        tier.featured
+                          ? "border-pulse/40 bg-[linear-gradient(180deg,#1a0a0a_0%,#0a0303_100%)]"
+                          : "border-white/[0.08] bg-stage/50",
                       )}
-                    </li>
+                    >
+                      <div className="text-[14px] font-medium text-white">{tier.name}</div>
+                      <div className="mb-[18px] text-[11px] text-white/40">{tier.desc}</div>
+                      <div className="text-[30px] font-medium tracking-[-1px] text-white">
+                        ${period === "monthly" ? tier.monthly : tier.annual}
+                        <span className="text-[12px] font-normal text-white/40">
+                          /{period === "monthly" ? "mo" : "yr"}
+                        </span>
+                      </div>
+                      <ul className="mt-4 space-y-1 text-[11px] leading-[1.6] text-white/50">
+                        {tier.features.map((f) => (
+                          <li key={f.text} className="flex items-center gap-1.5">
+                            <Check
+                              className={cn(
+                                "h-3 w-3 shrink-0",
+                                f.comingSoon ? "text-white/30" : "text-success",
+                              )}
+                            />
+                            <span className={cn(f.comingSoon && "text-white/35")}>{f.text}</span>
+                            {f.comingSoon && (
+                              <span className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.6px] text-white/55">
+                                Soon
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                      <button
+                        type="button"
+                        onClick={() => choose(tier.id)}
+                        disabled={busy !== null}
+                        className={cn(
+                          "mt-5 w-full rounded-full py-2.5 text-[13px] font-medium transition-transform hover:scale-[1.02] disabled:opacity-60",
+                          tier.featured
+                            ? "bg-pulse text-white"
+                            : "bg-white/10 text-white hover:bg-white/[0.16]",
+                        )}
+                      >
+                        {busy === tier.id ? "Redirecting…" : `Upgrade to ${tier.name}`}
+                      </button>
+                    </div>
                   ))}
-                </ul>
-                <button
-                  type="button"
-                  onClick={() => choose(tier.id)}
-                  disabled={busy !== null}
-                  className={cn(
-                    "mt-5 w-full rounded-full py-2.5 text-[13px] font-medium transition-transform hover:scale-[1.02] disabled:opacity-60",
-                    tier.featured ? "bg-pulse text-white" : "bg-white/10 text-white hover:bg-white/[0.16]",
-                  )}
-                >
-                  {busy === tier.id ? "Redirecting…" : `Upgrade to ${tier.name}`}
-                </button>
+                </div>
               </div>
             ))}
-          </div>
         </>
       )}
     </div>

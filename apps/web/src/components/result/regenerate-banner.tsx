@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Loader2, Sparkles, Wand2 } from "lucide-react";
+import { Loader2, Sparkles, Wand2, X } from "lucide-react";
 import {
   creditCost,
   GENERATION_MODES,
@@ -36,6 +36,10 @@ export function RegenerateBanner({
   const toast = useToast();
   const navigate = useNavigate();
   const [busy, setBusy] = useState<GenerationMode | null>(null);
+  // Transient dismiss — clears on reload (remount) or when the song changes, so
+  // the hint comes back next time; it just gets out of the way while editing.
+  const [dismissed, setDismissed] = useState(false);
+  useEffect(() => setDismissed(false), [songId]);
   const choices =
     variant === "retry-failed"
       ? [...GENERATION_MODES]
@@ -43,6 +47,7 @@ export function RegenerateBanner({
           (m) => GENERATION_MODES.indexOf(m) > GENERATION_MODES.indexOf(currentMode),
         );
   if (choices.length === 0) return null;
+  if (dismissed) return null;
 
   async function run(mode: GenerationMode) {
     if (onIntercept?.()) return;
@@ -78,12 +83,22 @@ export function RegenerateBanner({
     );
 
   return (
-    <div className="mt-6 rounded-[14px] border border-white/[0.08] bg-gradient-to-br from-pulse/[0.06] to-transparent p-4">
+    <div className="relative mt-6 rounded-[14px] border border-white/[0.08] bg-gradient-to-br from-pulse/[0.06] to-transparent p-4">
+      {variant === "accuracy-hint" && (
+        <button
+          type="button"
+          onClick={() => setDismissed(true)}
+          aria-label="Dismiss"
+          className="absolute right-2.5 top-2.5 rounded-md p-1 text-white/40 transition-colors hover:bg-white/[0.06] hover:text-white"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      )}
       <div className="flex items-start gap-3">
         <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-pulse/15 text-pulse">
           <Sparkles className="h-4 w-4" />
         </span>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 pr-6">
           <h3 className="text-[13px] font-medium text-white">{heading}</h3>
           <p className="mt-1 text-[12px] leading-snug text-white/55">{body}</p>
           <div className="mt-3 flex flex-wrap gap-2">

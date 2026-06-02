@@ -1,6 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq, isNotNull, ne, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, desc, eq, isNotNull, ne, or, sql } from "drizzle-orm";
 import {
+  type AspectRatio,
+  coverCommitSchema,
+  coverPresignSchema,
   creditCost,
   editLyricsSchema,
   type GenerationMode,
@@ -9,19 +13,24 @@ import {
   processSongSchema,
   type PublicSong,
   type PublicTrackItem,
+  type ImageQuality,
+  type ImageSize,
   rateSongSchema,
   type RatingSummary,
+  setPublicVideoSchema,
   type Song,
   type SongSummary,
+  type SongVideo,
   syncLyricsSchema,
+  type VideoJob,
   type Uploader,
   updateSongSchema,
 } from "@syllary/shared";
 import { db } from "../db/client.js";
 import { env } from "../env.js";
-import { ratings, songs, type SongRow, users, type UserRow } from "../db/schema.js";
+import { ratings, songs, type SongRow, songVideos, users, type UserRow, videoJobs } from "../db/schema.js";
 import { getAuthUserId } from "../lib/clerk.js";
-import { deleteObject, objectSize, presignGet } from "../lib/r2.js";
+import { deleteObject, objectSize, presignGet, presignPut } from "../lib/r2.js";
 import {
   getPrediction,
   startSeparation,
@@ -51,9 +60,83 @@ async function getSongRow(id: string): Promise<SongRow | undefined> {
   return row;
 }
 
+/** All finished lyric videos for a song (one per style), with presigned URLs. */
+async function videosFor(songId: string): Promise<SongVideo[]> {
+  const rows = await db.select().from(songVideos).where(eq(songVideos.songId, songId));
+  return Promise.all(
+    rows.map(async (r) => ({
+      model: r.model,
+      url: await presignGet(r.videoKey),
+      isPreview: r.isPreview,
+    })),
+  );
+}
+
+/** The latest still-rendering lyric-video job for a song (so the result page
+ *  can resume its in-progress tab after a reload), or null. */
+async function activeVideoJobFor(songId: string): Promise<VideoJob | null> {
+  const [row] = await db
+    .select()
+    .from(videoJobs)
+    .where(
+      and(
+        eq(videoJobs.songId, songId),
+        or(
+          eq(videoJobs.status, "pending"),
+          eq(videoJobs.status, "processing"),
+          eq(videoJobs.status, "review"),
+        ),
+      ),
+    )
+    .orderBy(desc(videoJobs.createdAt))
+    .limit(1);
+  if (!row) return null;
+  // Per-line cards so a manual job in "review" can resume after a reload.
+  const segments = await Promise.all(
+    (row.segments ?? []).map(async (s) => ({
+      index: s.index,
+      text: s.text,
+      prompt: s.prompt,
+      status: s.status,
+      imageUrl: s.imageKey ? await presignGet(s.imageKey) : null,
+    })),
+  );
+  return {
+    id: row.id,
+    songId: row.songId,
+    status: row.status,
+    mode: row.mode,
+    model: row.model,
+    styleDescription: row.styleDescription,
+    aspectRatio: row.aspectRatio as AspectRatio,
+    imageSize: row.imageSize as ImageSize,
+    imageQuality: row.imageQuality as ImageQuality,
+    isPreview: row.isPreview,
+    totalSegments: row.totalSegments,
+    completedSegments: row.completedSegments,
+    segments,
+    videoUrl: null,
+    error: row.error,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+/** Presigned URL of the song's chosen public lyric video, or null. */
+async function publicVideoUrlFor(row: SongRow): Promise<string | null> {
+  if (!row.publicVideoModel) return null;
+  const [v] = await db
+    .select({ videoKey: songVideos.videoKey })
+    .from(songVideos)
+    .where(and(eq(songVideos.songId, row.id), eq(songVideos.model, row.publicVideoModel)))
+    .limit(1);
+  return v ? presignGet(v.videoKey) : null;
+}
+
 async function toSongDto(row: SongRow, canEdit = false): Promise<Song> {
   const audioUrl = row.status === "ready" ? await presignGet(row.r2Key) : null;
   const coverUrl = row.coverImageKey ? await presignGet(row.coverImageKey) : null;
+  const videos = await videosFor(row.id);
+  const activeVideoJob = await activeVideoJobFor(row.id);
   return {
     id: row.id,
     status: row.status,
@@ -76,12 +159,23 @@ async function toSongDto(row: SongRow, canEdit = false): Promise<Song> {
     createdAt: row.createdAt.toISOString(),
     processingStartedAt: row.processingStartedAt ? row.processingStartedAt.toISOString() : null,
     mode: row.mode ?? null,
+    videos,
+    activeVideoJob,
+    publicVideoModel: row.publicVideoModel ?? null,
     canEdit,
   };
 }
 
 async function toSongSummary(row: SongRow): Promise<SongSummary> {
   const coverUrl = row.coverImageKey ? await presignGet(row.coverImageKey) : null;
+  // Music-video status for the library/dashboard cards.
+  const vids = await db
+    .select({ model: songVideos.model, updatedAt: songVideos.updatedAt })
+    .from(songVideos)
+    .where(eq(songVideos.songId, row.id));
+  const active = await activeVideoJobFor(row.id);
+  const times = vids.map((v) => v.updatedAt.getTime());
+  if (active) times.push(Date.parse(active.createdAt));
   return {
     id: row.id,
     title: row.title ?? row.originalFilename,
@@ -95,6 +189,15 @@ async function toSongSummary(row: SongRow): Promise<SongSummary> {
     createdAt: row.createdAt.toISOString(),
     processingStartedAt: row.processingStartedAt ? row.processingStartedAt.toISOString() : null,
     mode: row.mode ?? null,
+    videoModels: vids.map((v) => v.model),
+    videoActive: active
+      ? {
+          model: active.model,
+          completedSegments: active.completedSegments,
+          totalSegments: active.totalSegments,
+        }
+      : null,
+    videoLatestAt: times.length ? new Date(Math.max(...times)).toISOString() : null,
   };
 }
 
@@ -496,12 +599,13 @@ export async function songsRoutes(app: FastifyInstance) {
     }
     const clerkId = await getAuthUserId(req);
     const userId = clerkId ? await lookupUserId(clerkId) : null;
-    const [audioUrl, coverUrl, rating, uploader, moreFromUploader] = await Promise.all([
+    const [audioUrl, coverUrl, rating, uploader, moreFromUploader, lyricVideoUrl] = await Promise.all([
       presignGet(row.r2Key),
       row.coverImageKey ? presignGet(row.coverImageKey) : Promise.resolve(null),
       ratingFor(row.id, userId),
       uploaderFor(row),
       moreFromUploaderFor(row),
+      publicVideoUrlFor(row),
     ]);
     const dto: PublicSong = {
       id: row.id,
@@ -518,6 +622,7 @@ export async function songsRoutes(app: FastifyInstance) {
       lyrics: row.lyrics ?? null,
       insights: row.insights ?? null,
       audioFeatures: row.audioFeatures ?? null,
+      lyricVideoUrl,
       createdAt: row.createdAt.toISOString(),
       rating,
       uploader,
@@ -589,6 +694,77 @@ export async function songsRoutes(app: FastifyInstance) {
     return reply.send(await toSongDto(updated ?? row, true));
   });
 
+  // Distinct artist/album values from the caller's OTHER songs, for autosuggest
+  // in the public-details editor. (Static path — declared before any /songs/:id.)
+  app.get("/songs/meta-suggestions", async (req, reply) => {
+    const clerkId = await getAuthUserId(req);
+    if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+    const user = await getOrCreateUser(clerkId);
+    const [artistRows, albumRows] = await Promise.all([
+      db
+        .selectDistinct({ v: songs.artist })
+        .from(songs)
+        .where(and(eq(songs.userId, user.id), isNotNull(songs.artist)))
+        .limit(200),
+      db
+        .selectDistinct({ v: songs.album })
+        .from(songs)
+        .where(and(eq(songs.userId, user.id), isNotNull(songs.album)))
+        .limit(200),
+    ]);
+    const clean = (rows: { v: string | null }[]) =>
+      Array.from(new Set(rows.map((r) => (r.v ?? "").trim()).filter(Boolean)))
+        .sort((a, b) => a.localeCompare(b))
+        .slice(0, 50);
+    return reply.send({ artists: clean(artistRows), albums: clean(albumRows) });
+  });
+
+  // Replace the cover image — presign a direct-to-R2 PUT (owner-only). A fresh
+  // key per upload busts any cached presigned GET of the old image.
+  app.post<{ Params: { id: string } }>("/songs/:id/cover/presign", async (req, reply) => {
+    const clerkId = await getAuthUserId(req);
+    if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+    const user = await getOrCreateUser(clerkId);
+    const parsed = coverPresignSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Unsupported image type." });
+    const row = await getSongRow(req.params.id);
+    if (!row || row.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+    const key = `covers/${row.id}-${randomUUID()}`;
+    const uploadUrl = await presignPut(key, parsed.data.contentType);
+    return reply.send({ uploadUrl, key });
+  });
+
+  // Commit a freshly-uploaded cover: verify it belongs to this song + exists,
+  // point the song at it, and drop the previous cover (best-effort).
+  app.post<{ Params: { id: string } }>("/songs/:id/cover", async (req, reply) => {
+    const clerkId = await getAuthUserId(req);
+    if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+    const user = await getOrCreateUser(clerkId);
+    const parsed = coverCommitSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid request." });
+    const row = await getSongRow(req.params.id);
+    if (!row || row.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+
+    const { key } = parsed.data;
+    if (!key.startsWith(`covers/${row.id}-`)) {
+      return reply.code(400).send({ error: "Invalid cover key." });
+    }
+    const size = await objectSize(key);
+    if (size === null) return reply.code(400).send({ error: "Upload not found — please retry." });
+    if (size > 8 * 1024 * 1024) return reply.code(400).send({ error: "Image is too large (max 8MB)." });
+
+    const oldKey = row.coverImageKey;
+    const [updated] = await db
+      .update(songs)
+      .set({ coverImageKey: key, updatedAt: new Date() })
+      .where(eq(songs.id, row.id))
+      .returning();
+    if (oldKey && oldKey !== key && oldKey.startsWith(`covers/${row.id}`)) {
+      await deleteObject(oldKey);
+    }
+    return reply.send(await toSongDto(updated ?? row, true));
+  });
+
   // Replace the lyrics with a user-edited version. Square-bracket lines in the
   // text become section labels; new lines are re-aligned onto the original word
   // timestamps so karaoke sync is preserved where words are unchanged.
@@ -631,6 +807,36 @@ export async function songsRoutes(app: FastifyInstance) {
     const [updated] = await db
       .update(songs)
       .set({ lyrics: parsed.data.lyrics, updatedAt: new Date() })
+      .where(eq(songs.id, row.id))
+      .returning();
+    return reply.send(await toSongDto(updated ?? row, true));
+  });
+
+  // Choose which generated lyric-video style is shown on the public page (or
+  // null to make none public). Only one style can be public at a time.
+  app.patch<{ Params: { id: string } }>("/songs/:id/public-video", async (req, reply) => {
+    const clerkId = await getAuthUserId(req);
+    if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+    const user = await getOrCreateUser(clerkId);
+    const parsed = setPublicVideoSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid request." });
+    const row = await getSongRow(req.params.id);
+    if (!row || row.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+
+    const model = parsed.data.model;
+    if (model) {
+      const [v] = await db
+        .select({ id: songVideos.id })
+        .from(songVideos)
+        .where(and(eq(songVideos.songId, row.id), eq(songVideos.model, model)))
+        .limit(1);
+      if (!v) {
+        return reply.code(400).send({ error: "That video style hasn't been generated yet." });
+      }
+    }
+    const [updated] = await db
+      .update(songs)
+      .set({ publicVideoModel: model, updatedAt: new Date() })
       .where(eq(songs.id, row.id))
       .returning();
     return reply.send(await toSongDto(updated ?? row, true));

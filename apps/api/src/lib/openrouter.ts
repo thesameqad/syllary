@@ -216,6 +216,96 @@ export async function reconcileLyrics(
   }
 }
 
+const DIRECTOR_PROMPT = `You are an award-winning music-video director shaping ONE continuous music video, shot by shot, for an AI image-to-video model.
+You are given the art-direction style, the lyric line(s) for THIS shot (for MOOD AND IMAGERY ONLY — they are NOT to be shown), and (when present) a description of the PREVIOUS shot.
+The starting frame is a styled scene. Write ONE vivid, concrete shot description (2-4 sentences) for an ~10 second clip:
+- This is part of a single continuous video, NOT a standalone clip. If a previous shot is given, this shot must flow seamlessly out of it: keep the same world, palette, and lighting, carry the camera's momentum, and begin where the previous shot left off so they cut into each other smoothly. End on a beat that hands off naturally to the next shot.
+- Describe cinematic camera movement (dolly, push-in, crane, parallax, orbit) and how the scene evolves/comes alive.
+- Be creative and dynamic — a real music video.
+- The starting frame already has the song lyric rendered into the scene as styled typography. Keep that lyric text legible, sharp, and stable as the scene moves — let it glow or shimmer with the scene but never warp it into gibberish, and do NOT add, duplicate, or invent any other text.
+- No real recognizable people or singers.
+Return ONLY the prompt text — no preamble, no quotes, no labels.`;
+
+/** Have the LLM "direct" a cinematic image-to-video prompt for one shot, aware
+ *  of the previous shot so the video flows as one continuous piece. Falls back
+ *  to a sensible default prompt on any failure so the pipeline continues. */
+export async function directCinematicPrompt(opts: {
+  style: string;
+  lines: string[];
+  previous?: string;
+}): Promise<string> {
+  const fallback = `Continue seamlessly from the previous shot with matching world and lighting: a cinematic slow push-in with gentle parallax through a scene styled as: ${opts.style}. The world comes alive while the lyric text stays crisp, legible, and integrated. No real people.`;
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: env.OPENROUTER_MODEL,
+        temperature: 0.8,
+        messages: [
+          { role: "system", content: DIRECTOR_PROMPT },
+          {
+            role: "user",
+            content: JSON.stringify({
+              style: opts.style,
+              moodOnlyLines_doNotDisplay: opts.lines,
+              previousShot: opts.previous ?? null,
+            }),
+          },
+        ],
+      }),
+    });
+    if (!res.ok) return fallback;
+    const data = (await res.json()) as ChatResponse;
+    const content = data.choices?.[0]?.message?.content;
+    return typeof content === "string" && content.trim().length > 0 ? content.trim() : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const ART_BRIEF_PROMPT = `You are an art director for an AI-generated music video. You are given the FULL lyrics and the chosen visual style.
+Write a SHORT brief (2-3 sentences) that tells an image generator WHO/WHAT to actually depict, so it doesn't misread the song.
+- Resolve the narrator's point of view and name the concrete MAIN SUBJECT to show. If the narrator is an animal, a child, an object, or anything non-obvious, SAY SO explicitly (e.g. "the narrator is a small dog"). Lyrics like "I pressed my nose against the window" must be read through that POV.
+- Name the recurring SETTING and a few key visual motifs that should appear across scenes.
+- End with a short "Avoid:" clause for what NOT to depict (e.g. "Avoid: depicting the narrator as a human").
+- Be concrete and visual. Do NOT mention the art style (it's applied separately). Do NOT quote lyrics. No preamble.
+Return ONLY the brief text.`;
+
+/** A concise, visually-actionable brief describing who/what a song is really
+ *  about (POV, main subject, setting, motifs), injected into every per-line
+ *  image prompt so the model depicts the right subject. Returns "" on failure
+ *  so the caller can fall back to the song summary / no context. */
+export async function videoArtBrief(lines: string[], style: string): Promise<string> {
+  if (lines.length === 0) return "";
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: env.OPENROUTER_MODEL,
+        temperature: 0.4,
+        messages: [
+          { role: "system", content: ART_BRIEF_PROMPT },
+          { role: "user", content: JSON.stringify({ style, lines }) },
+        ],
+      }),
+    });
+    if (!res.ok) return "";
+    const data = (await res.json()) as ChatResponse;
+    const content = data.choices?.[0]?.message?.content;
+    return typeof content === "string" ? content.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
 const INSIGHTS_PROMPT = `You are given the full lyrics of a song as an ordered array of lines.
 Write a concise, factual "about this song" insight for a public lyrics page.
 Return ONLY JSON: { "summary": string, "themes": string[], "mood": string }.

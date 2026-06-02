@@ -38,6 +38,19 @@ export function presignGet(key: string): Promise<string> {
   });
 }
 
+/** Server-side upload (generated images, final video). Audio uploads still go
+ *  direct-to-R2 via presigned PUT per CLAUDE.md rule #4; this is for artifacts
+ *  the API produces itself. */
+export async function putObject(
+  key: string,
+  body: Buffer | Uint8Array,
+  contentType: string,
+): Promise<void> {
+  await s3.send(
+    new PutObjectCommand({ Bucket: env.R2_BUCKET, Key: key, Body: body, ContentType: contentType }),
+  );
+}
+
 export async function deleteObject(key: string): Promise<void> {
   try {
     await s3.send(new DeleteObjectCommand({ Bucket: env.R2_BUCKET, Key: key }));
