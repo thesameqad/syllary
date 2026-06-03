@@ -196,9 +196,11 @@ export function LibraryPage() {
   function albumDetail(album: Album, fromTab: "artists" | "albums") {
     const artistName = artistById.get(album.artistId)?.name ?? "Unknown Artist";
     const albumSongs = songsByAlbum.get(album.id) ?? [];
-    const byTitle = new Map(albumSongs.map((s) => [lc(s.title), s]));
-    const trackTitles = new Set(album.tracks.map((t) => lc(t.title)));
-    const extraSongs = albumSongs.filter((s) => !trackTitles.has(lc(s.title)));
+    // Tracks from the import that don't yet have an uploaded song (matched by
+    // title). Once every track has audio, the checklist disappears and the album
+    // shows as normal song tiles.
+    const have = new Set(albumSongs.map((s) => lc(s.title)));
+    const missing = album.tracks.filter((t) => !have.has(lc(t.title)));
 
     const crumbs: Crumb[] =
       fromTab === "albums"
@@ -245,27 +247,30 @@ export function LibraryPage() {
           </div>
         </div>
 
-        {album.tracks.length > 0 ? (
-          <div className="space-y-2">
-            {album.tracks.map((t, i) => (
-              <TrackRow
-                key={`${t.title}-${i}`}
-                track={t}
-                song={byTitle.get(lc(t.title))}
-                artistName={artistName}
-                albumName={album.name}
-              />
-            ))}
-            {extraSongs.length > 0 && (
-              <div className="pt-2">
-                <h3 className="mb-2 text-[12px] font-medium text-white/70">Also in this album</h3>
-                {songGrid(extraSongs)}
-              </div>
+        {albumSongs.length > 0 && songGrid(albumSongs)}
+
+        {missing.length > 0 && (
+          <div className={albumSongs.length > 0 ? "pt-2" : ""}>
+            {albumSongs.length > 0 && (
+              <h3 className="mb-2 text-[12px] font-medium text-white/70">
+                {plural(missing.length, "track")} still to upload
+              </h3>
             )}
+            <div className="space-y-2">
+              {missing.map((t, i) => (
+                <TrackRow
+                  key={`${t.title}-${i}`}
+                  track={t}
+                  song={undefined}
+                  artistName={artistName}
+                  albumName={album.name}
+                />
+              ))}
+            </div>
           </div>
-        ) : albumSongs.length > 0 ? (
-          songGrid(albumSongs)
-        ) : (
+        )}
+
+        {albumSongs.length === 0 && missing.length === 0 && (
           <p className="text-[14px] text-white/40">
             No songs yet — upload your audio for this album.
           </p>
