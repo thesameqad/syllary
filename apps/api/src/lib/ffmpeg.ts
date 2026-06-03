@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AspectRatio } from "@syllary/shared";
 import { env } from "../env.js";
@@ -54,8 +54,12 @@ function runFfmpeg(args: string[], cwd: string): Promise<void> {
  *  range is small so the text never drifts out of frame or gets cropped.
  *  Even frames ease in (1.0→1.06), odd frames ease out (1.06→1.0) for variety. */
 function kenBurns(index: number, w: number, h: number, frames: number): string {
-  const sw = w * 2;
-  const sh = h * 2;
+  // Pre-scale only ~1.15× the output (the zoom maxes at 1.06, so 2× was pure
+  // waste). zoompan buffers this whole frame in memory, so 4K (w*2) was the main
+  // driver of OOM on small instances — ~1.15× keeps the zoom crisp at a fraction
+  // of the memory.
+  const sw = Math.round((w * 1.15) / 2) * 2;
+  const sh = Math.round((h * 1.15) / 2) * 2;
   const zIn = `min(zoom+0.0004,1.06)`;
   const zOut = `if(eq(on,0),1.06,max(zoom-0.0004,1.0))`;
   const z = index % 2 === 0 ? zIn : zOut;
@@ -105,6 +109,7 @@ export async function stitchLyricsVideo(opts: {
         "-map", "[v]",
         "-t", dur.toFixed(3),
         "-r", String(FPS),
+        "-threads", "1",
         "-c:v", "libx264",
         "-preset", "veryfast",
         "-crf", "20",
@@ -113,6 +118,8 @@ export async function stitchLyricsVideo(opts: {
       workDir,
     );
     clipNames.push(clipName);
+    // The source frame is encoded — free it now (keeps /tmp bounded on long songs).
+    await rm(seg.imageFile, { force: true });
   }
 
   // 2. Concat the clips (identical encode params → stream copy is safe).
@@ -127,6 +134,8 @@ export async function stitchLyricsVideo(opts: {
     ["-y", "-f", "concat", "-safe", "0", "-i", listName, "-c", "copy", concatName],
     workDir,
   );
+  // Per-clip files are now baked into concat — drop them before the audio mux.
+  await Promise.all(clipNames.map((c) => rm(path.join(workDir, c), { force: true })));
 
   // 3. Mux the real song audio onto the stitched video.
   const outName = path.basename(outFile);
@@ -147,6 +156,7 @@ export async function stitchLyricsVideo(opts: {
     ],
     workDir,
   );
+  await rm(path.join(workDir, concatName), { force: true });
 
   return path.join(workDir, outName);
 }

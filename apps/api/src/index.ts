@@ -29,8 +29,17 @@ app.addContentTypeParser(
   },
 );
 
+// Normalize the configured site origin so a stray trailing slash or newline in
+// the env value can't break CORS, and allow both the apex and www variants.
+const base = env.APP_URL.trim().replace(/\/+$/, "");
+const host = base.replace(/^https?:\/\/(www\.)?/i, "");
+const scheme = base.toLowerCase().startsWith("http://") ? "http://" : "https://";
+const allowedOrigins = Array.from(
+  new Set([base, `${scheme}${host}`, `${scheme}www.${host}`]),
+);
+
 await app.register(cors, {
-  origin: env.APP_URL,
+  origin: allowedOrigins,
   methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
 });
 

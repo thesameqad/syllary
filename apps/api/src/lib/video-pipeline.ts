@@ -298,7 +298,7 @@ async function runAnimated(
   // replayed the clip start for ~1s, reading as a "restart" before the cut).
   const clipNames = new Array<string>(segments.length);
   await mapPool(segments, VIDEO_CONCURRENCY, async (seg, i) => {
-    const { imageUrl } = await materializeFrame(job, seg, aspectRatio, workDir);
+    const { imageFile, imageUrl } = await materializeFrame(job, seg, aspectRatio, workDir);
     const dur = seg.clipEnd - seg.clipStart;
     const genDur = Math.min(GROK_MAX_SECONDS, Math.max(GROK_MIN_SECONDS, Math.ceil(dur)));
     const raw = await generateMotionClip({
@@ -314,11 +314,16 @@ async function runAnimated(
     const clipName = `clip_${i}.mp4`;
     await fitClipToDuration({ workDir, inFile: rawFile, outName: clipName, durationSeconds: dur, aspectRatio });
     clipNames[i] = clipName;
+    // Free the big raw model clip + the local frame copy as we go (keeps /tmp
+    // bounded — a full-length song has dozens of these).
+    await rm(rawFile, { force: true });
+    await rm(imageFile, { force: true });
     seg.status = "done";
     await bumpProgress(job.id, segments);
   });
 
   await concatClips(workDir, clipNames, "concat.mp4");
+  await Promise.all(clipNames.filter(Boolean).map((c) => rm(path.join(workDir, c), { force: true })));
   const audioFile = await downloadAudio(audioR2Key, workDir);
   const total = Math.max(...segments.map((s) => s.clipEnd));
   const outFile = await muxAudio({
@@ -329,6 +334,7 @@ async function runAnimated(
     maxSeconds: total,
     audioStartSeconds,
   });
+  await rm(path.join(workDir, "concat.mp4"), { force: true });
   await finalize(job, outFile);
 }
 
@@ -353,7 +359,9 @@ async function runCinematic(
 
   // 1. One Nano frame per line (evokes the line + embeds its lyric) — concurrent.
   const frameUrls = await mapPool(segments, IMAGE_CONCURRENCY, async (seg) => {
-    const { imageUrl } = await materializeFrame(job, seg, aspectRatio, workDir);
+    const { imageFile, imageUrl } = await materializeFrame(job, seg, aspectRatio, workDir);
+    // The model fetches frames via their R2 URL, so the local copy is dead weight.
+    await rm(imageFile, { force: true });
     return imageUrl;
   });
 
@@ -381,10 +389,12 @@ async function runCinematic(
     const clipName = `clip_${i}.mp4`;
     await speedFitClip({ workDir, inFile: rawFile, outName: clipName, targetSeconds: dur, sourceSeconds: genDur, aspectRatio });
     clipNames[i] = clipName;
+    await rm(rawFile, { force: true }); // drop the big raw model clip as we go
     await bumpProgress(job.id, segments);
   });
 
   await concatClips(workDir, clipNames, "concat.mp4");
+  await Promise.all(clipNames.filter(Boolean).map((c) => rm(path.join(workDir, c), { force: true })));
   const audioFile = await downloadAudio(audioR2Key, workDir);
   const total = Math.max(...segments.map((s) => s.clipEnd));
   // The lyric is already painted into each frame (and carried through the morph),
@@ -397,6 +407,7 @@ async function runCinematic(
     maxSeconds: total,
     audioStartSeconds,
   });
+  await rm(path.join(workDir, "concat.mp4"), { force: true });
   await finalize(job, outFile);
 }
 
