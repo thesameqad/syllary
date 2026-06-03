@@ -89,11 +89,18 @@ async function makeFrame(
   workDir: string,
   renderText = true,
 ): Promise<{ imageFile: string; imageUrl: string }> {
-  // Persist the exact prompt sent (manual mode shows + lets the user edit it).
-  // A stored prompt (e.g. an edited one on regenerate) takes precedence.
-  const prompt =
-    seg.prompt ??
-    buildBackdropPrompt(job.styleDescription, seg.text, aspectRatio, renderText, job.sceneBrief ?? undefined);
+  // Rebuild the prompt from the structured parts every time (style + context are
+  // job-wide; direction is per-scene, defaulting to the lyric line) so editing a
+  // shared field propagates to every not-yet-regenerated frame. Persisted for the
+  // record (manual mode shows the parts, not this blob).
+  const prompt = buildBackdropPrompt({
+    style: job.styleDescription,
+    lyricText: seg.text,
+    aspectRatio,
+    renderText,
+    context: job.sceneBrief ?? undefined,
+    direction: seg.direction ?? undefined,
+  });
   seg.prompt = prompt;
   const buf = await generateBackdrop({
     style: job.styleDescription,
@@ -135,17 +142,24 @@ async function uploadImageReliably(imageKey: string, buf: Buffer): Promise<void>
 export async function regenerateSegmentImage(
   job: VideoJobRow,
   index: number,
-  newPrompt?: string,
+  newDirection?: string,
 ): Promise<ReviewSegment> {
   const segments = job.segments ?? [];
   const seg = segments.find((s) => s.index === index);
   if (!seg) throw new Error("Segment not found.");
 
   const aspectRatio = job.aspectRatio as AspectRatio;
-  if (newPrompt && newPrompt.trim()) seg.prompt = newPrompt.trim();
-  const prompt =
-    seg.prompt ??
-    buildBackdropPrompt(job.styleDescription, seg.text, aspectRatio, true, job.sceneBrief ?? undefined);
+  // An explicit direction (even empty → clear back to the lyric line) updates the
+  // scene; omitted re-rolls with whatever is already stored.
+  if (newDirection !== undefined) seg.direction = newDirection.trim() || null;
+  const prompt = buildBackdropPrompt({
+    style: job.styleDescription,
+    lyricText: seg.text,
+    aspectRatio,
+    renderText: true,
+    context: job.sceneBrief ?? undefined,
+    direction: seg.direction ?? undefined,
+  });
   seg.prompt = prompt;
 
   const buf = await generateBackdrop({
@@ -171,6 +185,7 @@ export async function regenerateSegmentImage(
     index: seg.index,
     text: seg.text,
     prompt: seg.prompt,
+    direction: seg.direction,
     status: seg.status,
     imageUrl: await presignGet(imageKey),
   };

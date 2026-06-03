@@ -1,4 +1,4 @@
-import { Library, LayoutDashboard, Upload } from "lucide-react";
+import { Clock, Library, LayoutDashboard, Upload } from "lucide-react";
 import { Link, Navigate, NavLink, Outlet } from "react-router-dom";
 import { SignedIn, SignedOut, UserButton } from "@clerk/clerk-react";
 import { LogoWordmark } from "@/components/logo";
@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/upload", label: "Upload New Song", icon: Upload },
+  { to: "/recent", label: "Recent", icon: Clock },
   { to: "/library", label: "Library", icon: Library },
 ];
 

@@ -21,7 +21,7 @@ export function UploadPage() {
         credits={account?.credits ?? null}
         onStarted={() => {
           refresh();
-          navigate("/library");
+          navigate("/recent");
         }}
       />
     </div>

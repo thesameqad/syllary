@@ -1,7 +1,12 @@
 import {
   accountSchema,
+  coverGenerateResponseSchema,
   coverPresignResponseSchema,
+  type CoverGenerateResponse,
+  type CoverModel,
   type CreateVideoRequest,
+  type LinkMatch,
+  linkMatchSchema,
   type MetaSuggestions,
   metaSuggestionsSchema,
   presignResponseSchema,
@@ -23,6 +28,7 @@ import {
   type Song,
   type SongSummary,
   type UpdateSong,
+  type UpdateVideoJob,
   type VideoJob,
   videoJobSchema,
   type VideoModel,
@@ -249,6 +255,54 @@ export async function uploadCover(songId: string, blob: Blob): Promise<Song> {
   return songSchema.parse(data);
 }
 
+/** AI-generate a cover image from a description with the chosen model. Returns
+ *  an uncommitted preview (key + URL); call saveGeneratedCover(key) to attach it. */
+export async function generateCover(
+  songId: string,
+  prompt: string,
+  model: CoverModel,
+): Promise<CoverGenerateResponse> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/cover/generate`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ prompt, model }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't generate the cover."), res.status);
+  return coverGenerateResponseSchema.parse(data);
+}
+
+/** Attach a previously-generated (or uploaded) cover key to the song. */
+export async function saveGeneratedCover(songId: string, key: string): Promise<Song> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/cover`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ key }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't save the image."), res.status);
+  return songSchema.parse(data);
+}
+
+/** Auto-match a track's streaming links — from a pasted streaming URL, or from a
+ *  title + artist search. */
+export async function matchLinks(opts: {
+  title?: string;
+  artist?: string;
+  url?: string;
+}): Promise<LinkMatch> {
+  const params = new URLSearchParams();
+  if (opts.title?.trim()) params.set("title", opts.title.trim());
+  if (opts.artist?.trim()) params.set("artist", opts.artist.trim());
+  if (opts.url?.trim()) params.set("url", opts.url.trim());
+  const res = await fetch(`${API_BASE}/api/links/match?${params.toString()}`, {
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't find links."), res.status);
+  return linkMatchSchema.parse(data);
+}
+
 /** Distinct artist/album values from the user's other songs, for autosuggest. */
 export async function getMetaSuggestions(): Promise<MetaSuggestions> {
   const res = await fetch(`${API_BASE}/api/songs/meta-suggestions`, {
@@ -341,20 +395,33 @@ export async function createLyricsVideo(
   return videoJobSchema.parse(data);
 }
 
-/** Manual mode: regenerate one line's image (optionally with an edited prompt). */
+/** Manual mode: regenerate one scene's image. `direction` is what the scene
+ *  depicts (empty string clears it back to the lyric line). */
 export async function regenerateSegment(
   jobId: string,
   index: number,
-  prompt?: string,
+  direction?: string,
 ): Promise<ReviewSegment> {
   const res = await fetch(`${API_BASE}/api/video-jobs/${jobId}/segments/${index}/regenerate`, {
     method: "POST",
     headers: { "content-type": "application/json", ...(await authHeaders()) },
-    body: JSON.stringify(prompt ? { prompt } : {}),
+    body: JSON.stringify(direction === undefined ? {} : { direction }),
   });
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not regenerate this scene."), res.status);
   return reviewSegmentSchema.parse(data);
+}
+
+/** Manual mode: update the job-wide shared fields (style + context). */
+export async function updateVideoJob(jobId: string, body: UpdateVideoJob): Promise<VideoJob> {
+  const res = await fetch(`${API_BASE}/api/video-jobs/${jobId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(body),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't save those changes."), res.status);
+  return videoJobSchema.parse(data);
 }
 
 /** Promote a preview to the full music video, reusing its exact settings. */

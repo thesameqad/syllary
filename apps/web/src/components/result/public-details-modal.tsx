@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { ExternalLink, Image as ImageIcon, Loader2, Plus, X } from "lucide-react";
+import { ExternalLink, Image as ImageIcon, Loader2, Plus, Sparkles, Wand2, X } from "lucide-react";
 import type { MetaSuggestions, Song, SongLink } from "@syllary/shared";
-import { ApiError, getMetaSuggestions, updateSong, uploadCover } from "@/lib/api";
+import { ApiError, getMetaSuggestions, matchLinks, updateSong, uploadCover } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { Modal } from "@/components/ui/modal";
 import { CoverCropper } from "@/components/result/cover-cropper";
+import { AiCoverPanel, COVER_TOKENS_FROM } from "@/components/result/ai-cover-panel";
 import { KNOWN_PLATFORMS, platformKey, platformMeta } from "@/lib/platforms";
 import { cn } from "@/lib/utils";
 
@@ -96,6 +97,7 @@ export function PublicDetailsModal({
   onSaved: (song: Song) => void;
 }) {
   const toast = useToast();
+  const [title, setTitle] = useState(song.title ?? "");
   const [artist, setArtist] = useState(song.artist ?? "");
   const [album, setAlbum] = useState(song.album ?? "");
   const [year, setYear] = useState(song.year ? String(song.year) : "");
@@ -107,12 +109,19 @@ export function PublicDetailsModal({
   const [suggestions, setSuggestions] = useState<MetaSuggestions>({ artists: [], albums: [] });
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const [coverBusy, setCoverBusy] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [matching, setMatching] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findTitle, setFindTitle] = useState("");
+  const [findArtist, setFindArtist] = useState("");
+  const [findUrl, setFindUrl] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Reset only when the modal (re)opens — so a cover/public change mid-edit
   // doesn't wipe in-progress metadata edits.
   useEffect(() => {
     if (!open) return;
+    setTitle(song.title ?? "");
     setArtist(song.artist ?? "");
     setAlbum(song.album ?? "");
     setYear(song.year ? String(song.year) : "");
@@ -120,6 +129,9 @@ export function PublicDetailsModal({
     setRows(initialRows(song.links));
     setIsPublic(song.isPublic);
     setCropSrc(null);
+    setAiOpen(false);
+    setFindOpen(false);
+    setFindUrl("");
     getMetaSuggestions()
       .then(setSuggestions)
       .catch(() => undefined);
@@ -128,6 +140,67 @@ export function PublicDetailsModal({
 
   function setRow(i: number, patch: Partial<LinkRow>) {
     setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+
+  // Merge auto-matched links into the rows: fill the matching known-platform
+  // row, or append a custom row for platforms we don't list (Deezer, etc.).
+  function applyMatches(matched: SongLink[]) {
+    setRows((prev) => {
+      const next = prev.map((r) => ({ ...r }));
+      for (const link of matched) {
+        const existing = next.find(
+          (r) => r.key === link.platform || platformKey(r.label) === link.platform,
+        );
+        if (existing) existing.url = link.url;
+        else
+          next.push({
+            key: link.platform,
+            label: platformMeta(link.platform).label,
+            url: link.url,
+            custom: !KNOWN_PLATFORMS.some((p) => p.key === link.platform),
+          });
+      }
+      return next;
+    });
+  }
+
+  // Toggle the find panel, prefilling its search fields from the song's current
+  // name/artist (so the common case is a single click → Search).
+  function toggleFind() {
+    setFindOpen((open) => {
+      if (!open) {
+        setFindTitle(title.trim());
+        setFindArtist(artist.trim());
+      }
+      return !open;
+    });
+  }
+
+  async function findLinks() {
+    const hasUrl = findUrl.trim().length > 0;
+    if (!hasUrl && !findTitle.trim() && !findArtist.trim()) {
+      toast("Enter a song name & artist, or paste a streaming link.", "error");
+      return;
+    }
+    setMatching(true);
+    try {
+      const res = await matchLinks({
+        title: findTitle,
+        artist: findArtist,
+        url: findUrl,
+      });
+      applyMatches(res.links);
+      if (res.links.length > 0) {
+        toast(`Found ${res.links.length} link${res.links.length > 1 ? "s" : ""}.`);
+        setFindOpen(false);
+      } else {
+        toast("No matches found — try a paste-link, or add them manually.");
+      }
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't look up links.", "error");
+    } finally {
+      setMatching(false);
+    }
   }
 
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -170,6 +243,12 @@ export function PublicDetailsModal({
   }
 
   async function save() {
+    const trimmedTitle = title.trim();
+    if (!trimmedTitle) {
+      toast("Give the song a name.", "error");
+      return;
+    }
+
     const parsedYear = year.trim() ? Number(year.trim()) : null;
     if (parsedYear !== null && (!Number.isInteger(parsedYear) || parsedYear < 1 || parsedYear > 9999)) {
       toast("Enter a valid year.", "error");
@@ -197,6 +276,7 @@ export function PublicDetailsModal({
     setSaving(true);
     try {
       const updated = await updateSong(song.id, {
+        title: trimmedTitle,
         artist: artist.trim() || null,
         album: album.trim() || null,
         year: parsedYear,
@@ -213,16 +293,32 @@ export function PublicDetailsModal({
   }
 
   const busy = saving || coverBusy || publishing;
+  const coverSeed = [
+    title.trim() ? `Album cover for "${title.trim()}"` : "Album cover artwork",
+    artist.trim() ? `by ${artist.trim()}` : "",
+    genre.trim() ? `, ${genre.trim()} mood` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <Modal
       open={open}
       onClose={() => !busy && onClose()}
-      title={cropSrc ? "Crop cover image" : "Edit public details"}
+      title={
+        cropSrc ? "Crop cover image" : aiOpen ? "Generate cover with AI" : "Edit public details"
+      }
       widthClass="max-w-[620px]"
     >
       {cropSrc ? (
         <CoverCropper src={cropSrc} busy={coverBusy} onApply={applyCrop} onCancel={closeCrop} />
+      ) : aiOpen ? (
+        <AiCoverPanel
+          songId={song.id}
+          defaultPrompt={coverSeed}
+          onSaved={onSaved}
+          onCancel={() => setAiOpen(false)}
+        />
       ) : (
         <>
           <div className="max-h-[68vh] overflow-y-auto pr-1">
@@ -279,16 +375,30 @@ export function PublicDetailsModal({
                   )}
                 </div>
                 <div>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => fileRef.current?.click()}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-1.5 text-[12px] text-white/80 transition-colors hover:border-pulse/50 hover:text-white disabled:opacity-60"
-                  >
-                    <ImageIcon className="h-3.5 w-3.5 text-pulse" />
-                    {song.coverUrl ? "Replace image" : "Add image"}
-                  </button>
-                  <p className="mt-1.5 text-[11px] text-white/40">Square — you'll crop it next.</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => fileRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-1.5 text-[12px] text-white/80 transition-colors hover:border-pulse/50 hover:text-white disabled:opacity-60"
+                    >
+                      <ImageIcon className="h-3.5 w-3.5 text-pulse" />
+                      {song.coverUrl ? "Replace image" : "Add image"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setAiOpen(true)}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-1.5 text-[12px] text-white/80 transition-colors hover:border-pulse/50 hover:text-white disabled:opacity-60"
+                    >
+                      <Sparkles className="h-3.5 w-3.5 text-pulse" />
+                      Generate with AI
+                    </button>
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-white/40">
+                    Upload a square image (you'll crop it), or generate one with AI (from{" "}
+                    {COVER_TOKENS_FROM} tokens).
+                  </p>
                 </div>
                 <input
                   ref={fileRef}
@@ -299,6 +409,17 @@ export function PublicDetailsModal({
                 />
               </div>
             </div>
+
+            <label className="mb-2.5 flex flex-col gap-1">
+              <span className="text-[11px] uppercase tracking-[0.5px] text-white/40">Song name</span>
+              <input
+                value={title}
+                disabled={saving}
+                onChange={(e) => setTitle(e.target.value)}
+                className={FIELD}
+                placeholder="Song title"
+              />
+            </label>
 
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
               <AutoField
@@ -335,10 +456,89 @@ export function PublicDetailsModal({
             </div>
 
             <div className="mt-5">
-              <h3 className="text-[12px] font-medium text-white">Listen on</h3>
-              <p className="mb-3 mt-0.5 text-[12px] text-white/45">
-                Paste the URL where listeners can find this song on each platform. Leave blank to hide.
-              </p>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-[12px] font-medium text-white">Listen on</h3>
+                  <p className="mb-3 mt-0.5 text-[12px] text-white/45">
+                    Paste each platform URL — or auto-fill them all at once.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={toggleFind}
+                  title="Auto-find this track's links across platforms"
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] transition-colors disabled:opacity-60",
+                    findOpen
+                      ? "border-pulse/60 bg-pulse/[0.12] text-white"
+                      : "border-white/10 bg-white/[0.04] text-white/80 hover:border-pulse/50 hover:text-white",
+                  )}
+                >
+                  <Wand2 className="h-3.5 w-3.5 text-pulse" />
+                  Find links
+                </button>
+              </div>
+
+              {findOpen && (
+                <div className="mb-3 rounded-[12px] border border-white/[0.08] bg-white/[0.02] p-3">
+                  <p className="mb-2.5 text-[12px] text-white/55">
+                    Find this track everywhere — search by name &amp; artist, or paste any one
+                    streaming link (Spotify, Apple Music, YouTube…) and we'll fetch the rest.
+                  </p>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <input
+                      value={findTitle}
+                      disabled={matching}
+                      onChange={(e) => setFindTitle(e.target.value)}
+                      className={FIELD}
+                      placeholder="Song name"
+                    />
+                    <input
+                      value={findArtist}
+                      disabled={matching}
+                      onChange={(e) => setFindArtist(e.target.value)}
+                      className={FIELD}
+                      placeholder="Artist"
+                    />
+                  </div>
+                  <div className="my-2 flex items-center gap-2 text-[11px] uppercase tracking-[1px] text-white/30">
+                    <span className="h-px flex-1 bg-white/10" />
+                    or
+                    <span className="h-px flex-1 bg-white/10" />
+                  </div>
+                  <input
+                    value={findUrl}
+                    disabled={matching}
+                    onChange={(e) => setFindUrl(e.target.value)}
+                    className={FIELD}
+                    placeholder="Paste a Spotify / Apple Music / YouTube link"
+                  />
+                  <div className="mt-3 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      disabled={matching}
+                      onClick={() => setFindOpen(false)}
+                      className="rounded-full px-4 py-1.5 text-[12px] text-white/60 transition-colors hover:bg-white/[0.06] hover:text-white disabled:opacity-60"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={matching}
+                      onClick={() => void findLinks()}
+                      className="inline-flex items-center gap-1.5 rounded-full bg-pulse px-4 py-1.5 text-[12px] font-medium text-white transition-transform hover:scale-[1.03] disabled:opacity-60"
+                    >
+                      {matching ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Wand2 className="h-3.5 w-3.5" />
+                      )}
+                      {matching ? "Searching…" : "Search"}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="flex flex-col gap-2">
                 {rows.map((row, i) => {

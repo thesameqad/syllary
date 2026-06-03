@@ -226,6 +226,20 @@ export const IMAGE_SIZE_INFO: Record<
   "4K": { label: "4K", description: "Maximum detail. Slower and pricier.", enabled: true },
 };
 
+/** AI album-cover image model (separate from the video-backdrop models).
+ *  `flux` = fal.ai FLUX schnell (cheap, great for covers); `nano` = Nano Banana 2
+ *  (Gemini 3.1 Flash Image via OpenRouter — premium, sharper, pricier). */
+export const COVER_MODELS = ["flux", "nano"] as const;
+export type CoverModel = (typeof COVER_MODELS)[number];
+
+export const COVER_MODEL_INFO: Record<CoverModel, { label: string; description: string }> = {
+  flux: { label: "Standard", description: "Fast, great-looking covers at the lowest cost." },
+  nano: {
+    label: "Premium",
+    description: "Nano Banana 2 — sharper, more detailed artwork. Costs more.",
+  },
+};
+
 export const ACCEPTED_EXTENSIONS = [".mp3", ".wav", ".flac"] as const;
 
 export const ACCEPTED_MIME_TYPES = [

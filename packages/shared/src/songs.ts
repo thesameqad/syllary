@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GENERATION_MODES } from "./constants.js";
+import { COVER_MODELS, GENERATION_MODES } from "./constants.js";
 import { lyricsSchema } from "./lyrics.js";
 import { videoJobSchema, videoModelSchema } from "./video.js";
 
@@ -93,6 +93,32 @@ export const coverCommitSchema = z.object({
 });
 export type CoverCommitRequest = z.infer<typeof coverCommitSchema>;
 
+export const coverModelSchema = z.enum(COVER_MODELS);
+
+/** AI-generate a cover image from a free-text description. */
+export const generateCoverSchema = z.object({
+  prompt: z.string().trim().min(1).max(2000),
+  model: coverModelSchema.default("flux"),
+});
+export type GenerateCoverRequest = z.infer<typeof generateCoverSchema>;
+
+/** Response from POST /songs/:id/cover/generate — an uncommitted preview the
+ *  user can save (via the cover-commit route), regenerate, or discard. */
+export const coverGenerateResponseSchema = z.object({
+  key: z.string(),
+  url: z.string().url(),
+});
+export type CoverGenerateResponse = z.infer<typeof coverGenerateResponseSchema>;
+
+/** Auto-matched streaming links for a track (iTunes search → Odesli fan-out). */
+export const linkMatchSchema = z.object({
+  links: z.array(songLinkSchema),
+  artworkUrl: z.string().url().nullable(),
+  matchedTitle: z.string().nullable(),
+  matchedArtist: z.string().nullable(),
+});
+export type LinkMatch = z.infer<typeof linkMatchSchema>;
+
 /** Distinct artist/album values from the user's other songs, for autosuggest. */
 export const metaSuggestionsSchema = z.object({
   artists: z.array(z.string()),
@@ -141,6 +167,8 @@ export type Song = z.infer<typeof songSchema>;
 export const songSummarySchema = z.object({
   id: z.string().uuid(),
   title: z.string(),
+  artist: z.string().nullable().default(null),
+  album: z.string().nullable().default(null),
   status: songStatusSchema,
   /** Sub-stage while status === "processing". null otherwise. */
   stage: z.enum(["separating", "transcribing"]).nullable().default(null),

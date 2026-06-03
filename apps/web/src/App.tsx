@@ -10,6 +10,7 @@ import { AccountPage } from "@/pages/account-page";
 import { DashboardLayout } from "@/components/dashboard/dashboard-layout";
 import { DashboardPage } from "@/pages/dashboard-page";
 import { UploadPage } from "@/pages/upload-page";
+import { RecentPage } from "@/pages/recent-page";
 import { LibraryPage } from "@/pages/library-page";
 import { UpgradePage } from "@/pages/upgrade-page";
 import { authConfigured } from "@/lib/auth";
@@ -47,6 +48,7 @@ export function App() {
       <Route element={<DashboardLayout />}>
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/upload" element={<UploadPage />} />
+        <Route path="/recent" element={<RecentPage />} />
         <Route path="/library" element={<LibraryPage />} />
         <Route path="/upgrade" element={<UpgradePage />} />
       </Route>

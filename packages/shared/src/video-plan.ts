@@ -1,4 +1,4 @@
-import type { ImageQuality, ImageSize, VideoModel } from "./constants.js";
+import type { CoverModel, ImageQuality, ImageSize, VideoModel } from "./constants.js";
 import { PREVIEW_SECONDS, VIDEO_MODEL_INFO } from "./constants.js";
 import type { Lyrics } from "./lyrics.js";
 import type { VideoSegment } from "./video.js";
@@ -54,6 +54,7 @@ export function buildSegments(lyrics: Lyrics, durationSeconds: number | null): V
       clipEnd: end,
       imageKey: null,
       prompt: null,
+      direction: null,
       status: "pending",
     });
     lastEnd = end;
@@ -186,6 +187,22 @@ export const CLIP_COST_USD_PER_SEC: Record<VideoModel, number> = {
  *  Regenerate price. One image at the 3× markup, rounded up to the nearest 10. */
 export function singleImageTokens(quality: ImageQuality, imageSize: ImageSize): number {
   const usd = IMAGE_COST_USD[quality][imageSize] * VIDEO_COST_MARKUP;
+  return Math.max(10, Math.ceil(usd / USD_PER_TOKEN / 10) * 10);
+}
+
+/** Raw cost of one AI album cover (USD), by model. `flux` (fal.ai FLUX schnell)
+ *  is the cheap default; `nano` (Nano Banana 2 on OpenRouter) is the premium
+ *  option — same per-image cost as a "fast" 1K backdrop. */
+export const COVER_IMAGE_COST_USD: Record<CoverModel, number> = {
+  flux: 0.003,
+  nano: IMAGE_COST_USD.fast["1K"], // 0.068
+};
+
+/** Token cost to generate one AI album cover for the chosen model — the cover
+ *  model's cost at the 3× markup, rounded up to the nearest 10. flux → 20,
+ *  nano → 430. */
+export function coverImageTokens(model: CoverModel = "flux"): number {
+  const usd = COVER_IMAGE_COST_USD[model] * VIDEO_COST_MARKUP;
   return Math.max(10, Math.ceil(usd / USD_PER_TOKEN / 10) * 10);
 }
 

@@ -4,6 +4,7 @@ import type { Lyrics } from "@syllary/shared";
 import { useWavesurfer } from "@/hooks/use-wavesurfer";
 import { DynamicLyrics } from "@/components/result/dynamic-lyrics";
 import { SyncedLyrics } from "@/components/result/synced-lyrics";
+import { InlineLineEditor } from "@/components/result/inline-line-editor";
 import { DownloadBar } from "@/components/result/download-bar";
 import { cn } from "@/lib/utils";
 
@@ -25,7 +26,9 @@ export function LyricsPlayer({
   downloadsSlot,
   canEdit = false,
   onSaveLine,
+  onSaveTitle,
   onInterceptEdit,
+  onInterceptTitleEdit,
   onInterceptDownload,
 }: {
   audioUrl: string | null;
@@ -47,21 +50,36 @@ export function LyricsPlayer({
    *  persist the change (typically PATCH /songs/:id/lyrics with the full
    *  reconstructed text). Throw to keep the editor open. */
   onSaveLine?: (lineIndex: number, nextText: string) => Promise<void>;
+  /** When provided (and canEdit), the song title becomes inline-editable via a
+   *  hover pencil at the top-left. Should persist the new title. Throw to keep
+   *  the editor open. */
+  onSaveTitle?: (nextTitle: string) => Promise<void>;
   /** When provided and returns true, the pencil click is intercepted before
    *  entering inline edit mode (anonymous viewer → sign-in popup). */
   onInterceptEdit?: () => boolean;
+  /** Like onInterceptEdit, but for the title pencil. */
+  onInterceptTitleEdit?: () => boolean;
   /** When provided and returns true, download button clicks are intercepted
    *  (anonymous viewer → sign-in popup). */
   onInterceptDownload?: () => boolean;
 }) {
   const { containerRef, isPlaying, currentTime, playPause, seek } = useWavesurfer(audioUrl);
   const [mode, setMode] = useState<LyricsMode>("dynamic");
+  // Once the user explicitly picks a view (e.g. "full"), stop auto-switching it.
+  const [userPickedMode, setUserPickedMode] = useState(false);
   const [editing, setEditing] = useState(false);
 
-  // Switch to the focused karaoke view when playback starts.
+  function pickMode(m: LyricsMode) {
+    setUserPickedMode(true);
+    setMode(m);
+  }
+
+  // Focus the karaoke view when playback first starts — but only until the user
+  // has chosen a view themselves. After that, playing (or editing then playing)
+  // keeps whatever tab they're on instead of snapping back to dynamic.
   useEffect(() => {
-    if (isPlaying) setMode("dynamic");
-  }, [isPlaying]);
+    if (isPlaying && !userPickedMode) setMode("dynamic");
+  }, [isPlaying, userPickedMode]);
 
   // Auto-pause when the user starts editing — so the active line doesn't move
   // out from under them mid-edit. We don't auto-resume on exit: let the user
@@ -98,7 +116,20 @@ export function LyricsPlayer({
               </span>
             </button>
             <div className="min-w-0">
-              <div className="truncate text-[15px] font-medium text-white">{title}</div>
+              {canEdit && onSaveTitle ? (
+                <InlineLineEditor
+                  original={title}
+                  canEdit
+                  align="left"
+                  onSave={onSaveTitle}
+                  onInterceptStart={onInterceptTitleEdit}
+                  textClassName="text-[15px] font-medium"
+                >
+                  <span className="truncate text-[15px] font-medium text-white">{title}</span>
+                </InlineLineEditor>
+              ) : (
+                <div className="truncate text-[15px] font-medium text-white">{title}</div>
+              )}
               <div className="text-[12px] text-white/40">{meta}</div>
             </div>
           </div>
@@ -120,7 +151,7 @@ export function LyricsPlayer({
                     <button
                       key={m}
                       type="button"
-                      onClick={() => setMode(m)}
+                      onClick={() => pickMode(m)}
                       className={cn(
                         "rounded-full px-3 py-1 capitalize transition-colors",
                         mode === m ? "bg-white text-[#0a0a0a]" : "text-white/55 hover:text-white",

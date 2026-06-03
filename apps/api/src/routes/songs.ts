@@ -4,9 +4,11 @@ import { and, desc, eq, isNotNull, ne, or, sql } from "drizzle-orm";
 import {
   type AspectRatio,
   coverCommitSchema,
+  coverImageTokens,
   coverPresignSchema,
   creditCost,
   editLyricsSchema,
+  generateCoverSchema,
   type GenerationMode,
   parseLyricsText,
   PLAN_CREDITS,
@@ -30,7 +32,7 @@ import { db } from "../db/client.js";
 import { env } from "../env.js";
 import { ratings, songs, type SongRow, songVideos, users, type UserRow, videoJobs } from "../db/schema.js";
 import { getAuthUserId } from "../lib/clerk.js";
-import { deleteObject, objectSize, presignGet, presignPut } from "../lib/r2.js";
+import { deleteObject, objectSize, presignGet, presignPut, putObject } from "../lib/r2.js";
 import {
   getPrediction,
   startSeparation,
@@ -39,6 +41,8 @@ import {
 import { transcribeWithScribe } from "../lib/fal-stt.js";
 import { buildLyricsFromScribe, realignFromText } from "../lib/transcript.js";
 import { summarizeSong } from "../lib/openrouter.js";
+import { generateCoverImage } from "../lib/cover-image.js";
+import { matchStreamingLinks } from "../lib/music-links.js";
 import { estimateGenerationCost, recordEvent } from "../lib/analytics.js";
 import { getOrCreateUser } from "../lib/users.js";
 
@@ -97,6 +101,7 @@ async function activeVideoJobFor(songId: string): Promise<VideoJob | null> {
       index: s.index,
       text: s.text,
       prompt: s.prompt,
+      direction: s.direction ?? null,
       status: s.status,
       imageUrl: s.imageKey ? await presignGet(s.imageKey) : null,
     })),
@@ -108,6 +113,7 @@ async function activeVideoJobFor(songId: string): Promise<VideoJob | null> {
     mode: row.mode,
     model: row.model,
     styleDescription: row.styleDescription,
+    sceneBrief: row.sceneBrief ?? null,
     aspectRatio: row.aspectRatio as AspectRatio,
     imageSize: row.imageSize as ImageSize,
     imageQuality: row.imageQuality as ImageQuality,
@@ -179,6 +185,8 @@ async function toSongSummary(row: SongRow): Promise<SongSummary> {
   return {
     id: row.id,
     title: row.title ?? row.originalFilename,
+    artist: row.artist,
+    album: row.album,
     status: row.status,
     stage: row.stage ?? null,
     durationSeconds: row.durationSeconds,
@@ -763,6 +771,68 @@ export async function songsRoutes(app: FastifyInstance) {
       await deleteObject(oldKey);
     }
     return reply.send(await toSongDto(updated ?? row, true));
+  });
+
+  // AI-generate a cover image from a text description. Produces a square image,
+  // stores it under a fresh covers/ key (NOT yet attached to the song), charges
+  // credits (3× our OpenRouter cost), and returns the key + a presigned preview
+  // URL. The client can then preview, regenerate (another call), save it via
+  // POST /songs/:id/cover, or discard it. Charged only on success.
+  app.post<{ Params: { id: string } }>("/songs/:id/cover/generate", async (req, reply) => {
+    const clerkId = await getAuthUserId(req);
+    if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+    const user = await getOrCreateUser(clerkId);
+    const parsed = generateCoverSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Describe the image you want." });
+    const row = await getSongRow(req.params.id);
+    if (!row || row.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+
+    const cost = coverImageTokens(parsed.data.model);
+    if (user.credits < cost) {
+      return reply.code(402).send({
+        error: `Not enough tokens — generating a cover costs ${cost}. Upgrade for more.`,
+      });
+    }
+
+    let image: { buffer: Buffer; contentType: string };
+    try {
+      image = await generateCoverImage({ description: parsed.data.prompt, model: parsed.data.model });
+    } catch (err) {
+      req.log.error({ err }, "cover-generate failed");
+      return reply.code(502).send({ error: "Couldn't generate the cover. Try again." });
+    }
+
+    const key = `covers/${row.id}-${randomUUID()}`;
+    try {
+      await putObject(key, image.buffer, image.contentType);
+    } catch (err) {
+      req.log.error({ err }, "cover-generate upload failed");
+      return reply.code(502).send({ error: "Couldn't store the generated cover. Try again." });
+    }
+
+    // Charge only after a successful generation + upload.
+    await db
+      .update(users)
+      .set({ credits: sql`GREATEST(${users.credits} - ${cost}, 0)`, updatedAt: new Date() })
+      .where(eq(users.id, user.id));
+
+    return reply.send({ key, url: await presignGet(key) });
+  });
+
+  // Auto-match a track's streaming links from its title + artist (iTunes search
+  // → Odesli fan-out). Read-only helper for the public-details editor; returns
+  // an empty match (never errors) when nothing is found.
+  app.get("/links/match", async (req, reply) => {
+    const clerkId = await getAuthUserId(req);
+    if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+    const q = req.query as { title?: string; artist?: string; url?: string };
+    const title = (q.title ?? "").toString();
+    const artist = (q.artist ?? "").toString();
+    const url = (q.url ?? "").toString();
+    if (!title.trim() && !artist.trim() && !url.trim()) {
+      return reply.code(400).send({ error: "Enter a song name, artist, or a streaming link." });
+    }
+    return reply.send(await matchStreamingLinks({ title, artist, url }));
   });
 
   // Replace the lyrics with a user-edited version. Square-bracket lines in the

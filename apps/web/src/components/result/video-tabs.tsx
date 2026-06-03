@@ -176,6 +176,7 @@ export function VideoTabs({
         <ManualReview
           job={liveJob}
           onSegmentUpdated={applySegment}
+          onJobUpdated={(updated) => setLiveJob(updated)}
           onFinalized={(updated) => setLiveJob(updated)}
         />
       ) : showProgress ? (

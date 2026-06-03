@@ -55,10 +55,10 @@ export function RegenerateBanner({
     try {
       await regenerateSong(songId, mode);
       toast(`Regenerating with ${MODE_INFO[mode].label} mode…`);
-      // Send the user to the library so they can watch the card progress and
-      // come back when it's ready (the result page would otherwise sit on the
-      // old "ready" UI until the next poll flips it to "processing").
-      navigate("/library");
+      // Send the user to Recent so they can watch the card progress and come
+      // back when it's ready (the result page would otherwise sit on the old
+      // "ready" UI until the next poll flips it to "processing").
+      navigate("/recent");
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "Could not regenerate.", "error");
       setBusy(null);

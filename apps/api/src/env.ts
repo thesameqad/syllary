@@ -18,6 +18,10 @@ const envSchema = z.object({
   // fal.ai key — used for ElevenLabs Scribe speech-to-text. Required for
   // transcription (the WhisperX flow on Replicate is no longer used).
   FAL_AI_KEY: z.string().min(1),
+  // Cheap image model (fal.ai) for AI album covers — FLUX schnell (~$0.003/img).
+  // Covers don't need embedded text, so this is far cheaper than the Nano Banana
+  // model used for lyric-video backdrops.
+  FAL_IMAGE_MODEL: z.string().default("fal-ai/flux/schnell"),
   OPENROUTER_API_KEY: z.string().min(1),
   OPENROUTER_MODEL: z.string().default("google/gemini-2.5-flash"),
   // Used for reconciling multiple transcripts into canonical lyrics. Opus
@@ -43,6 +47,12 @@ const envSchema = z.object({
   // binary (works on Render's native runtime, no Docker); set this to use a
   // system install locally.
   FFMPEG_PATH: z.string().optional(),
+  // Spotify Web API (client-credentials) for the "Find links" track search.
+  // Optional: without these, link auto-fill falls back to iTunes search (which
+  // can't surface Spotify links — Odesli only returns Spotify when seeded from a
+  // Spotify URL). Create a free app at developer.spotify.com to get these.
+  SPOTIFY_CLIENT_ID: z.string().optional(),
+  SPOTIFY_CLIENT_SECRET: z.string().optional(),
   // Optional so the API still runs (anonymous-only) before auth/billing are configured.
   CLERK_SECRET_KEY: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),

@@ -9,6 +9,7 @@ import {
   type ImageSize,
   regenerateSegmentSchema,
   singleImageTokens,
+  updateVideoJobSchema,
   type VideoJob,
   VIDEO_MODEL_INFO,
   VIDEO_MODELS,
@@ -41,6 +42,7 @@ async function toVideoJobDto(row: VideoJobRow): Promise<VideoJob> {
       index: s.index,
       text: s.text,
       prompt: s.prompt,
+      direction: s.direction ?? null,
       status: s.status,
       imageUrl: s.imageKey ? await presignGet(s.imageKey) : null,
     })),
@@ -52,6 +54,7 @@ async function toVideoJobDto(row: VideoJobRow): Promise<VideoJob> {
     mode: row.mode,
     model: row.model,
     styleDescription: row.styleDescription,
+    sceneBrief: row.sceneBrief ?? null,
     aspectRatio: row.aspectRatio as AspectRatio,
     imageSize: row.imageSize as ImageSize,
     imageQuality: row.imageQuality as ImageQuality,
@@ -268,7 +271,7 @@ export async function videoRoutes(app: FastifyInstance) {
 
       let segment;
       try {
-        segment = await regenerateSegmentImage(job, index, parsed.data.prompt);
+        segment = await regenerateSegmentImage(job, index, parsed.data.direction);
       } catch (err) {
         req.log.error({ err }, "regenerate-segment failed");
         return reply.code(502).send({ error: "Could not regenerate this scene. Try again." });
@@ -283,6 +286,40 @@ export async function videoRoutes(app: FastifyInstance) {
       return reply.send(segment);
     },
   );
+
+  // Manual mode: edit the job-wide shared fields (art-direction style + the
+  // song "context" art brief) that apply to every scene. Owner-only; job must be
+  // awaiting review. Takes effect on the next (re)generate of each scene.
+  app.patch<{ Params: { id: string } }>("/video-jobs/:id", async (req, reply) => {
+    const clerkId = await getAuthUserId(req);
+    if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+    const user = await getOrCreateUser(clerkId);
+
+    const parsed = updateVideoJobSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid request." });
+
+    const [job] = await db.select().from(videoJobs).where(eq(videoJobs.id, req.params.id)).limit(1);
+    if (!job || job.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+    if (job.status !== "review") {
+      return reply.code(400).send({ error: "This video isn't open for editing." });
+    }
+
+    const [updated] = await db
+      .update(videoJobs)
+      .set({
+        ...(parsed.data.styleDescription !== undefined
+          ? { styleDescription: parsed.data.styleDescription }
+          : {}),
+        ...(parsed.data.sceneBrief !== undefined
+          ? { sceneBrief: parsed.data.sceneBrief?.trim() || null }
+          : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(videoJobs.id, job.id))
+      .returning();
+
+    return reply.send(await toVideoJobDto(updated ?? job));
+  });
 
   // Manual mode: assemble the final video from the approved per-line images.
   // Owner-only; job must be awaiting review. No extra charge (paid up front).

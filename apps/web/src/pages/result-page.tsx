@@ -14,7 +14,7 @@ import {
   Zap,
 } from "lucide-react";
 import { lyricsToText, MODE_INFO, type Song, type VideoJob } from "@syllary/shared";
-import { ApiError, getSong, updateSongLyrics } from "@/lib/api";
+import { ApiError, getSong, updateSong, updateSongLyrics } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { Modal } from "@/components/ui/modal";
 import { Button3D } from "@/components/ui/button-3d";
@@ -298,6 +298,18 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
     }
   }
 
+  // Persist an inline-edited song title.
+  async function saveTitle(nextTitle: string): Promise<void> {
+    if (!song) return;
+    try {
+      const updated = await updateSong(song.id, { title: nextTitle });
+      applyUpdate(updated);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't rename the song.", "error");
+      throw e;
+    }
+  }
+
   // Anonymous viewers get the same edit/regenerate UI as the owner; the
   // intercept callbacks open the sign-in popup instead of mutating state.
   const showOwnerUi = song.canEdit || !signedIn;
@@ -308,11 +320,19 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
       <LyricsPlayer
         audioUrl={song.audioUrl}
         lyrics={lyrics}
-        title={song.originalFilename}
+        title={song.title}
         meta={meta}
         baseName={baseNameOf(song.originalFilename)}
         showDownloads
         canEdit={showInlineEdit}
+        onSaveTitle={
+          song.canEdit
+            ? saveTitle
+            : !signedIn
+              ? async () => promptSignIn("edit-details")
+              : undefined
+        }
+        onInterceptTitleEdit={!signedIn ? interceptFor("edit-details") : undefined}
         onSaveLine={
           song.canEdit
             ? saveLine

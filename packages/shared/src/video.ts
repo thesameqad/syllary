@@ -43,9 +43,14 @@ export const videoSegmentSchema = z.object({
   clipStart: z.number(),
   clipEnd: z.number(),
   imageKey: z.string().nullable().default(null),
-  /** The exact prompt sent to the image model for this segment (shown + editable
-   *  in manual mode). Null until the frame is first generated. */
+  /** The exact prompt sent to the image model for this segment (kept for the
+   *  record / debugging). Recomputed from style + context + direction on every
+   *  (re)generate. Null until the frame is first generated. */
   prompt: z.string().nullable().default(null),
+  /** Manual mode: the per-scene "direction" — what to depict in this frame
+   *  (e.g. "girl walking away"). Defaults to the lyric line when null. The lyric
+   *  itself is always what gets rendered as on-image typography. */
+  direction: z.string().nullable().default(null),
   status: videoSegmentStatusSchema.default("pending"),
 });
 export type VideoSegment = z.infer<typeof videoSegmentSchema>;
@@ -56,17 +61,28 @@ export const reviewSegmentSchema = z.object({
   index: z.number().int(),
   text: z.string(),
   prompt: z.string().nullable(),
+  /** The per-scene direction (what to depict). Null = use the lyric line. */
+  direction: z.string().nullable(),
   imageUrl: z.string().url().nullable(),
   status: videoSegmentStatusSchema,
 });
 export type ReviewSegment = z.infer<typeof reviewSegmentSchema>;
 
-/** Body for POST /api/video-jobs/:id/segments/:index/regenerate. An omitted
- *  prompt re-rolls with the stored one. */
+/** Body for POST /api/video-jobs/:id/segments/:index/regenerate. The per-scene
+ *  direction (what to depict). An empty string clears it back to the lyric
+ *  line; omitting it re-rolls with whatever direction is already stored. */
 export const regenerateSegmentSchema = z.object({
-  prompt: z.string().trim().min(1).max(2000).optional(),
+  direction: z.string().max(2000).optional(),
 });
 export type RegenerateSegmentRequest = z.infer<typeof regenerateSegmentSchema>;
+
+/** Body for PATCH /api/video-jobs/:id — edit the job-wide shared fields that
+ *  apply to every scene (manual mode). */
+export const updateVideoJobSchema = z.object({
+  styleDescription: z.string().trim().min(1).max(2000).optional(),
+  sceneBrief: z.string().max(4000).nullable().optional(),
+});
+export type UpdateVideoJob = z.infer<typeof updateVideoJobSchema>;
 
 /** Client-facing view of a video job (returned by create + poll). */
 export const videoJobSchema = z.object({
@@ -76,6 +92,9 @@ export const videoJobSchema = z.object({
   mode: videoPipelineModeSchema,
   model: videoModelSchema,
   styleDescription: z.string(),
+  /** One-time AI "art brief" (who/what the song depicts), shared across every
+   *  scene. Editable in manual mode. Null if not yet computed. */
+  sceneBrief: z.string().nullable().default(null),
   aspectRatio: aspectRatioSchema,
   imageSize: imageSizeSchema,
   imageQuality: imageQualitySchema,

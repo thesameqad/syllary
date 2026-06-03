@@ -1,23 +1,39 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, ArrowRight, Clapperboard, Loader2, Music, RefreshCw } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  ChevronDown,
+  Clapperboard,
+  Loader2,
+  Music,
+  RefreshCw,
+  SlidersHorizontal,
+} from "lucide-react";
 import { type ReviewSegment, singleImageTokens, type VideoJob } from "@syllary/shared";
-import { ApiError, finalizeVideoJob, regenerateSegment } from "@/lib/api";
+import { ApiError, finalizeVideoJob, regenerateSegment, updateVideoJob } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { Button3D } from "@/components/ui/button-3d";
 import { cn } from "@/lib/utils";
 
-/** Manual-mode review: a card per line (lyric + editable prompt + image +
- *  Regenerate), stepped through with a slide animation, ending in "Generate
- *  Full Video" which stitches the approved frames. */
+const FIELD =
+  "mt-1.5 w-full resize-none rounded-[10px] border border-white/10 bg-black/30 px-3 py-2 text-[12px] leading-relaxed text-white/85 outline-none transition-colors placeholder:text-white/30 focus:border-pulse/60 focus:bg-pulse/[0.04] disabled:opacity-50";
+
+/** Manual-mode review: a card per scene. The art-direction STYLE and the song
+ *  CONTEXT are shared across every scene (edited once, collapsed by default);
+ *  only the per-scene DIRECTION — what this frame depicts — changes from card to
+ *  card. The lyric line is rendered into the image as typography regardless. */
 export function ManualReview({
   job,
   onSegmentUpdated,
+  onJobUpdated,
   onFinalized,
 }: {
   job: VideoJob;
   /** Merge a regenerated segment back into the live job. */
   onSegmentUpdated: (segment: ReviewSegment) => void;
+  /** Replace the live job after a shared-field edit. */
+  onJobUpdated: (job: VideoJob) => void;
   /** Hand off the now-processing job so the parent resumes polling. */
   onFinalized: (job: VideoJob) => void;
 }) {
@@ -25,7 +41,11 @@ export function ManualReview({
   const segments = job.segments;
   const [index, setIndex] = useState(0);
   const [dir, setDir] = useState(1);
-  const [prompt, setPrompt] = useState(segments[0]?.prompt ?? "");
+  const [direction, setDirection] = useState(segments[0]?.direction ?? "");
+  const [sharedOpen, setSharedOpen] = useState(false);
+  const [style, setStyle] = useState(job.styleDescription);
+  const [context, setContext] = useState(job.sceneBrief ?? "");
+  const [savingShared, setSavingShared] = useState(false);
   const [regenBusy, setRegenBusy] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
 
@@ -33,9 +53,9 @@ export function ManualReview({
   const cost = singleImageTokens(job.imageQuality, job.imageSize);
   const isLast = index >= segments.length - 1;
 
-  // Load the prompt for whichever card we land on.
+  // Load the per-scene direction for whichever card we land on.
   useEffect(() => {
-    setPrompt(segments[index]?.prompt ?? "");
+    setDirection(segments[index]?.direction ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index]);
 
@@ -47,14 +67,36 @@ export function ManualReview({
     );
   }
 
+  // Persist the job-wide shared fields (style + context) on blur, if changed.
+  async function saveShared() {
+    const nextStyle = style.trim();
+    const styleChanged = nextStyle.length > 0 && nextStyle !== job.styleDescription;
+    const contextChanged = context.trim() !== (job.sceneBrief ?? "").trim();
+    if (!styleChanged && !contextChanged) return;
+    setSavingShared(true);
+    try {
+      const updated = await updateVideoJob(job.id, {
+        ...(styleChanged ? { styleDescription: nextStyle } : {}),
+        ...(contextChanged ? { sceneBrief: context } : {}),
+      });
+      onJobUpdated(updated);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't save those changes.", "error");
+    } finally {
+      setSavingShared(false);
+    }
+  }
+
   async function regenerate() {
     const current = segments[index];
     if (!current || regenBusy) return;
     setRegenBusy(true);
     try {
-      const updated = await regenerateSegment(job.id, current.index, prompt.trim() || undefined);
+      // Persist any pending shared edits first so this scene picks them up.
+      await saveShared();
+      const updated = await regenerateSegment(job.id, current.index, direction.trim());
       onSegmentUpdated(updated);
-      setPrompt(updated.prompt ?? "");
+      setDirection(updated.direction ?? "");
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "Couldn't regenerate this scene.", "error");
     } finally {
@@ -78,8 +120,73 @@ export function ManualReview({
     setIndex((i) => Math.min(segments.length - 1, Math.max(0, i + delta)));
   };
 
+  const busy = regenBusy || finalizing;
+
   return (
     <div className="mt-3">
+      {/* Shared style + context — applies to every scene, edited once. */}
+      <div className="mb-3 overflow-hidden rounded-[12px] border border-white/[0.08] bg-white/[0.02]">
+        <button
+          type="button"
+          onClick={() => setSharedOpen((o) => !o)}
+          className="flex w-full items-center justify-between px-3.5 py-2.5 text-left"
+        >
+          <span className="inline-flex items-center gap-2 text-[12px] font-medium text-white/80">
+            <SlidersHorizontal className="h-3.5 w-3.5 text-pulse" />
+            Style &amp; context
+            <span className="text-[11px] font-normal text-white/40">· applies to every scene</span>
+          </span>
+          <span className="inline-flex items-center gap-2">
+            {savingShared && <Loader2 className="h-3.5 w-3.5 animate-spin text-pulse" />}
+            <ChevronDown
+              className={cn("h-4 w-4 text-white/40 transition-transform", sharedOpen && "rotate-180")}
+            />
+          </span>
+        </button>
+        <AnimatePresence initial={false}>
+          {sharedOpen && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="overflow-hidden"
+            >
+              <div className="border-t border-white/[0.06] px-3.5 pb-3.5 pt-2">
+                <label className="block">
+                  <span className="text-[11px] uppercase tracking-[0.5px] text-white/35">
+                    Visual style
+                  </span>
+                  <textarea
+                    value={style}
+                    onChange={(e) => setStyle(e.target.value)}
+                    onBlur={() => void saveShared()}
+                    rows={2}
+                    disabled={busy}
+                    placeholder="e.g. moody cinematic neon, film grain, shallow depth of field"
+                    className={FIELD}
+                  />
+                </label>
+                <label className="mt-2.5 block">
+                  <span className="text-[11px] uppercase tracking-[0.5px] text-white/35">
+                    Song context
+                  </span>
+                  <textarea
+                    value={context}
+                    onChange={(e) => setContext(e.target.value)}
+                    onBlur={() => void saveShared()}
+                    rows={2}
+                    disabled={busy}
+                    placeholder="What the song is about — the subject & point of view to depict"
+                    className={FIELD}
+                  />
+                </label>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
       {/* Progress dots */}
       <div className="mb-3 flex items-center justify-center gap-1.5">
         {segments.map((s, i) => (
@@ -162,17 +269,22 @@ export function ManualReview({
               )}
             </div>
 
-            {/* Editable prompt */}
+            {/* Per-scene direction — the only field that usually changes. */}
             <div className="mt-3">
               <span className="text-[11px] uppercase tracking-[0.5px] text-white/35">
-                Prompt — edit and regenerate to refine
+                Direction — what to show in this scene
               </span>
               <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                rows={3}
+                value={direction}
+                onChange={(e) => setDirection(e.target.value)}
+                rows={2}
                 disabled={regenBusy}
-                className="mt-1.5 w-full resize-none rounded-[10px] border border-white/10 bg-black/30 px-3 py-2 text-[12px] leading-relaxed text-white/85 outline-none transition-colors placeholder:text-white/30 focus:border-pulse/60 focus:bg-pulse/[0.04] disabled:opacity-50"
+                placeholder={
+                  seg.text.trim()
+                    ? `e.g. “a girl walking away” — leave blank to use the lyric line`
+                    : `Describe this instrumental scene`
+                }
+                className={FIELD}
               />
             </div>
           </motion.div>
@@ -184,7 +296,7 @@ export function ManualReview({
             <button
               type="button"
               onClick={() => go(-1)}
-              disabled={index === 0 || regenBusy || finalizing}
+              disabled={index === 0 || busy}
               className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-white/25 hover:text-white disabled:opacity-40"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
@@ -193,7 +305,7 @@ export function ManualReview({
             <button
               type="button"
               onClick={() => void regenerate()}
-              disabled={regenBusy || finalizing}
+              disabled={busy}
               className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-1.5 text-[12px] text-white/80 transition-colors hover:border-pulse/50 hover:text-white disabled:opacity-50"
             >
               {regenBusy ? (
@@ -206,12 +318,12 @@ export function ManualReview({
           </div>
 
           {isLast ? (
-            <Button3D disabled={regenBusy || finalizing} onClick={() => void finalize()}>
+            <Button3D disabled={busy} onClick={() => void finalize()}>
               {finalizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />}
               Generate Full Video
             </Button3D>
           ) : (
-            <Button3D disabled={regenBusy || finalizing} onClick={() => go(1)}>
+            <Button3D disabled={busy} onClick={() => go(1)}>
               Next
               <ArrowRight className="h-4 w-4" />
             </Button3D>

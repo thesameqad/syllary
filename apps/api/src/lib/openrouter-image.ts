@@ -36,22 +36,35 @@ function dataUrlToBuffer(dataUrl: string): Buffer {
   return Buffer.from(dataUrl.slice(comma + 1), "base64");
 }
 
-/** Build the frame prompt for one lyric line. The lyric text is rendered INTO
- *  the image by the model (Gemini 3 Pro Image has excellent text rendering),
- *  styled to match the art direction — e.g. neon tubing for a neon scene — so it
- *  reads as part of the artwork rather than a flat caption. */
-export function buildBackdropPrompt(
-  style: string,
-  lineText: string,
-  aspectRatio: AspectRatio,
-  renderText: boolean,
-  context?: string,
-): string {
-  const line = lineText.trim();
-  // Song-level art brief: who/what the song is really about (POV, subject,
-  // setting), so a line like "I pressed my nose against the window" is depicted
-  // through the right subject (e.g. a dog) instead of a literal stock person.
-  const ctx = context?.trim();
+/** Build the frame prompt for one scene from three independent parts:
+ *   - `style`     — the art direction (shared across the whole video)
+ *   - `context`   — the one-time song art brief: who/what the song is about
+ *                   (POV, subject, setting), shared across the whole video
+ *   - `direction` — what THIS scene depicts (e.g. "girl walking away"). Defaults
+ *                   to the lyric line when blank.
+ *   - `lyricText` — the actual lyric, rendered INTO the image as typography
+ *                   (Gemini 3 Pro Image has excellent text rendering) styled to
+ *                   match the art direction. Independent of `direction`.
+ *
+ * Manual mode lets the user edit `style` + `context` (shared) and `direction`
+ * (per-scene) separately, so the common case is just typing a short direction. */
+export function buildBackdropPrompt(opts: {
+  style: string;
+  lyricText: string;
+  aspectRatio: AspectRatio;
+  renderText: boolean;
+  context?: string;
+  direction?: string;
+}): string {
+  const { aspectRatio, renderText } = opts;
+  const style = opts.style.trim();
+  const line = opts.lyricText.trim();
+  const ctx = opts.context?.trim();
+  // What the scene depicts — the user's per-scene direction, falling back to the
+  // lyric line so an unedited scene behaves exactly as before.
+  const subject = opts.direction?.trim() || line;
+  const hasSubject = subject.length > 0;
+
   const story = ctx
     ? [
         `This is one scene from a single music video. About the song — depict the correct subject and point of view, NOT a literal stock reading: ${ctx}`,
@@ -60,30 +73,32 @@ export function buildBackdropPrompt(
   const styled = [
     ...story,
     `Cinematic ${ASPECT_HINT[aspectRatio]} frame for a music lyric video.`,
-    `Art direction: ${style.trim()}.`,
-    `The scene should evoke the mood and imagery of this lyric.`,
+    `Art direction: ${style}.`,
+    `Depict this scene: ${subject}.`,
     `Render this exact lyric as the hero typography of the image, large and beautifully legible, integrated INTO the scene and styled to match the art direction (for example: glowing neon tubing if the style is neon, gold foil if elegant, hand-painted if folk):`,
     `"${line}"`,
     `Spell it EXACTLY as written. Show ONLY this line of text — no other words, captions, watermarks, logos, signatures, or duplicate text.`,
     `Keep the text fully inside the frame with generous safe margins from every edge so it is never cut off, with strong contrast against the background.`,
     `No real recognizable people or singers. Rich depth, dramatic lighting, high detail.`,
   ];
-  // Text-free scene that still evokes the line (used by Cinematic, where the
+  // Text-free scene that still evokes the direction (used by Cinematic, where the
   // lyrics are overlaid later by ffmpeg — letting the video model warp baked-in
   // text is what made Cinematic unreadable).
   const sceneOnly = [
     ...story,
     `Cinematic ${ASPECT_HINT[aspectRatio]} frame for a music video.`,
-    `Art direction: ${style.trim()}.`,
-    line ? `Create a scene that evokes the mood and imagery of this lyric (do NOT write the lyric): "${line}".` : `Atmospheric instrumental scene.`,
+    `Art direction: ${style}.`,
+    hasSubject
+      ? `Create a scene that evokes the mood and imagery of: ${subject} (do NOT write any text).`
+      : `Atmospheric instrumental scene.`,
     `Absolutely NO text, letters, words, captions, or watermarks anywhere in the image.`,
     `No real recognizable people. Rich depth, dramatic lighting, high detail.`,
   ];
   const instrumental = [
     ...story,
     `Cinematic ${ASPECT_HINT[aspectRatio]} backdrop for a music lyric video instrumental interlude.`,
-    `Art direction: ${style.trim()}.`,
-    `Atmospheric, no text or words of any kind.`,
+    `Art direction: ${style}.`,
+    hasSubject ? `Depict this scene with no text of any kind: ${subject}.` : `Atmospheric, no text or words of any kind.`,
     `No real recognizable people. Rich depth, dramatic lighting, high detail.`,
   ];
   if (!renderText) return sceneOnly.join(" ");
@@ -171,7 +186,13 @@ export async function generateBackdrop(opts: {
 }): Promise<Buffer> {
   const renderText = opts.renderText ?? true;
   const prompt =
-    opts.promptOverride ?? buildBackdropPrompt(opts.style, opts.lineText, opts.aspectRatio, renderText);
+    opts.promptOverride ??
+    buildBackdropPrompt({
+      style: opts.style,
+      lyricText: opts.lineText,
+      aspectRatio: opts.aspectRatio,
+      renderText,
+    });
   return withRetries(() => requestImageOnce(prompt, opts.aspectRatio, opts.imageSize, opts.quality));
 }
 
