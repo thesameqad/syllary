@@ -1,9 +1,10 @@
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAccount } from "@/lib/account-context";
 import { UploadCard } from "@/components/landing/upload-card";
 
 export function UploadPage() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const { account, refresh } = useAccount();
 
   return (
@@ -19,6 +20,9 @@ export function UploadPage() {
       <UploadCard
         mode="credits"
         credits={account?.credits ?? null}
+        prefillArtist={params.get("artist")}
+        prefillAlbum={params.get("album")}
+        prefillTitle={params.get("title")}
         onStarted={() => {
           refresh();
           navigate("/recent");

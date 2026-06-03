@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { env } from "./env.js";
 import { billingRoutes } from "./routes/billing.js";
+import { catalogRoutes } from "./routes/catalog.js";
 import { seoRoutes } from "./routes/seo.js";
 import { songsRoutes } from "./routes/songs.js";
 import { trackRoutes } from "./routes/track.js";
@@ -51,6 +52,7 @@ await app.register(seoRoutes);
 
 await app.register(uploadsRoutes, { prefix: "/api" });
 await app.register(songsRoutes, { prefix: "/api" });
+await app.register(catalogRoutes, { prefix: "/api" });
 await app.register(videoRoutes, { prefix: "/api" });
 await app.register(trackRoutes, { prefix: "/api" });
 await app.register(billingRoutes, { prefix: "/api" });

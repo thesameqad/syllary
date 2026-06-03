@@ -1,5 +1,6 @@
 import {
   boolean,
+  date,
   index,
   integer,
   jsonb,
@@ -11,6 +12,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import type {
+  AlbumTrack,
   AudioFeatures,
   GenerationMode,
   ImageQuality,
@@ -32,8 +34,13 @@ export const songs = pgTable("songs", {
   stage: text("stage").$type<"separating" | "transcribing">(),
   originalFilename: text("original_filename").notNull(),
   title: text("title"),
+  // Denormalized cache of the artist/album names (kept in sync with the entity
+  // tables). Display/public/anonymous paths read these directly; the FKs below
+  // power the organized Library, entity covers, and album release dates.
   artist: text("artist"),
   album: text("album"),
+  artistId: uuid("artist_id").references(() => artists.id, { onDelete: "set null" }),
+  albumId: uuid("album_id").references(() => albums.id, { onDelete: "set null" }),
   year: integer("year"),
   genre: text("genre"),
   links: jsonb("links").$type<SongLink[]>(),
@@ -68,6 +75,55 @@ export const songs = pgTable("songs", {
 });
 
 export type SongRow = typeof songs.$inferSelect;
+
+// Real artist/album entities (per user) so the Library can organize a catalog
+// and each can own a cover image (and an album its release date). Songs link to
+// these via songs.artistId/albumId; the denormalized songs.artist/album strings
+// are kept in sync as a cache. Created on demand from upload/edit metadata and
+// from platform imports (Deezer). Anonymous songs have no entities (strings only).
+export const artists = pgTable(
+  "artists",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    coverImageKey: text("cover_image_key"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ uniqueUserName: unique("artists_user_name_unique").on(t.userId, t.name) }),
+);
+
+export type ArtistRow = typeof artists.$inferSelect;
+
+export const albums = pgTable(
+  "albums",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    artistId: uuid("artist_id")
+      .notNull()
+      .references(() => artists.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    coverImageKey: text("cover_image_key"),
+    // ISO date (YYYY-MM-DD); null until known.
+    releaseDate: date("release_date"),
+    // Expected tracklist from a platform import (Deezer) — the user uploads their
+    // own audio per track. Empty for albums built only from uploaded songs.
+    tracks: jsonb("tracks").$type<AlbumTrack[]>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    uniqueUserArtistName: unique("albums_user_artist_name_unique").on(t.userId, t.artistId, t.name),
+  }),
+);
+
+export type AlbumRow = typeof albums.$inferSelect;
 
 // Keep in sync with VIDEO_JOB_STATUSES in @syllary/shared.
 export const videoJobStatus = pgEnum("video_job_status", [

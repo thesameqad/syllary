@@ -1,4 +1,12 @@
-import { useRef, useState, type ChangeEvent, type DragEvent, type PointerEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+  type PointerEvent,
+} from "react";
 import { AnimatePresence, motion, useMotionValue, useSpring } from "framer-motion";
 import gsap from "gsap";
 import { useNavigate } from "react-router-dom";
@@ -10,7 +18,7 @@ import {
   MAX_DURATION_SECONDS,
   MAX_FILE_BYTES,
 } from "@syllary/shared";
-import { ApiError, uploadAndProcess } from "@/lib/api";
+import { ApiError, getMetaSuggestions, uploadAndProcess } from "@/lib/api";
 import { extractMetadata, type AudioMeta } from "@/lib/metadata";
 import { ModeSelector } from "@/components/landing/mode-selector";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
@@ -33,9 +41,20 @@ type UploadCardProps = {
   credits?: number | null;
   /** Called after processing starts (credits mode); otherwise we go to /s/:id. */
   onStarted?: (songId: string) => void;
+  /** Prefill artist/album/title (e.g. "Upload into this album" / per-track). */
+  prefillArtist?: string | null;
+  prefillAlbum?: string | null;
+  prefillTitle?: string | null;
 };
 
-export function UploadCard({ mode = "anonymous", credits = null, onStarted }: UploadCardProps) {
+export function UploadCard({
+  mode = "anonymous",
+  credits = null,
+  onStarted,
+  prefillArtist = null,
+  prefillAlbum = null,
+  prefillTitle = null,
+}: UploadCardProps) {
   const navigate = useNavigate();
   const reduced = usePrefersReducedMotion();
   const cardRef = useRef<HTMLDivElement>(null);
@@ -52,6 +71,22 @@ export function UploadCard({ mode = "anonymous", credits = null, onStarted }: Up
   // songs and keeps wait time short. Users who want sharper vocal isolation
   // on hard material can still pick Normal/Pro.
   const [genMode, setGenMode] = useState<GenerationMode>("fast");
+  // Editable artist/album (credits mode) — prefilled from "Upload into album",
+  // then from the file's tags. Pick an existing one (datalist) or type a new one.
+  const [artistInput, setArtistInput] = useState(prefillArtist ?? "");
+  const [albumInput, setAlbumInput] = useState(prefillAlbum ?? "");
+  const [suggest, setSuggest] = useState<{ artists: string[]; albums: string[] }>({
+    artists: [],
+    albums: [],
+  });
+  const datalistId = useId();
+
+  useEffect(() => {
+    if (mode !== "credits") return;
+    getMetaSuggestions()
+      .then(setSuggest)
+      .catch(() => undefined);
+  }, [mode]);
 
   const rotateX = useMotionValue(0);
   const rotateY = useMotionValue(0);
@@ -118,6 +153,10 @@ export function UploadCard({ mode = "anonymous", credits = null, onStarted }: Up
     }
     setFile(f);
     setMeta(m);
+    // Fill empty artist/album fields from the file's tags (don't clobber a
+    // prefilled "upload into album" value or something the user already typed).
+    if (m.artist) setArtistInput((cur) => cur || m.artist!);
+    if (m.album) setAlbumInput((cur) => cur || m.album!);
     setPhase("selected");
     resetTilt();
     const host = cardRef.current;
@@ -149,9 +188,9 @@ export function UploadCard({ mode = "anonymous", credits = null, onStarted }: Up
       const songId = await uploadAndProcess(
         file,
         {
-          title: meta.title,
-          artist: meta.artist,
-          album: meta.album,
+          title: prefillTitle?.trim() || meta.title,
+          artist: artistInput.trim() || meta.artist,
+          album: albumInput.trim() || meta.album,
           year: meta.year,
           durationSeconds: meta.durationSeconds,
           cover: meta.cover,
@@ -300,6 +339,49 @@ export function UploadCard({ mode = "anonymous", credits = null, onStarted }: Up
               </div>
             ) : (
               <>
+                {isCredits && prefillTitle && (
+                  <p className="mt-4 rounded-[10px] border border-pulse/30 bg-pulse/[0.06] px-3 py-2 text-[12px] text-white/70">
+                    Uploading audio for <span className="font-medium text-white">{prefillTitle}</span>
+                  </p>
+                )}
+                {isCredits && (
+                  <div className="mt-4 grid grid-cols-2 gap-2">
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[11px] uppercase tracking-[1.5px] text-white/40">
+                        Artist
+                      </span>
+                      <input
+                        list={`${datalistId}-artists`}
+                        value={artistInput}
+                        onChange={(e) => setArtistInput(e.target.value)}
+                        placeholder="Artist"
+                        className="w-full rounded-[10px] border border-white/10 bg-black/30 px-3 py-2 text-[13px] text-white/90 outline-none transition-colors focus:border-pulse/50"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[11px] uppercase tracking-[1.5px] text-white/40">
+                        Album
+                      </span>
+                      <input
+                        list={`${datalistId}-albums`}
+                        value={albumInput}
+                        onChange={(e) => setAlbumInput(e.target.value)}
+                        placeholder="Album (optional)"
+                        className="w-full rounded-[10px] border border-white/10 bg-black/30 px-3 py-2 text-[13px] text-white/90 outline-none transition-colors focus:border-pulse/50"
+                      />
+                    </label>
+                    <datalist id={`${datalistId}-artists`}>
+                      {suggest.artists.map((a) => (
+                        <option key={a} value={a} />
+                      ))}
+                    </datalist>
+                    <datalist id={`${datalistId}-albums`}>
+                      {suggest.albums.map((a) => (
+                        <option key={a} value={a} />
+                      ))}
+                    </datalist>
+                  </div>
+                )}
                 <div className="mt-4">
                   <label className="mb-1.5 block text-[11px] uppercase tracking-[1.5px] text-white/40">
                     Generation mode

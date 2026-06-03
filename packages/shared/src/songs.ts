@@ -126,6 +126,68 @@ export const metaSuggestionsSchema = z.object({
 });
 export type MetaSuggestions = z.infer<typeof metaSuggestionsSchema>;
 
+// ---- Artist / album entities (organized Library) ---------------------------
+
+export const artistSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  coverUrl: z.string().url().nullable(),
+});
+export type Artist = z.infer<typeof artistSchema>;
+export const artistListSchema = z.array(artistSchema);
+
+/** One expected track from a platform import (the user uploads audio per track). */
+export const albumTrackSchema = z.object({
+  title: z.string(),
+  position: z.number().int().nullable(),
+});
+export type AlbumTrack = z.infer<typeof albumTrackSchema>;
+
+export const albumSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  artistId: z.string().uuid(),
+  coverUrl: z.string().url().nullable(),
+  /** ISO date (YYYY-MM-DD) or null. */
+  releaseDate: z.string().nullable(),
+  /** Imported expected tracklist (empty for upload-built albums). */
+  tracks: z.array(albumTrackSchema).default([]),
+});
+export type Album = z.infer<typeof albumSchema>;
+export const albumListSchema = z.array(albumSchema);
+
+/** Edit an artist entity. */
+export const updateArtistSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+});
+export type UpdateArtist = z.infer<typeof updateArtistSchema>;
+
+/** Edit an album entity. */
+export const updateAlbumSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  releaseDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
+    .nullable()
+    .optional(),
+});
+export type UpdateAlbum = z.infer<typeof updateAlbumSchema>;
+
+/** Import an artist or album catalog from a streaming platform (Deezer). */
+export const catalogImportSchema = z.object({
+  /** A Deezer artist or album URL, or a bare "artist:<id>" / "album:<id>". */
+  url: z.string().min(1).max(500),
+});
+export type CatalogImportRequest = z.infer<typeof catalogImportSchema>;
+
+export const catalogImportResultSchema = z.object({
+  artistId: z.string().uuid().nullable(),
+  artistName: z.string().nullable(),
+  albumsImported: z.number(),
+  tracks: z.number(),
+});
+export type CatalogImportResult = z.infer<typeof catalogImportResultSchema>;
+
 export const songSchema = z.object({
   id: z.string().uuid(),
   status: songStatusSchema,
@@ -169,6 +231,9 @@ export const songSummarySchema = z.object({
   title: z.string(),
   artist: z.string().nullable().default(null),
   album: z.string().nullable().default(null),
+  /** FK to the artist/album entities (null = untagged / anonymous). */
+  artistId: z.string().uuid().nullable().default(null),
+  albumId: z.string().uuid().nullable().default(null),
   status: songStatusSchema,
   /** Sub-stage while status === "processing". null otherwise. */
   stage: z.enum(["separating", "transcribing"]).nullable().default(null),

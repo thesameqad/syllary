@@ -17,6 +17,7 @@ import { getAuthUserId } from "../lib/clerk.js";
 import { ownerHash } from "../lib/hash.js";
 import { presignPut } from "../lib/r2.js";
 import { getOrCreateUser } from "../lib/users.js";
+import { resolveArtistAlbum } from "../lib/catalog.js";
 
 export async function uploadsRoutes(app: FastifyInstance) {
   app.post("/uploads/presign", async (req, reply) => {
@@ -87,6 +88,11 @@ export async function uploadsRoutes(app: FastifyInstance) {
       coverUploadUrl = await presignPut(coverImageKey, coverContentType);
     }
 
+    // Link to artist/album entities for signed-in users (anonymous = strings only).
+    const { artistId, albumId } = userRow
+      ? await resolveArtistAlbum(userRow.id, artist, album)
+      : { artistId: null, albumId: null };
+
     await db.insert(songs).values({
       id,
       status: "pending",
@@ -94,6 +100,8 @@ export async function uploadsRoutes(app: FastifyInstance) {
       title: title ?? filename,
       artist: artist ?? null,
       album: album ?? null,
+      artistId,
+      albumId,
       year: year ?? null,
       r2Key: key,
       coverImageKey,

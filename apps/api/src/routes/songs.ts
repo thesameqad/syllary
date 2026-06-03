@@ -43,6 +43,7 @@ import { buildLyricsFromScribe, realignFromText } from "../lib/transcript.js";
 import { summarizeSong } from "../lib/openrouter.js";
 import { generateCoverImage } from "../lib/cover-image.js";
 import { matchStreamingLinks } from "../lib/music-links.js";
+import { resolveArtistAlbum } from "../lib/catalog.js";
 import { estimateGenerationCost, recordEvent } from "../lib/analytics.js";
 import { getOrCreateUser } from "../lib/users.js";
 
@@ -187,6 +188,8 @@ async function toSongSummary(row: SongRow): Promise<SongSummary> {
     title: row.title ?? row.originalFilename,
     artist: row.artist,
     album: row.album,
+    artistId: row.artistId ?? null,
+    albumId: row.albumId ?? null,
     status: row.status,
     stage: row.stage ?? null,
     durationSeconds: row.durationSeconds,
@@ -685,6 +688,16 @@ export async function songsRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: "Invalid request." });
     const row = await getSongRow(req.params.id);
     if (!row || row.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+
+    // When the artist/album strings change, re-resolve the entity FKs (find-or-
+    // create) so the organized Library stays in sync with the edited metadata.
+    let entityIds: { artistId: string | null; albumId: string | null } | null = null;
+    if (parsed.data.artist !== undefined || parsed.data.album !== undefined) {
+      const effArtist = parsed.data.artist !== undefined ? parsed.data.artist : row.artist;
+      const effAlbum = parsed.data.album !== undefined ? parsed.data.album : row.album;
+      entityIds = await resolveArtistAlbum(user.id, effArtist, effAlbum);
+    }
+
     const [updated] = await db
       .update(songs)
       .set({
@@ -692,6 +705,7 @@ export async function songsRoutes(app: FastifyInstance) {
         ...(parsed.data.isPublic !== undefined ? { isPublic: parsed.data.isPublic } : {}),
         ...(parsed.data.artist !== undefined ? { artist: parsed.data.artist } : {}),
         ...(parsed.data.album !== undefined ? { album: parsed.data.album } : {}),
+        ...(entityIds ? { artistId: entityIds.artistId, albumId: entityIds.albumId } : {}),
         ...(parsed.data.year !== undefined ? { year: parsed.data.year } : {}),
         ...(parsed.data.genre !== undefined ? { genre: parsed.data.genre } : {}),
         ...(parsed.data.links !== undefined ? { links: parsed.data.links } : {}),

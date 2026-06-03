@@ -1,5 +1,11 @@
 import {
   accountSchema,
+  type Album,
+  albumListSchema,
+  type Artist,
+  artistListSchema,
+  type CatalogImportResult,
+  catalogImportResultSchema,
   coverGenerateResponseSchema,
   coverPresignResponseSchema,
   type CoverGenerateResponse,
@@ -27,6 +33,8 @@ import {
   reviewSegmentSchema,
   type Song,
   type SongSummary,
+  type UpdateAlbum,
+  type UpdateArtist,
   type UpdateSong,
   type UpdateVideoJob,
   type VideoJob,
@@ -301,6 +309,128 @@ export async function matchLinks(opts: {
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't find links."), res.status);
   return linkMatchSchema.parse(data);
+}
+
+// ---- Artist / album entities (organized Library) ----
+
+export async function listArtists(): Promise<Artist[]> {
+  const res = await fetch(`${API_BASE}/api/artists`, { headers: { ...(await authHeaders()) } });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't load artists."), res.status);
+  return artistListSchema.parse(data);
+}
+
+export async function listAlbums(): Promise<Album[]> {
+  const res = await fetch(`${API_BASE}/api/albums`, { headers: { ...(await authHeaders()) } });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't load albums."), res.status);
+  return albumListSchema.parse(data);
+}
+
+export async function updateArtist(id: string, body: UpdateArtist): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/artists/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const data: unknown = await res.json().catch(() => ({}));
+    throw new ApiError(errorMessage(data, "Couldn't save the artist."), res.status);
+  }
+}
+
+export async function updateAlbum(id: string, body: UpdateAlbum): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/albums/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const data: unknown = await res.json().catch(() => ({}));
+    throw new ApiError(errorMessage(data, "Couldn't save the album."), res.status);
+  }
+}
+
+function coverUrlFrom(data: unknown): string | null {
+  if (data && typeof data === "object" && "coverUrl" in data) {
+    const { coverUrl } = data as { coverUrl?: unknown };
+    if (typeof coverUrl === "string") return coverUrl;
+  }
+  return null;
+}
+
+type EntityKind = "artists" | "albums";
+
+/** Upload + commit a cover for an artist/album entity (square JPEG blob). */
+export async function uploadEntityCover(
+  kind: EntityKind,
+  id: string,
+  blob: Blob,
+): Promise<string | null> {
+  const presignRes = await fetch(`${API_BASE}/api/${kind}/${id}/cover/presign`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ contentType: "image/jpeg" }),
+  });
+  const presignData: unknown = await presignRes.json();
+  if (!presignRes.ok) {
+    throw new ApiError(errorMessage(presignData, "Couldn't start the upload."), presignRes.status);
+  }
+  const { uploadUrl, key } = coverPresignResponseSchema.parse(presignData);
+  await uploadToR2(uploadUrl, blob, "image/jpeg", () => {});
+  const res = await fetch(`${API_BASE}/api/${kind}/${id}/cover`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ key }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't save the image."), res.status);
+  return coverUrlFrom(data);
+}
+
+/** AI-generate a cover for an entity → uncommitted preview {key,url}. */
+export async function generateEntityCover(
+  kind: EntityKind,
+  id: string,
+  prompt: string,
+  model: CoverModel,
+): Promise<CoverGenerateResponse> {
+  const res = await fetch(`${API_BASE}/api/${kind}/${id}/cover/generate`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ prompt, model }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't generate the cover."), res.status);
+  return coverGenerateResponseSchema.parse(data);
+}
+
+/** Commit a previously-generated entity cover key. Returns the new coverUrl. */
+export async function saveEntityCover(
+  kind: EntityKind,
+  id: string,
+  key: string,
+): Promise<string | null> {
+  const res = await fetch(`${API_BASE}/api/${kind}/${id}/cover`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ key }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't save the image."), res.status);
+  return coverUrlFrom(data);
+}
+
+/** Import an artist/album catalog from a Deezer link (metadata only). */
+export async function importCatalog(url: string): Promise<CatalogImportResult> {
+  const res = await fetch(`${API_BASE}/api/catalog/import`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ url }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't import that."), res.status);
+  return catalogImportResultSchema.parse(data);
 }
 
 /** Distinct artist/album values from the user's other songs, for autosuggest. */
