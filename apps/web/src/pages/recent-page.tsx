@@ -16,6 +16,7 @@ export function RecentPage() {
   const load = useCallback(async () => {
     try {
       setSongs(await listSongs());
+      setError(null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not load your songs.");
     }

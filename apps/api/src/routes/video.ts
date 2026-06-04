@@ -20,6 +20,7 @@ import { type SongRow, songs, users, videoJobs, type VideoJobRow } from "../db/s
 import { getAuthUserId } from "../lib/clerk.js";
 import { presignGet } from "../lib/r2.js";
 import { getOrCreateUser } from "../lib/users.js";
+import { videoArtBrief } from "../lib/openrouter.js";
 import {
   finalizeVideoJob,
   regenerateSegmentImage,
@@ -106,6 +107,8 @@ async function startVideoJob(
       mode,
       model: settings.model,
       styleDescription: settings.styleDescription,
+      // User-confirmed art brief; when set, the pipeline skips re-deriving it.
+      sceneBrief: settings.sceneBrief?.trim() || null,
       aspectRatio: settings.aspectRatio,
       imageSize: settings.imageSize,
       imageQuality: settings.imageQuality,
@@ -164,6 +167,27 @@ export async function videoRoutes(app: FastifyInstance) {
     return reply.send(await toVideoJobDto(job));
   });
 
+  // The AI "art brief" (what the song is about) for the chosen style — shown in
+  // the generate modal so the user can confirm/override the video's direction
+  // before generating. Owner-only. Falls back to the song summary, then "".
+  app.post<{ Params: { id: string } }>("/songs/:id/video/brief", async (req, reply) => {
+    const clerkId = await getAuthUserId(req);
+    if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+    const user = await getOrCreateUser(clerkId);
+    const [song] = await db.select().from(songs).where(eq(songs.id, req.params.id)).limit(1);
+    if (!song || song.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+    const body = (req.body ?? {}) as { style?: unknown };
+    const style = typeof body.style === "string" ? body.style : "";
+    const lines = song.lyrics?.lines.map((l) => l.text) ?? [];
+    let brief = "";
+    try {
+      brief = await videoArtBrief(lines, style);
+    } catch {
+      brief = "";
+    }
+    return reply.send({ brief: brief || song.insights?.summary || "" });
+  });
+
   // Promote a preview to the full music video: reuse the preview's exact settings
   // and start a full autopilot render (replaces the preview in the tab on finish).
   app.post<{ Params: { id: string; model: string } }>(
@@ -195,6 +219,7 @@ export async function videoRoutes(app: FastifyInstance) {
 
       const { job, cost, insufficient } = await startVideoJob(user.id, user.credits, song, {
         styleDescription: prev.styleDescription,
+        sceneBrief: prev.sceneBrief ?? undefined,
         mode: "autopilot",
         model: prev.model,
         aspectRatio: prev.aspectRatio as AspectRatio,

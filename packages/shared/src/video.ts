@@ -18,6 +18,9 @@ export type AspectRatio = z.infer<typeof aspectRatioSchema>;
 /** Request body for POST /api/songs/:id/video. */
 export const createVideoSchema = z.object({
   styleDescription: z.string().trim().min(1).max(2000),
+  /** The overall "what the video is about" direction (the song art brief),
+   *  confirmed/overridden by the user before generating. Drives every scene. */
+  sceneBrief: z.string().max(4000).optional(),
   mode: videoPipelineModeSchema.default("autopilot"),
   model: videoModelSchema.default("fast"),
   aspectRatio: aspectRatioSchema.default("16:9"),

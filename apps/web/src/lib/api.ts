@@ -510,6 +510,23 @@ export async function rateSong(id: string, stars: number): Promise<RatingSummary
   return ratingSummarySchema.parse(data);
 }
 
+/** The AI "what the song is about" brief for the chosen style — prefilled into
+ *  the generate modal so the user can confirm or override the video direction. */
+export async function getVideoBrief(songId: string, style: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/video/brief`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ style }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't analyze the song."), res.status);
+  if (data && typeof data === "object" && "brief" in data) {
+    const { brief } = data as { brief?: unknown };
+    if (typeof brief === "string") return brief;
+  }
+  return "";
+}
+
 /** Kick off lyric-video generation for a song. Returns the created job. */
 export async function createLyricsVideo(
   songId: string,

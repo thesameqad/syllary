@@ -53,14 +53,18 @@ export function LibraryPage() {
   const navigate = useNavigate();
 
   const load = useCallback(async () => {
-    try {
-      const [s, ar, al] = await Promise.all([listSongs(), listArtists(), listAlbums()]);
-      setSongs(s);
-      setArtistRows(ar);
-      setAlbumRows(al);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Could not load your library.");
+    // Settle independently so a failing artists/albums call can't blank the page,
+    // and a failed songs call sets an error (the poll effect retries) rather than
+    // leaving "Loading…" stuck forever.
+    const [s, ar, al] = await Promise.allSettled([listSongs(), listArtists(), listAlbums()]);
+    if (s.status === "fulfilled") {
+      setSongs(s.value);
+      setError(null);
+    } else {
+      setError(s.reason instanceof ApiError ? s.reason.message : "Could not load your library.");
     }
+    if (ar.status === "fulfilled") setArtistRows(ar.value);
+    if (al.status === "fulfilled") setAlbumRows(al.value);
   }, []);
 
   useEffect(() => {
@@ -74,8 +78,11 @@ export function LibraryPage() {
     const busy = songs?.some(
       (s) => s.status === "processing" || s.status === "pending" || s.videoActive,
     );
-    if (!busy) return;
-    const t = setTimeout(() => void load(), 4000);
+    // Also retry when the initial load hasn't succeeded yet (songs still null) so
+    // a transient failure recovers on its own without a manual refresh.
+    const needsRetry = songs === null;
+    if (!busy && !needsRetry) return;
+    const t = setTimeout(() => void load(), needsRetry ? 3000 : 4000);
     return () => clearTimeout(t);
   }, [songs, load]);
 

@@ -674,8 +674,19 @@ export async function songsRoutes(app: FastifyInstance) {
       .from(songs)
       .where(eq(songs.userId, user.id))
       .orderBy(desc(songs.createdAt));
+    // Finalize in-flight songs lazily, but never let one failing finalize (a
+    // transient Replicate/fal error during transcription) 500 the whole list —
+    // that was leaving the Library/Recent page stuck on "Loading…". A failed
+    // finalize just returns the row as-is (still processing); the next poll retries.
     const finalized = await Promise.all(
-      rows.map((r) => (r.status === "processing" ? finalizeIfDone(r) : Promise.resolve(r))),
+      rows.map((r) =>
+        r.status === "processing"
+          ? finalizeIfDone(r).catch((err) => {
+              req.log.warn({ err, songId: r.id }, "finalizeIfDone failed (lazy, list)");
+              return r;
+            })
+          : Promise.resolve(r),
+      ),
     );
     return reply.send(await Promise.all(finalized.map(toSongSummary)));
   });

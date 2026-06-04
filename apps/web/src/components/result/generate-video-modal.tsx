@@ -29,7 +29,7 @@ import {
   type VideoPipelineMode,
   VIDEO_STYLE_PRESETS,
 } from "@syllary/shared";
-import { ApiError, createLyricsVideo } from "@/lib/api";
+import { ApiError, createLyricsVideo, getVideoBrief } from "@/lib/api";
 import { useAccount } from "@/lib/account-context";
 import { useToast } from "@/components/ui/toast";
 import { Modal } from "@/components/ui/modal";
@@ -42,7 +42,7 @@ const STYLE_ICON: Record<VideoModel, typeof Images> = {
   pro: Film,
 };
 
-type Step = "style" | "mode";
+type Step = "style" | "mode" | "direction";
 
 const PLACEHOLDER =
   "e.g. dreamy neon synthwave city at night, cinematic, volumetric haze, deep blues and magenta";
@@ -73,6 +73,11 @@ export function GenerateVideoModal({
   const [previewing, setPreviewing] = useState(false);
   // Manual mode + preview conflict: previews always run on autopilot, so confirm.
   const [confirmPreview, setConfirmPreview] = useState(false);
+  // The video's overall direction (song art brief) — confirmed/overridden on the
+  // last step before generating.
+  const [sceneBrief, setSceneBrief] = useState("");
+  const [briefLoading, setBriefLoading] = useState(false);
+  const [briefLoaded, setBriefLoaded] = useState(false);
 
   // Live price for the chosen settings, computed from the same timeline the
   // renderer will produce — recomputes on every mode/quality/resolution change.
@@ -122,8 +127,25 @@ export function GenerateVideoModal({
       setSubmitting(false);
       setPreviewing(false);
       setConfirmPreview(false);
+      setSceneBrief("");
+      setBriefLoaded(false);
+      setBriefLoading(false);
     }
   }, [open]);
+
+  // Move to the final "direction" step and prefill the AI brief (once).
+  function goToDirection() {
+    setStep("direction");
+    if (briefLoaded) return;
+    setBriefLoading(true);
+    getVideoBrief(song.id, effectiveStyle)
+      .then((b) => setSceneBrief(b))
+      .catch(() => undefined)
+      .finally(() => {
+        setBriefLoaded(true);
+        setBriefLoading(false);
+      });
+  }
 
   // Preview always runs on autopilot — if Manual is selected, confirm first.
   function onPreviewClick() {
@@ -137,6 +159,7 @@ export function GenerateVideoModal({
     try {
       const created = await createLyricsVideo(song.id, {
         styleDescription: effectiveStyle,
+        sceneBrief: sceneBrief.trim() || undefined,
         mode,
         model,
         aspectRatio: "16:9",
@@ -388,9 +411,55 @@ export function GenerateVideoModal({
               </div>
             </div>
 
+            <div className="mt-5 flex items-center justify-between gap-2 border-t border-white/[0.06] pt-4">
+              <Button3D variant="secondary" onClick={() => setStep("style")}>
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </Button3D>
+              <Button3D onClick={goToDirection}>Next</Button3D>
+            </div>
+          </motion.div>
+        )}
+
+        {step === "direction" && (
+          <motion.div
+            key="direction"
+            initial={{ opacity: 0, x: 12 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -12 }}
+            transition={{ duration: 0.18 }}
+          >
+            <div className="mb-3 flex items-start gap-3">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-pulse/25 to-pulse/5 text-pulse shadow-[inset_0_1px_0_rgba(255,255,255,0.15)]">
+                <Wand2 className="h-4 w-4" />
+              </span>
+              <div>
+                <h3 className="text-[14px] font-medium text-white">What's the video about?</h3>
+                <p className="mt-0.5 text-[12px] leading-snug text-white/50">
+                  Based on our analysis, this is what the song is about — we'll use it as the visual
+                  direction for every scene. If we got it wrong, describe what the video should be about.
+                </p>
+              </div>
+            </div>
+
+            {briefLoading ? (
+              <div className="flex items-center gap-2 rounded-[12px] border border-white/10 bg-black/30 px-3.5 py-6 text-[13px] text-white/55">
+                <Loader2 className="h-4 w-4 animate-spin text-pulse" />
+                Analyzing the song…
+              </div>
+            ) : (
+              <textarea
+                value={sceneBrief}
+                onChange={(e) => setSceneBrief(e.target.value)}
+                rows={5}
+                placeholder="Describe what the lyric video should be about — the subject, story, and point of view."
+                className="w-full resize-none rounded-[12px] border border-white/10 bg-black/30 px-3.5 py-3 text-[13px] leading-relaxed text-white/90 outline-none transition-colors placeholder:text-white/30 focus:border-pulse/60 focus:bg-pulse/[0.04]"
+              />
+            )}
+
             <div className="mt-4 rounded-[12px] border border-pulse/20 bg-pulse/[0.06] px-4 py-2.5 text-[12px] text-white/70">
               ✨ Not sure how it'll look? <span className="font-medium text-white">Preview</span>{" "}
-              renders a ~10s sample from the first line for just{" "}
+              renders a ~10s sample for just{" "}
               <span className="font-medium text-white">{previewCost} tokens</span> first.
             </div>
 
@@ -431,20 +500,23 @@ export function GenerateVideoModal({
               </div>
             ) : (
               <div className="mt-5 flex items-center justify-between gap-2 border-t border-white/[0.06] pt-4">
-                <Button3D variant="secondary" onClick={() => setStep("style")}>
+                <Button3D variant="secondary" onClick={() => setStep("mode")}>
                   <ArrowLeft className="h-4 w-4" />
                   Back
                 </Button3D>
                 <div className="flex items-center gap-2">
                   <Button3D
                     variant="secondary"
-                    disabled={previewing || submitting || brokePreview}
+                    disabled={previewing || submitting || brokePreview || briefLoading}
                     onClick={onPreviewClick}
                   >
                     {previewing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
                     {brokePreview ? "Not enough" : `Preview · ${previewCost}`}
                   </Button3D>
-                  <Button3D disabled={submitting || previewing || broke} onClick={() => void generate(false)}>
+                  <Button3D
+                    disabled={submitting || previewing || broke || briefLoading}
+                    onClick={() => void generate(false)}
+                  >
                     {submitting ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
