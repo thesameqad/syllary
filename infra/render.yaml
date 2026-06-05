@@ -107,18 +107,13 @@ services:
       ignoredPaths:
         - "docs/**"
         - "**/*.md"
-    # robots.txt is served as a real static file (apps/web/public/robots.txt).
-    # sitemap.xml is dynamic (built from published rows), so a static site can't
-    # serve it — redirect to the API, which generates it. (When the Cloudflare
-    # SEO worker is deployed it intercepts /sitemap.xml at the edge and serves it
-    # directly, so this redirect is the no-worker fallback.) Specific rules must
-    # come BEFORE the SPA catch-all, which is evaluated last.
+    # robots.txt and sitemap.xml are served as real static files in
+    # apps/web/public/ (both committed). sitemap.xml is a static snapshot of the
+    # API's sitemap — refresh it manually for now (Google Search Console won't
+    # reliably follow a cross-host redirect, so we serve a direct 200 here).
+    # SPA: every other path falls back to index.html so deep links (e.g. /p/:id
+    # public pages) load on a direct hit / refresh.
     routes:
-      - type: redirect
-        source: /sitemap.xml
-        destination: https://api.syllary.com/sitemap.xml
-      # SPA: every other path falls back to index.html so deep links (e.g. /p/:id
-      # public pages) load on a direct hit / refresh.
       - type: rewrite
         source: /*
         destination: /index.html
