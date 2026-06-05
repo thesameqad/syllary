@@ -17,5 +17,4 @@ routes = [
   { pattern = "syllary.com/compare/*", zone_name = "syllary.com" },
   { pattern = "syllary.com/guides/*", zone_name = "syllary.com" },
   { pattern = "syllary.com/sitemap.xml", zone_name = "syllary.com" },
-  { pattern = "syllary.com/robots.txt", zone_name = "syllary.com" },
 ]

@@ -114,13 +114,8 @@ export default {
       });
     }
 
-    if (url.pathname === "/robots.txt") {
-      const res = await fetch(`${env.API}/robots.txt`, { cf: { cacheTtl: 3600 } });
-      return new Response(res.body, {
-        status: res.status,
-        headers: { "content-type": "text/plain; charset=utf-8" },
-      });
-    }
+    // robots.txt is served as a real static file by the site (it disallows the
+    // app/auth surfaces), so the worker deliberately does NOT intercept it.
 
     const songMatch = url.pathname.match(/^\/p\/([0-9a-fA-F-]{36})\/?$/);
     if (songMatch && request.method === "GET") {
