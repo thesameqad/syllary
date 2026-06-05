@@ -89,7 +89,49 @@ podcasters needing timed transcripts, developers (via API/JSON).
 
 ---
 
-## 7. Pricing & free tier
+## 7. Lyric-video types — the visualization ladder (INTERNAL UNDERSTANDING)
+
+Why this section exists: "Lyric video" means wildly different things across tools, and competitors collapse the distinction on purpose (they call flat text-on-a-background a "lyric video" too). This ladder is how we think about it internally and how we bucket competitors. It is the backbone of the lyric-video comparison pages.
+NAMING / MARKETING RULE: The model and vendor names below (WAN, Nano Banana, FLUX, ffmpeg, Seedance, Grok, etc.) are for our internal understanding only. They must NEVER appear on the landing pages, comparison pages, or any marketing material. On the landing pages we describe the experience and the visible difference in plain language — "the words are part of the scene," "the scene moves," "one continuous shot" — never the pipeline. Treat the tech names like a trade secret in copy.
+
+The ladder, simplest → most advanced:
+Type 1 — Text on a background (overlay).
+Plain text rendered over a static or lightly-animated background, highlighting line-by-line, scrolling, or word-by-word. The text is a flat overlay sitting on top of the picture; the background and the words are unrelated layers. Technically this is an ffmpeg text-burn job. The line/scroll/word variants are cosmetic — it's all the same category.
+
+Plain-language description for copy: "lyrics typed over a background."
+This is the ceiling for most competitors (see bucketing note).
+
+Type 2 — Slideshow with the words inside the scene (Syllary's simplest visual mode).
+A sequence of generated images where the text is part of the image itself, not an overlay. If the scene is a fire, the words are written in the fire; if it's a steamy shower glass, the words look steamed onto the glass. The lyrics belong to the world of the picture.
+
+Internal tech: generated stills (fal.ai FLUX / OpenRouter "Nano Banana"), with the lyric composited into the scene rather than burned on top.
+Plain-language description for copy: "the words are part of the scene, not stuck on top of it."
+
+Type 3 — Living scenes (Syllary).
+Type 2, but the scenes move. The still images are animated: leaves rustle, a car drives, rain falls, light flickers. Still delivered as a sequence of distinct scenes, each one alive.
+
+Internal tech: WAN (open-source image-to-video model, github.com/Wan-Video/Wan2.2) applied on top of the generated stills to bring them to motion.
+Plain-language description for copy: "the scenes come alive and move with the song."
+
+Type 4 — Cinematic (Syllary, EARLY BETA — mention lightly).
+Like living scenes, but rendered as one continuous shot instead of a set of separate animated scenes — a single flowing video rather than a slideshow of moving clips. Lyrics are still the focus; this is not a narrative film.
+
+Internal tech: AI-motion video pipeline (OpenRouter Grok / Seedance styles) for continuous generation.
+Status: experimental / early beta. We can mention it exists, but do not over-promise or lead with it yet.
+Plain-language description for copy: "one continuous, flowing video — still all about the words."
+
+Type 5 — Real music video (Syllary does NOT do this).
+Singers performing, characters, a plot — an actual narrative or performance film, the kind tools like OpenArt attempt. We deliberately don't do this. There is no story and no performer; we render what is being sung, visualized. State this plainly when asked so expectations are correct (ties to the §9 "visualization, not music video" rule).
+Competitor-bucketing note (for comparison pages)
+
+QuickLRC / Karadeo (same founder), and essentially every "lyric video maker" in the landscape (Specterr, Rotor, EchoWave, the CapCut/Kapwing route, etc.) top out at Type 1 — text over a background, however nicely highlighted. Their karaoke/lyric "videos" are overlays.
+Syllary's distinguishing range is Types 2–4, where the words live inside generated, often moving scenes. This is the honest, defensible difference — not "we make lyric videos and they don't," but "everyone's lyric video is words-on-a-background; ours puts the words inside a living scene."
+Nobody should claim Type 5. If a competitor markets "AI music videos with a story" (e.g. OpenArt), that's a different product and a different (messier) copyright posture — we don't compete there and don't want to.
+
+The public page renders multiple outputs at once (reinforces the one-engine wedge)
+The public lyrics page (/p/:id) is not just a lyrics reader — on a single page it shows: the dynamic synced lyrics player (Type-1-style reader, with a clickable song-structure bar to jump verse/chorus/etc. and a Dynamic vs Full view toggle), the lyric video (a Type 2–4 scene, with a Theater view), all file downloads (.lrc/.srt/.txt + "More formats" + "Download all"), Share + Embed, and streaming links (Spotify, etc.). This is the strongest single proof of "one engine, many outputs" — the page literally displays them side by side. Lead public-page comparisons with this, not with "we have a public page."
+
+## 8. Pricing & free tier
 
 **Confirmed from code** (`apps/web/src/lib/plans.ts`, `packages/shared/src/account.ts`
 `PLAN_CREDITS`, `packages/shared/src/constants.ts`). Everything runs on **one token wallet** —
@@ -134,7 +176,7 @@ yet. If a free-tier output watermark is wanted for the distribution loop, it sti
 
 ---
 
-## 8. Positioning — why Syllary wins
+## 9. Positioning — why Syllary wins
 
 **Central wedge:** Syllary is the only tool where a single audio upload becomes _all_ the lyrics formats
 **plus** an editor to fix AI mistakes **plus** a public page **plus** a lyric video — all from one timed-lyrics
@@ -157,9 +199,16 @@ Competitor landscape (for comparison/SEO pages):
   Freebeat, TopMediai, EchoWave, Animaker.
 - _Online lyrics platforms:_ Genius, AZLyrics, Lyrics.com, LyricFind, Spotify/Apple Music synced lyrics.
 
+Two formats competitors (notably QuickLRC/Karadeo) export that we currently do not — documented so comparison copy is accurate and so we have a clear rationale if asked.
+
+- .ass (Advanced SubStation Alpha) — a heavily-styled video subtitle format from the anime-fansub world (native to the Aegisub editor). Unlike SRT/VTT, ASS controls font, color, outline, shadow, exact on-screen position, and has built-in karaoke timing tags (\k) for syllable-by-syllable fill/highlight. It exists to make styled karaoke text that gets burned into a video overlay (Type-1 lyric videos). Why we don't support it: our karaoke styling lives inside our own player and our scene-based videos (Types 2–4), so we don't need ASS to deliver a good karaoke experience; it's a video-overlay format, not something streaming/distribution wants. Status: low-priority, feature-parity / SEO only. Could add an "LRC ↔ ASS" path later purely for parity if comparison/SEO pressure justifies it.
+- .pdf — not a synced format at all. A lyrics PDF is just the words laid out as a clean, printable lyric sheet (no timestamps). Real uses: physical liner notes / album inserts, printing to rehearse or hand to a session singer/choir, attaching a lyric sheet to a sync-licensing or publishing contact, or copyright-registration paperwork. It's the "human reads it on paper" output — the opposite end from LRC/TTML (machine-read). Why we don't support it: it's outside the distribution wedge, and our existing .txt export already covers most plain-lyrics needs (PDF would just be "TXT but formatted and printable"). Status: low-priority; one "printable lyric sheet (PDF)" output has genuine search intent and could be added if/when we want it — ASS does not have the same standalone intent.
+
+One-line rule for comparison pages: ASS = styled karaoke video subtitle; PDF = plain printable lyric sheet. Neither is core to distribution (LRC/TTML/SRT/VTT/JSON cover the platforms), so their absence is a deliberate scope choice, not a gap — don't let comparison copy imply we're "missing" a distribution format.
+
 ---
 
-## 9. Brand voice & content notes
+## 10. Brand voice & content notes
 
 - Frame lyric videos as **"visualization,"** not "music videos" — sets correct expectations and sidesteps
   competing with cinematic AI-video tools.
@@ -179,7 +228,7 @@ Competitor landscape (for comparison/SEO pages):
 
 ---
 
-## 10. Copyright boundaries — IMPORTANT (read before any content/marketing)
+## 11. Copyright boundaries — IMPORTANT (read before any content/marketing)
 
 These are hard rules that protect the whole project. They apply to product copy, SEO pages, and any
 Cowork-generated content.
@@ -197,7 +246,7 @@ Cowork-generated content.
 
 ---
 
-## 11. Marketing / growth strategy (summary — see full strategy doc/chat for detail)
+## 12. Marketing / growth strategy (summary — see full strategy doc/chat for detail)
 
 Two allowed buckets only (founder has no time for manual community/forum work):
 
@@ -216,7 +265,50 @@ or penalized.
 
 ---
 
-## 12. Tech notes (for Code / Cowork)
+# 13. Mini-tools (standalone free tools off the same engine)
+
+Each mini-tool is a small, single-purpose tool at its own URL that does one job free, then funnels to the full engine ("want the synced files / video / public page? →"). Each is its own search entry point and top-of-funnel surface (see §11 growth strategy). They reuse existing components (wavesurfer waveform, the correction editor, the packages/lyrics export generators, the public-page reader) wherever possible.
+Cost: tools that call transcription, the LLM, image gen, or video are token-metered exactly like the main app (§7). Pure client-side tools cost nothing to run and make the best free SEO bait. Publishing/karaoke tools carry the own/AI-songs-only opt-in (§10).
+The tools are grouped by build effort.
+13a. Already in the engine — just expose as a standalone tool (cheapest)
+Reuse capabilities Syllary already has (§3 / §12). Work is mostly UI extraction + a dedicated route, not new core tech.
+
+Audio-to-text transcriber — Demucs → ElevenLabs Scribe pipeline; upload → transcript out (no timing/export step). Token-metered.
+SRT generator from audio — same pipeline, output limited to .srt (LYRIC_FORMATS).
+VTT caption generator — same pipeline, output limited to .vtt.
+Karaoke file maker — transcription + word-level timing → enhanced LRC / karaoke page. Own/AI songs only.
+LRC editor (online) — the existing correction editor + wavesurfer; allow paste/upload of an existing .lrc to edit, not just freshly-generated. Live preview already exists.
+Lyric timestamp viewer — wavesurfer waveform + timed-lyrics render; read-only view of timestamps against the waveform.
+Waveform viewer for lyrics timing — wavesurfer.js. Overlaps the timestamp viewer — merge or sharpen the distinction before shipping two near-duplicate pages (§11 near-duplicate risk).
+Time-synced lyrics preview player — reuse the public-page (/p/:id) Type-1 reader component; paste LRC + audio → karaoke preview.
+Universal lyrics format converter — packages/lyrics LYRIC_FORMATS generators; parse any supported in-format → re-emit any out-format. Exclude .ass/.pdf (not supported, §4) and no JSON-as-input (converter-realism rule, see §4 / landing-page brief).
+Song summary generator — OpenRouter → Gemini 2.5 Flash; already generated for the public page, expose standalone. Token-metered.
+Album/song cover generator — fal.ai FLUX (standard, 20 tokens) / Nano Banana (premium, 430); already generated for albums/artists/songs, expose standalone.
+Streaming link finder — iTunes Search + Odesli (keyless Deezer); paste/identify song → fetch streaming links.
+Find the chorus — derived from the auto section-labeling (Gemini 2.5 Flash) already produced; a focused view of existing labels.
+
+13b. Pure client-side — net-new but cheap (no server/AI cost)
+String/format/math utilities that run entirely in the browser. Zero token cost, strong free SEO bait, small build each.
+
+LRC validator/checker — parse a pasted/uploaded .lrc; flag malformed/out-of-order timestamps, missing tags, and encoding issues (GB2312/GBK vs UTF-8 is a known LRC pitfall). No audio needed.
+LRC offset adjuster — add/subtract a fixed offset (ms) to every timestamp, or set the [offset:] tag. Explain positive vs negative (text shows sooner/later).
+Plain lyrics extractor — strip all timing/markup from LRC/TTML/SRT/VTT → clean plain text. This is also the engine behind the printable lyric-sheet page — build once, surface twice.
+Lyrics word counter — count words, lines, unique words from pasted lyrics or an uploaded file. Lowest-effort tool in the set.
+
+13c. Net-new audio analysis (real DSP — build only if wanted)
+Do not exist in the engine today; require actual audio signal processing. Nice top-of-funnel but tangential to the distribution wedge — decide build vs. defer per tool.
+
+BPM detector — tempo estimation via Web Audio API + onset/autocorrelation, or a small server step. No transcription needed. Net-new.
+Song key finder — chroma / pitch-class key profiling (Krumhansl-style) on decoded audio. Net-new, heavier than BPM.
+Song duration / lead-in silence detector — duration is trivial (decode metadata); lead-in silence = amplitude-threshold scan. Ties to the offset concept. Mostly client-side and cheap — fine to just do.
+
+13d. Build order
+
+13a first — highest leverage; reuses what's built and directly showcases the engine.
+13b next — cheap client-side utilities, no cost.
+13c last / optional — BPM and key finder are the only items needing new DSP; duration/silence is cheap anytime.
+
+## 14. Tech notes (for Code / Cowork)
 
 - App was built with Claude Code. **Stack (confirmed from the code — this supersedes any older
   "locked stack" notes):**

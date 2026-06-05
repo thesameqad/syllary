@@ -8,6 +8,7 @@ import {
 } from "@syllary/shared";
 import type { UserRow } from "../db/schema.js";
 import { env } from "../env.js";
+import { isAdminClerkId } from "../lib/admin.js";
 import { getAuthUserId } from "../lib/clerk.js";
 import { getOrCreateCustomer, isAllowedPrice, stripe } from "../lib/stripe.js";
 import { reconcileCustomer } from "../lib/subscription.js";
@@ -25,7 +26,7 @@ function priceIdFor(tier: CheckoutRequest["tier"], period: BillingPeriod): strin
   return map[tier][period];
 }
 
-function toAccount(user: UserRow): Account {
+function toAccount(user: UserRow, isAdmin: boolean): Account {
   return {
     plan: user.plan as Plan,
     credits: user.credits,
@@ -34,6 +35,7 @@ function toAccount(user: UserRow): Account {
     songsLifetime: user.songsLifetime,
     currentPeriodEnd: user.currentPeriodEnd ? user.currentPeriodEnd.toISOString() : null,
     hasSubscription: Boolean(user.stripeSubscriptionId),
+    isAdmin,
   };
 }
 
@@ -51,7 +53,7 @@ export async function billingRoutes(app: FastifyInstance) {
         req.log.error(err);
       }
     }
-    return reply.send(toAccount(user));
+    return reply.send(toAccount(user, isAdminClerkId(clerkId)));
   });
 
   app.post("/billing/checkout", async (req, reply) => {

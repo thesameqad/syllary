@@ -53,6 +53,9 @@ const envSchema = z.object({
   // Spotify URL). Create a free app at developer.spotify.com to get these.
   SPOTIFY_CLIENT_ID: z.string().optional(),
   SPOTIFY_CLIENT_SECRET: z.string().optional(),
+  // Comma-separated Clerk user ids allowed into the landing-page management
+  // dashboard (admin API + UI). Empty = no admins (landing admin locked down).
+  ADMIN_CLERK_IDS: z.string().default(""),
   // Optional so the API still runs (anonymous-only) before auth/billing are configured.
   CLERK_SECRET_KEY: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),

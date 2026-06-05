@@ -44,7 +44,7 @@ import { summarizeSong } from "../lib/openrouter.js";
 import { generateCoverImage } from "../lib/cover-image.js";
 import { matchStreamingLinks } from "../lib/music-links.js";
 import { resolveArtistAlbum } from "../lib/catalog.js";
-import { estimateGenerationCost, recordEvent } from "../lib/analytics.js";
+import { estimateGenerationCost, firstTouchLandingSlug, recordEvent } from "../lib/analytics.js";
 import { getOrCreateUser } from "../lib/users.js";
 
 // Two Replicate steps (Demucs + WhisperX), so allow more headroom than one.
@@ -382,10 +382,24 @@ async function finalizeIfDone(row: SongRow): Promise<SongRow> {
     // Funnel event — fires once because the guarded UPDATE only matches once.
     if (updated) {
       const cost = estimateGenerationCost(duration, lyrics);
+      // First-touch attribution: which SEO landing page this owner arrived from.
+      const landingSlug = await firstTouchLandingSlug(updated.ownerHash);
+      if (landingSlug) {
+        await db
+          .update(songs)
+          .set({ acquisitionLandingSlug: landingSlug })
+          .where(eq(songs.id, updated.id));
+      }
       await recordEvent("generated", {
         ownerHash: updated.ownerHash,
         userId: updated.userId,
-        props: { songId: updated.id, url: `${env.APP_URL}/s/${updated.id}`, durationSeconds: duration, ...cost },
+        props: {
+          songId: updated.id,
+          url: `${env.APP_URL}/s/${updated.id}`,
+          durationSeconds: duration,
+          ...(landingSlug ? { landingSlug } : {}),
+          ...cost,
+        },
       });
     }
     return updated ?? (await getSongRow(row.id)) ?? row;

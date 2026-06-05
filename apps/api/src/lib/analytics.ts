@@ -1,4 +1,4 @@
-import { and, eq, gte } from "drizzle-orm";
+import { and, asc, eq, gte, sql } from "drizzle-orm";
 import type { Lyrics } from "@syllary/shared";
 import { db } from "../db/client.js";
 import { analyticsEvents } from "../db/schema.js";
@@ -26,10 +26,32 @@ export async function recordEvent(stage: AnalyticsStage, opts: EventOpts): Promi
   }
 }
 
-/** Record a site visit, deduped to one per identity (ownerHash) per UTC day so
- *  repeat page-loads don't bloat the table. */
-export async function recordVisit(ownerHash: string, userId?: string | null): Promise<void> {
+type VisitOpts = { userId?: string | null; landingSlug?: string | null; referrer?: string | null };
+
+/** Record a site visit. Deduped to one per identity (ownerHash) per UTC day so
+ *  repeat page-loads don't bloat the table — EXCEPT we always capture the first
+ *  visit that carries a landing slug (first-touch attribution), so a later
+ *  landing arrival isn't swallowed by an earlier plain page-load that day. */
+export async function recordVisit(ownerHash: string, opts: VisitOpts = {}): Promise<void> {
   try {
+    const landingSlug = opts.landingSlug ?? null;
+    const props =
+      landingSlug || opts.referrer
+        ? { ...(landingSlug ? { landingSlug } : {}), ...(opts.referrer ? { referrer: opts.referrer } : {}) }
+        : null;
+
+    if (landingSlug) {
+      // First-touch: only record a landing visit if this identity has no prior
+      // landing-attributed visit yet.
+      const prior = await firstTouchLandingSlug(ownerHash);
+      if (prior) return;
+      await db
+        .insert(analyticsEvents)
+        .values({ stage: "visited", ownerHash, userId: opts.userId ?? null, props });
+      return;
+    }
+
+    // Non-landing visit: keep the cheap one-per-day dedup.
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const [recent] = await db
       .select({ id: analyticsEvents.id })
@@ -45,9 +67,32 @@ export async function recordVisit(ownerHash: string, userId?: string | null): Pr
     if (recent) return;
     await db
       .insert(analyticsEvents)
-      .values({ stage: "visited", ownerHash, userId: userId ?? null });
+      .values({ stage: "visited", ownerHash, userId: opts.userId ?? null });
   } catch {
     // ignore
+  }
+}
+
+/** The landing slug of an identity's earliest landing-attributed visit, or null.
+ *  Drives first-touch attribution onto songs (at generation) and users (at the
+ *  first authed visit). Best-effort: never throws. */
+export async function firstTouchLandingSlug(ownerHash: string): Promise<string | null> {
+  try {
+    const [row] = await db
+      .select({ slug: sql<string | null>`${analyticsEvents.props}->>'landingSlug'` })
+      .from(analyticsEvents)
+      .where(
+        and(
+          eq(analyticsEvents.stage, "visited"),
+          eq(analyticsEvents.ownerHash, ownerHash),
+          sql`${analyticsEvents.props}->>'landingSlug' is not null`,
+        ),
+      )
+      .orderBy(asc(analyticsEvents.createdAt))
+      .limit(1);
+    return row?.slug ?? null;
+  } catch {
+    return null;
   }
 }
 

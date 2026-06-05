@@ -1,8 +1,21 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { users, type UserRow } from "../db/schema.js";
 import { getClerkProfile } from "./clerk.js";
 import { recordEvent } from "./analytics.js";
+
+/** Stamp the account's first-touch acquisition landing slug, once. No-op if it
+ *  was already set (so the earliest source wins). Best-effort: never throws. */
+export async function stampAcquisition(userId: string, slug: string): Promise<void> {
+  try {
+    await db
+      .update(users)
+      .set({ acquisitionLandingSlug: slug, acquisitionAt: new Date() })
+      .where(and(eq(users.id, userId), isNull(users.acquisitionLandingSlug)));
+  } catch {
+    // attribution is best-effort
+  }
+}
 
 /** Resolve our user id from a Clerk id without creating a row. */
 export async function findUserId(clerkUserId: string): Promise<string | null> {

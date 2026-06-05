@@ -8,5 +8,7 @@
     "types": [],
     "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "comment": "Tests use node:test/node:assert and run via tsx; exclude them from the browser-safe lib typecheck.",
+  "exclude": ["src/**/*.test.ts"]
 }

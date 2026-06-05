@@ -30,9 +30,18 @@ export function useWavesurfer(audioUrl: string | null) {
     ws.on("play", () => setIsPlaying(true));
     ws.on("pause", () => setIsPlaying(false));
     ws.on("finish", () => setIsPlaying(false));
+    // Swallow load aborts (e.g. when destroyed mid-load under React StrictMode's
+    // double-mount) so they don't surface as an unhandled error.
+    ws.on("error", () => undefined);
 
     return () => {
-      ws.destroy();
+      // destroy() can throw if it runs while the audio is still loading (the
+      // fetch is aborted) — harmless, so guard it.
+      try {
+        ws.destroy();
+      } catch {
+        // ignore
+      }
       wsRef.current = null;
       setIsReady(false);
       setIsPlaying(false);

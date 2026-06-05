@@ -1,9 +1,9 @@
-import { Clock, Library, LayoutDashboard, Upload } from "lucide-react";
+import { Clock, Library, LayoutDashboard, Megaphone, Upload } from "lucide-react";
 import { Link, Navigate, NavLink, Outlet } from "react-router-dom";
 import { SignedIn, SignedOut, UserButton } from "@clerk/clerk-react";
 import { LogoWordmark } from "@/components/logo";
 import { UserCard } from "@/components/dashboard/user-card";
-import { AccountProvider } from "@/lib/account-context";
+import { AccountProvider, useAccount } from "@/lib/account-context";
 import { authConfigured } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +14,13 @@ const NAV = [
   { to: "/library", label: "Library", icon: Library },
 ];
 
+const ADMIN_NAV = [{ to: "/admin/landing", label: "Landing pages", icon: Megaphone }];
+
+function useNavItems() {
+  const { account } = useAccount();
+  return account?.isAdmin ? [...NAV, ...ADMIN_NAV] : NAV;
+}
+
 function navClass({ isActive }: { isActive: boolean }) {
   return cn(
     "flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors",
@@ -22,6 +29,7 @@ function navClass({ isActive }: { isActive: boolean }) {
 }
 
 export function Shell({ children }: { children: React.ReactNode }) {
+  const navItems = useNavItems();
   return (
     <div className="flex h-dvh overflow-hidden bg-void text-white">
       <aside className="hidden w-60 shrink-0 flex-col border-r border-white/[0.06] bg-[#0c0c0c] p-5 md:flex">
@@ -29,7 +37,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <LogoWordmark />
         </Link>
         <nav className="flex flex-col gap-1">
-          {NAV.map((item) => (
+          {navItems.map((item) => (
             <NavLink key={item.to} to={item.to} className={navClass}>
               <item.icon className="h-4 w-4" />
               {item.label}
@@ -42,7 +50,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="flex shrink-0 items-center gap-3 border-b border-white/[0.06] px-6 py-3.5">
           <div className="flex items-center gap-1 overflow-x-auto md:hidden">
-            {NAV.map((item) => (
+            {navItems.map((item) => (
               <NavLink key={item.to} to={item.to} className={navClass}>
                 <item.icon className="h-4 w-4" />
               </NavLink>

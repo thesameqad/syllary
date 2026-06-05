@@ -51,6 +51,10 @@ services:
       # Clerk production backend key (sk_live_...)
       - key: CLERK_SECRET_KEY
         sync: false
+      # Comma-separated Clerk user ids allowed into the landing-page management
+      # dashboard (admin API + UI). Empty = locked down.
+      - key: ADMIN_CLERK_IDS
+        sync: false
       # Stable salt for anonymous IP+UA hashing — must NOT change after launch.
       - key: IP_HASH_SALT
         generateValue: true
