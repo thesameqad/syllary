@@ -5,6 +5,7 @@ import { LandingPage } from "@/components/landing/landing-page";
 import { ResultPage } from "@/pages/result-page";
 import { PublicPage } from "@/pages/public-page";
 import { EmbedPage } from "@/pages/embed-page";
+import { SeoLandingPage } from "@/pages/seo-landing-page";
 import { SignInPage, SignUpPage } from "@/pages/auth-pages";
 import { AccountPage } from "@/pages/account-page";
 import { DashboardLayout } from "@/components/dashboard/dashboard-layout";
@@ -13,6 +14,8 @@ import { UploadPage } from "@/pages/upload-page";
 import { RecentPage } from "@/pages/recent-page";
 import { LibraryPage } from "@/pages/library-page";
 import { UpgradePage } from "@/pages/upgrade-page";
+import { LandingListPage } from "@/pages/admin/landing-list";
+import { LandingEditPage } from "@/pages/admin/landing-edit";
 import { authConfigured } from "@/lib/auth";
 import { trackVisit } from "@/lib/api";
 import { ToastProvider } from "@/components/ui/toast";
@@ -42,6 +45,12 @@ export function App() {
       <Route path="/s/:songId" element={<ResultPage />} />
       <Route path="/p/:songId" element={<PublicPage />} />
       <Route path="/embed/:songId" element={<EmbedPage />} />
+      {/* Programmatic SEO landing pages — section-prefixed slugs (splat supports
+          multi-segment slugs). Kept after the app routes so static paths win. */}
+      <Route path="/convert/*" element={<SeoLandingPage />} />
+      <Route path="/tools/*" element={<SeoLandingPage />} />
+      <Route path="/compare/*" element={<SeoLandingPage />} />
+      <Route path="/guides/*" element={<SeoLandingPage />} />
       <Route path="/sign-in/*" element={<SignInPage />} />
       <Route path="/sign-up/*" element={<SignUpPage />} />
       <Route path="/account" element={<AccountPage />} />
@@ -51,6 +60,9 @@ export function App() {
         <Route path="/recent" element={<RecentPage />} />
         <Route path="/library" element={<LibraryPage />} />
         <Route path="/upgrade" element={<UpgradePage />} />
+        <Route path="/admin/landing" element={<LandingListPage />} />
+        <Route path="/admin/landing/new" element={<LandingEditPage />} />
+        <Route path="/admin/landing/:id" element={<LandingEditPage />} />
       </Route>
       </Routes>
     </ToastProvider>

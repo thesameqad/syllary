@@ -8,6 +8,8 @@ export type SeoConfig = {
   canonical?: string;
   ogType?: string;
   image?: string;
+  /** When true, emits <meta name="robots" content="noindex"> for this page. */
+  noindex?: boolean;
   /** schema.org JSON-LD object injected as <script type="application/ld+json">. */
   jsonLd?: Record<string, unknown>;
 };
@@ -71,6 +73,8 @@ export function useSeo(config: SeoConfig | null) {
     tags.push({ attr: "name", key: "twitter:title", content: config.title });
     if (desc) tags.push({ attr: "name", key: "twitter:description", content: desc });
     if (image) tags.push({ attr: "name", key: "twitter:image", content: image });
+
+    if (config.noindex) tags.push({ attr: "name", key: "robots", content: "noindex" });
 
     for (const t of tags) track(setMeta(t));
     if (url) track(setLink("canonical", url));

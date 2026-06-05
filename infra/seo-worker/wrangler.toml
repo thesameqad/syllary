@@ -12,5 +12,10 @@ API = "https://api.syllary.com"
 # and is served straight from Render via Cloudflare. Update zone_name to match.
 routes = [
   { pattern = "syllary.com/p/*", zone_name = "syllary.com" },
+  { pattern = "syllary.com/convert/*", zone_name = "syllary.com" },
+  { pattern = "syllary.com/tools/*", zone_name = "syllary.com" },
+  { pattern = "syllary.com/compare/*", zone_name = "syllary.com" },
+  { pattern = "syllary.com/guides/*", zone_name = "syllary.com" },
   { pattern = "syllary.com/sitemap.xml", zone_name = "syllary.com" },
+  { pattern = "syllary.com/robots.txt", zone_name = "syllary.com" },
 ]

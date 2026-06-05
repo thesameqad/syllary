@@ -33,6 +33,10 @@ export const accountSchema = z.object({
   songsLifetime: z.number(),
   currentPeriodEnd: z.string().nullable(),
   hasSubscription: z.boolean(),
+  /** True when the signed-in user is in the admin allowlist (ADMIN_CLERK_IDS).
+   *  Gates the landing-page management dashboard in the UI; the API enforces it
+   *  independently. */
+  isAdmin: z.boolean().default(false),
 });
 export type Account = z.infer<typeof accountSchema>;
 

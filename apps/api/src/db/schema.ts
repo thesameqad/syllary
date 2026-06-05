@@ -14,9 +14,11 @@ import {
 import type {
   AlbumTrack,
   AudioFeatures,
+  FaqItem,
   GenerationMode,
   ImageQuality,
   ImageSize,
+  LandingBlock,
   Lyrics,
   SongInsights,
   SongLink,
@@ -69,10 +71,16 @@ export const songs = pgTable("songs", {
   latestVideoKey: text("latest_video_key"),
   // Which lyric-video style is shown on the public page. Null = none chosen.
   publicVideoModel: text("public_video_model").$type<VideoModel>(),
+  // First-touch SEO landing page this song's owner arrived from (slug, no
+  // leading slash). Stamped at generation from the earliest "visited" event for
+  // this owner's hash; powers per-landing funnel attribution.
+  acquisitionLandingSlug: text("acquisition_landing_slug"),
   error: text("error"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => ({
+  acquisitionIdx: index("songs_acquisition_idx").on(t.acquisitionLandingSlug),
+}));
 
 export type SongRow = typeof songs.$inferSelect;
 
@@ -216,9 +224,16 @@ export const users = pgTable("users", {
   songsThisPeriod: integer("songs_this_period").notNull().default(0),
   songsLifetime: integer("songs_lifetime").notNull().default(0),
   currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
+  // First-touch SEO landing page this account arrived from (slug, no leading
+  // slash). Stamped once on the first authed visit; powers per-landing
+  // registration + upgrade attribution.
+  acquisitionLandingSlug: text("acquisition_landing_slug"),
+  acquisitionAt: timestamp("acquisition_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => ({
+  acquisitionIdx: index("users_acquisition_idx").on(t.acquisitionLandingSlug),
+}));
 
 export type UserRow = typeof users.$inferSelect;
 
@@ -271,3 +286,51 @@ export const analyticsEvents = pgTable(
 );
 
 export type AnalyticsEventRow = typeof analyticsEvents.$inferSelect;
+
+// Keep in sync with the landing schemas in @syllary/shared.
+export const landingCategory = pgEnum("landing_category", [
+  "convert",
+  "tools",
+  "compare",
+  "guides",
+]);
+export const landingRenderType = pgEnum("landing_render_type", ["content", "tool"]);
+export const landingStatus = pgEnum("landing_status", ["draft", "published"]);
+
+// Programmatic SEO landing pages. One row per page; rendered by a single dynamic
+// template (apps/web) and made crawlable by the SEO worker, which injects
+// `rendered_html` + meta into the static shell. `slug` is the full path after
+// the domain (no leading slash), e.g. "convert/lrc-to-ttml".
+export const landingPages = pgTable(
+  "landing_pages",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    slug: text("slug").notNull(),
+    category: landingCategory("category").notNull(),
+    renderType: landingRenderType("render_type").notNull().default("content"),
+    // Registry key of the mini-tool to mount (render_type = 'tool').
+    toolKey: text("tool_key"),
+    title: text("title").notNull(),
+    metaTitle: text("meta_title").notNull(),
+    metaDescription: text("meta_description").notNull(),
+    ogImageKey: text("og_image_key"),
+    blocks: jsonb("blocks").$type<LandingBlock[]>().notNull().default([]),
+    faq: jsonb("faq").$type<FaqItem[]>(),
+    // Static HTML snapshot of the body, generated at publish for crawlers.
+    renderedHtml: text("rendered_html"),
+    status: landingStatus("status").notNull().default("draft"),
+    noindex: boolean("noindex").notNull().default(false),
+    canonicalUrl: text("canonical_url"),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    createdBy: text("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    slugUnique: unique("landing_pages_slug_unique").on(t.slug),
+    statusIdx: index("landing_pages_status_idx").on(t.status),
+    categoryIdx: index("landing_pages_category_idx").on(t.category),
+  }),
+);
+
+export type LandingPageRow = typeof landingPages.$inferSelect;

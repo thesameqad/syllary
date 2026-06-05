@@ -15,6 +15,18 @@ import {
   linkMatchSchema,
   type MetaSuggestions,
   metaSuggestionsSchema,
+  type SongInsights,
+  songInsightsSchema,
+  type ToolSectionsResponse,
+  toolSectionsResponseSchema,
+  type CreateLanding,
+  type LandingAdmin,
+  landingAdminSchema,
+  type LandingFunnel,
+  landingFunnelSchema,
+  type LandingPage,
+  landingPageSchema,
+  type UpdateLanding,
   presignResponseSchema,
   publicSongSchema,
   ratingSummarySchema,
@@ -477,12 +489,17 @@ export async function deleteSong(id: string): Promise<void> {
   }
 }
 
-/** Fire-and-forget funnel "visited" ping. Never throws. */
+/** Fire-and-forget funnel "visited" ping. Sends the current path + referrer so
+ *  the server can attribute SEO-landing arrivals (first-touch). Never throws. */
 export async function trackVisit(): Promise<void> {
   try {
     await fetch(`${API_BASE}/api/track/visit`, {
       method: "POST",
-      headers: { ...(await authHeaders()) },
+      headers: { "content-type": "application/json", ...(await authHeaders()) },
+      body: JSON.stringify({
+        path: window.location.pathname + window.location.search,
+        referrer: document.referrer || null,
+      }),
       keepalive: true,
     });
   } catch {
@@ -638,4 +655,140 @@ export async function openBillingPortal(): Promise<string> {
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not open billing portal."), res.status);
   return urlFrom(data);
+}
+
+// ---------------------------------------------------------------------------
+// Programmatic SEO landing pages.
+// ---------------------------------------------------------------------------
+
+/** Public: fetch a published landing page by full slug (may contain "/"). */
+export async function getLanding(slug: string): Promise<LandingPage> {
+  const res = await fetch(`${API_BASE}/api/landing/${slug}`, {
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "This page isn't available."), res.status);
+  return landingPageSchema.parse(data);
+}
+
+export async function listLandingPages(params?: {
+  status?: string;
+  category?: string;
+  q?: string;
+}): Promise<LandingAdmin[]> {
+  const qs = new URLSearchParams(
+    Object.entries(params ?? {}).filter(([, v]) => Boolean(v)) as [string, string][],
+  ).toString();
+  const res = await fetch(`${API_BASE}/api/admin/landing${qs ? `?${qs}` : ""}`, {
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not load pages."), res.status);
+  return landingAdminSchema.array().parse(data);
+}
+
+export async function getLandingPage(id: string): Promise<LandingAdmin> {
+  const res = await fetch(`${API_BASE}/api/admin/landing/${id}`, {
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not load the page."), res.status);
+  return landingAdminSchema.parse(data);
+}
+
+export async function createLandingPage(input: CreateLanding): Promise<LandingAdmin> {
+  const res = await fetch(`${API_BASE}/api/admin/landing`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(input),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not create the page."), res.status);
+  return landingAdminSchema.parse(data);
+}
+
+export async function updateLandingPage(id: string, patch: UpdateLanding): Promise<LandingAdmin> {
+  const res = await fetch(`${API_BASE}/api/admin/landing/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(patch),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not save the page."), res.status);
+  return landingAdminSchema.parse(data);
+}
+
+export async function setLandingPublished(id: string, published: boolean): Promise<LandingAdmin> {
+  const res = await fetch(
+    `${API_BASE}/api/admin/landing/${id}/${published ? "publish" : "unpublish"}`,
+    { method: "POST", headers: { ...(await authHeaders()) } },
+  );
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not change publish state."), res.status);
+  return landingAdminSchema.parse(data);
+}
+
+export async function deleteLandingPage(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/admin/landing/${id}`, {
+    method: "DELETE",
+    headers: { ...(await authHeaders()) },
+  });
+  if (!res.ok) {
+    const data: unknown = await res.json().catch(() => ({}));
+    throw new ApiError(errorMessage(data, "Could not delete the page."), res.status);
+  }
+}
+
+export async function getLandingAnalytics(): Promise<LandingFunnel[]> {
+  const res = await fetch(`${API_BASE}/api/admin/landing/analytics`, {
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not load analytics."), res.status);
+  return landingFunnelSchema.array().parse(data);
+}
+
+// ---------------------------------------------------------------------------
+// Server-backed mini-tools.
+// ---------------------------------------------------------------------------
+
+/** Free, anonymous: find streaming links for a title/artist or a pasted URL. */
+export async function getToolLinks(params: {
+  title?: string;
+  artist?: string;
+  url?: string;
+}): Promise<LinkMatch> {
+  const qs = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => Boolean(v)) as [string, string][],
+  ).toString();
+  const res = await fetch(`${API_BASE}/api/tools/links?${qs}`, {
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't find links."), res.status);
+  return linkMatchSchema.parse(data);
+}
+
+/** Metered (sign-in required): AI summary of pasted lyrics. */
+export async function generateToolSummary(text: string): Promise<SongInsights> {
+  const res = await fetch(`${API_BASE}/api/tools/summary`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ text }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't summarize."), res.status);
+  return songInsightsSchema.parse(data);
+}
+
+/** Metered (sign-in required): detect sections / the chorus in pasted lyrics. */
+export async function findChorus(text: string): Promise<ToolSectionsResponse> {
+  const res = await fetch(`${API_BASE}/api/tools/sections`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ text }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't analyze the lyrics."), res.status);
+  return toolSectionsResponseSchema.parse(data);
 }
