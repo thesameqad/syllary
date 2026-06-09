@@ -363,6 +363,28 @@ export async function updateAlbum(id: string, body: UpdateAlbum): Promise<void> 
   }
 }
 
+export async function deleteArtist(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/artists/${id}`, {
+    method: "DELETE",
+    headers: { ...(await authHeaders()) },
+  });
+  if (!res.ok) {
+    const data: unknown = await res.json().catch(() => ({}));
+    throw new ApiError(errorMessage(data, "Couldn't delete the artist."), res.status);
+  }
+}
+
+export async function deleteAlbum(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/albums/${id}`, {
+    method: "DELETE",
+    headers: { ...(await authHeaders()) },
+  });
+  if (!res.ok) {
+    const data: unknown = await res.json().catch(() => ({}));
+    throw new ApiError(errorMessage(data, "Couldn't delete the album."), res.status);
+  }
+}
+
 function coverUrlFrom(data: unknown): string | null {
   if (data && typeof data === "object" && "coverUrl" in data) {
     const { coverUrl } = data as { coverUrl?: unknown };
@@ -596,6 +618,22 @@ export async function generateFullVideo(songId: string, model: VideoModel): Prom
   });
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not start the full video."), res.status);
+  return videoJobSchema.parse(data);
+}
+
+/** Create a new style reusing another finished style's frames (skips image
+ *  generation — charges only the motion step). */
+export async function createVideoFromFrames(
+  songId: string,
+  targetModel: VideoModel,
+  sourceModel: VideoModel,
+): Promise<VideoJob> {
+  const res = await fetch(
+    `${API_BASE}/api/songs/${songId}/videos/${targetModel}/from/${sourceModel}`,
+    { method: "POST", headers: { ...(await authHeaders()) } },
+  );
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not start the video."), res.status);
   return videoJobSchema.parse(data);
 }
 

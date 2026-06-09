@@ -488,10 +488,7 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
             open={detailsOpen}
             song={song}
             onClose={() => setDetailsOpen(false)}
-            onSaved={(updated) => {
-              applyUpdate(updated);
-              setDetailsOpen(false);
-            }}
+            onSaved={applyUpdate}
           />
           <ManualSyncEditor
             open={syncOpen}

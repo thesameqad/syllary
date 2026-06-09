@@ -1,9 +1,17 @@
 import { useRef, useState } from "react";
-import { Disc3, Image as ImageIcon, Loader2, User } from "lucide-react";
-import { ApiError, updateAlbum, updateArtist, uploadEntityCover } from "@/lib/api";
+import { Disc3, Image as ImageIcon, Loader2, Sparkles, User } from "lucide-react";
+import {
+  ApiError,
+  generateEntityCover,
+  saveEntityCover,
+  updateAlbum,
+  updateArtist,
+  uploadEntityCover,
+} from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { Modal } from "@/components/ui/modal";
 import { CoverCropper } from "@/components/result/cover-cropper";
+import { AiCoverPanel, COVER_TOKENS_FROM } from "@/components/result/ai-cover-panel";
 
 export type EntityEditTarget = {
   kind: "artists" | "albums";
@@ -30,8 +38,13 @@ export function EntityEditModal({
   const [releaseDate, setReleaseDate] = useState(target.releaseDate ?? "");
   const [coverUrl, setCoverUrl] = useState(target.coverUrl);
   const [cropSrc, setCropSrc] = useState<string | null>(null);
+  const [aiOpen, setAiOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const coverSeed = isAlbum
+    ? `Album cover artwork for "${name.trim() || "an album"}"`
+    : `Artist profile portrait for "${name.trim() || "a musician"}"`;
 
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
@@ -84,11 +97,31 @@ export function EntityEditModal({
     <Modal
       open
       onClose={() => !busy && onClose()}
-      title={cropSrc ? "Crop cover image" : isAlbum ? "Edit album" : "Edit artist"}
+      title={
+        cropSrc
+          ? "Crop cover image"
+          : aiOpen
+            ? "Generate cover with AI"
+            : isAlbum
+              ? "Edit album"
+              : "Edit artist"
+      }
       widthClass="max-w-[480px]"
     >
       {cropSrc ? (
         <CoverCropper src={cropSrc} busy={busy} onApply={applyCrop} onCancel={closeCrop} />
+      ) : aiOpen ? (
+        <AiCoverPanel
+          defaultPrompt={coverSeed}
+          onGenerate={(prompt, model) => generateEntityCover(target.kind, target.id, prompt, model)}
+          onCommit={async (key) => {
+            const url = await saveEntityCover(target.kind, target.id, key);
+            setCoverUrl(url);
+            onSaved();
+            setAiOpen(false);
+          }}
+          onCancel={() => setAiOpen(false)}
+        />
       ) : (
         <>
           <div className="flex items-center gap-3">
@@ -102,16 +135,30 @@ export function EntityEditModal({
               )}
             </div>
             <div>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => fileRef.current?.click()}
-                className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-1.5 text-[12px] text-white/80 transition-colors hover:border-pulse/50 hover:text-white disabled:opacity-60"
-              >
-                <ImageIcon className="h-3.5 w-3.5 text-pulse" />
-                {coverUrl ? "Replace image" : "Add image"}
-              </button>
-              <p className="mt-1.5 text-[11px] text-white/40">Square — you'll crop it next.</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => fileRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-1.5 text-[12px] text-white/80 transition-colors hover:border-pulse/50 hover:text-white disabled:opacity-60"
+                >
+                  <ImageIcon className="h-3.5 w-3.5 text-pulse" />
+                  {coverUrl ? "Replace image" : "Add image"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setAiOpen(true)}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-1.5 text-[12px] text-white/80 transition-colors hover:border-pulse/50 hover:text-white disabled:opacity-60"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-pulse" />
+                  Generate with AI
+                </button>
+              </div>
+              <p className="mt-1.5 text-[11px] text-white/40">
+                Upload a square image (you'll crop it), or generate one with AI (from{" "}
+                {COVER_TOKENS_FROM} tokens).
+              </p>
             </div>
             <input ref={fileRef} type="file" accept="image/*" onChange={onPickFile} className="hidden" />
           </div>

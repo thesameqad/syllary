@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import {
   catalogImportSchema,
   coverCommitSchema,
@@ -11,7 +11,7 @@ import {
   updateArtistSchema,
 } from "@syllary/shared";
 import { db } from "../db/client.js";
-import { albums, artists, songs, users } from "../db/schema.js";
+import { albums, artists, songVideos, songs, users } from "../db/schema.js";
 import { getAuthUserId } from "../lib/clerk.js";
 import { getOrCreateUser } from "../lib/users.js";
 import { deleteObject, objectSize, presignGet, presignPut, putObject } from "../lib/r2.js";
@@ -30,6 +30,27 @@ async function storeExternalCover(prefix: string, id: string, url: string): Prom
   } catch {
     return null;
   }
+}
+
+/** Permanently delete a set of songs and every R2 object they own (audio, cover,
+ *  and any generated lyric-video files). Song rows are removed last; their
+ *  song_videos rows cascade away via FK. No-op on an empty set. */
+async function purgeSongs(songIds: string[]): Promise<void> {
+  if (songIds.length === 0) return;
+  const rows = await db
+    .select({ id: songs.id, r2Key: songs.r2Key, coverImageKey: songs.coverImageKey })
+    .from(songs)
+    .where(inArray(songs.id, songIds));
+  const videos = await db
+    .select({ videoKey: songVideos.videoKey })
+    .from(songVideos)
+    .where(inArray(songVideos.songId, songIds));
+  for (const v of videos) await deleteObject(v.videoKey);
+  for (const s of rows) {
+    await deleteObject(s.r2Key);
+    if (s.coverImageKey) await deleteObject(s.coverImageKey);
+  }
+  await db.delete(songs).where(inArray(songs.id, songIds));
 }
 
 // Generic cover-image flow (presign → PUT → commit, + AI generate) shared by the
@@ -246,6 +267,65 @@ export async function catalogRoutes(app: FastifyInstance) {
         .set({ album: parsed.data.name!, updatedAt: new Date() })
         .where(eq(songs.albumId, row.id));
     }
+    return reply.send({ ok: true });
+  });
+
+  // ---- Delete entities (cascades to the songs they contain) ----
+  // Deleting an album removes every song in it (audio + lyrics + videos), then
+  // the album. songs.albumId is ON DELETE SET NULL, so we must purge the songs
+  // explicitly before dropping the album or they'd be orphaned, not deleted.
+  app.delete<{ Params: { id: string } }>("/albums/:id", async (req, reply) => {
+    const clerkId = await getAuthUserId(req);
+    if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+    const user = await getOrCreateUser(clerkId);
+    const [row] = await db
+      .select()
+      .from(albums)
+      .where(and(eq(albums.id, req.params.id), eq(albums.userId, user.id)))
+      .limit(1);
+    if (!row) return reply.code(404).send({ error: "Not found." });
+
+    const songRows = await db
+      .select({ id: songs.id })
+      .from(songs)
+      .where(eq(songs.albumId, row.id));
+    await purgeSongs(songRows.map((s) => s.id));
+    if (row.coverImageKey) await deleteObject(row.coverImageKey);
+    await db.delete(albums).where(eq(albums.id, row.id));
+    return reply.send({ ok: true });
+  });
+
+  // Deleting an artist removes all of their songs (singles + every album track),
+  // then the artist — whose albums cascade away via FK. Album covers are cleaned
+  // up first so they don't orphan in R2.
+  app.delete<{ Params: { id: string } }>("/artists/:id", async (req, reply) => {
+    const clerkId = await getAuthUserId(req);
+    if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+    const user = await getOrCreateUser(clerkId);
+    const [row] = await db
+      .select()
+      .from(artists)
+      .where(and(eq(artists.id, req.params.id), eq(artists.userId, user.id)))
+      .limit(1);
+    if (!row) return reply.code(404).send({ error: "Not found." });
+
+    const albumRows = await db
+      .select({ id: albums.id, coverImageKey: albums.coverImageKey })
+      .from(albums)
+      .where(eq(albums.artistId, row.id));
+    const albumIds = albumRows.map((a) => a.id);
+    const songRows = await db
+      .select({ id: songs.id })
+      .from(songs)
+      .where(
+        albumIds.length > 0
+          ? or(eq(songs.artistId, row.id), inArray(songs.albumId, albumIds))
+          : eq(songs.artistId, row.id),
+      );
+    await purgeSongs(songRows.map((s) => s.id));
+    for (const a of albumRows) if (a.coverImageKey) await deleteObject(a.coverImageKey);
+    if (row.coverImageKey) await deleteObject(row.coverImageKey);
+    await db.delete(artists).where(eq(artists.id, row.id));
     return reply.send({ ok: true });
   });
 

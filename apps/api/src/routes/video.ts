@@ -14,6 +14,7 @@ import {
   VIDEO_MODEL_INFO,
   VIDEO_MODELS,
   type VideoModel,
+  type VideoSegment,
 } from "@syllary/shared";
 import { db } from "../db/client.js";
 import { type SongRow, songs, users, videoJobs, type VideoJobRow } from "../db/schema.js";
@@ -86,8 +87,12 @@ async function startVideoJob(
   userCredits: number,
   song: SongRow,
   settings: CreateVideoRequest,
+  /** Seed the job with another style's already-generated frames (imageKeys). The
+   *  pipeline then skips the segment rebuild + image generation (autopilot only),
+   *  and the image term is dropped from the cost. */
+  reuse?: { segments: VideoSegment[] },
 ): Promise<{ job?: VideoJobRow; cost: number; insufficient: boolean }> {
-  const mode = settings.preview ? "autopilot" : settings.mode;
+  const mode = reuse ? "autopilot" : settings.preview ? "autopilot" : settings.mode;
   const cost = estimateVideoCost({
     model: settings.model,
     quality: settings.imageQuality,
@@ -95,6 +100,7 @@ async function startVideoJob(
     lyrics: song.lyrics,
     durationSeconds: song.durationSeconds,
     preview: settings.preview,
+    reuseImages: !!reuse,
   }).tokens;
   if (userCredits < cost) return { cost, insufficient: true };
 
@@ -112,7 +118,9 @@ async function startVideoJob(
       aspectRatio: settings.aspectRatio,
       imageSize: settings.imageSize,
       imageQuality: settings.imageQuality,
-      isPreview: settings.preview,
+      isPreview: reuse ? false : settings.preview,
+      reuseFrames: !!reuse,
+      segments: reuse?.segments ?? null,
       motionMode: settings.model === "fast" ? "ffmpeg" : "ai",
       tokensCharged: cost,
     })
@@ -230,6 +238,93 @@ export async function videoRoutes(app: FastifyInstance) {
       if (insufficient) {
         return reply.code(402).send({
           error: `Not enough tokens — the full video costs ${cost}. Upgrade for more.`,
+        });
+      }
+      if (!job) return reply.code(500).send({ error: "Could not start the job." });
+
+      return reply.send(await toVideoJobDto(job));
+    },
+  );
+
+  // Create a new style REUSING the frames of an already-rendered style — skips
+  // (expensive) image generation, charging only the motion step. Always a full
+  // autopilot render. The source must be a finished full (non-preview) video.
+  app.post<{ Params: { id: string; targetModel: string; sourceModel: string } }>(
+    "/songs/:id/videos/:targetModel/from/:sourceModel",
+    async (req, reply) => {
+      const clerkId = await getAuthUserId(req);
+      if (!clerkId) return reply.code(401).send({ error: "Sign in to generate a video." });
+      const user = await getOrCreateUser(clerkId);
+
+      const { targetModel, sourceModel } = req.params;
+      const isModel = (m: string): m is VideoModel =>
+        (VIDEO_MODELS as readonly string[]).includes(m);
+      if (!isModel(targetModel) || !isModel(sourceModel)) {
+        return reply.code(400).send({ error: "Unknown style." });
+      }
+      if (targetModel === sourceModel) {
+        return reply.code(400).send({ error: "Pick a different style to create." });
+      }
+      if (!VIDEO_MODEL_INFO[targetModel].enabled) {
+        return reply
+          .code(400)
+          .send({ error: `${VIDEO_MODEL_INFO[targetModel].label} model is coming soon.` });
+      }
+
+      const [song] = await db.select().from(songs).where(eq(songs.id, req.params.id)).limit(1);
+      if (!song || song.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+
+      // Reuse only from a FINISHED FULL render — a preview's 10s timeline wouldn't
+      // map onto the target's full timeline.
+      const [source] = await db
+        .select()
+        .from(videoJobs)
+        .where(
+          and(
+            eq(videoJobs.songId, song.id),
+            eq(videoJobs.model, sourceModel),
+            eq(videoJobs.status, "ready"),
+            eq(videoJobs.isPreview, false),
+          ),
+        )
+        .orderBy(desc(videoJobs.createdAt))
+        .limit(1);
+      if (!source) {
+        return reply.code(404).send({
+          error: `Generate the full ${VIDEO_MODEL_INFO[sourceModel].label} video first.`,
+        });
+      }
+      if (!source.segments || source.segments.length === 0) {
+        return reply.code(422).send({ error: "Those frames are no longer available." });
+      }
+
+      // Clone the timeline + frame keys; reset per-segment runtime status so the new
+      // job re-renders motion cleanly. buildSegments is deterministic so the source's
+      // full timeline matches the target's exactly (imageKeys map 1:1).
+      const segments: VideoSegment[] = source.segments.map((s) => ({
+        ...s,
+        status: "pending",
+      }));
+
+      const { job, cost, insufficient } = await startVideoJob(
+        user.id,
+        user.credits,
+        song,
+        {
+          styleDescription: source.styleDescription,
+          sceneBrief: source.sceneBrief ?? undefined,
+          mode: "autopilot",
+          model: targetModel,
+          aspectRatio: source.aspectRatio as AspectRatio,
+          imageSize: source.imageSize as ImageSize,
+          imageQuality: source.imageQuality as ImageQuality,
+          preview: false,
+        },
+        { segments },
+      );
+      if (insufficient) {
+        return reply.code(402).send({
+          error: `Not enough tokens — this costs ${cost}. Upgrade for more.`,
         });
       }
       if (!job) return reply.code(500).send({ error: "Could not start the job." });

@@ -38,13 +38,20 @@ function dataUrlToBuffer(dataUrl: string): Buffer {
 
 /** Build the frame prompt for one scene from three independent parts:
  *   - `style`     — the art direction (shared across the whole video)
- *   - `context`   — the one-time song art brief: who/what the song is about
- *                   (POV, subject, setting), shared across the whole video
+ *   - `context`   — the song "consistency guide" (show bible): who the recurring
+ *                   character is, the setting and motifs. Shared across the whole
+ *                   video and used ONLY to keep scenes consistent — it must NOT
+ *                   become the subject of every frame.
  *   - `direction` — what THIS scene depicts (e.g. "girl walking away"). Defaults
  *                   to the lyric line when blank.
  *   - `lyricText` — the actual lyric, rendered INTO the image as typography
  *                   (Gemini 3 Pro Image has excellent text rendering) styled to
  *                   match the art direction. Independent of `direction`.
+ *
+ * The CURRENT line (or per-scene direction) drives WHAT happens in this frame;
+ * `context` only governs WHO/WHERE so the character and world stay consistent.
+ * Without this split, the song-wide brief ("a monster dancing") would override
+ * every line, so a line about "roaring quietly" would still show dancing.
  *
  * Manual mode lets the user edit `style` + `context` (shared) and `direction`
  * (per-scene) separately, so the common case is just typing a short direction. */
@@ -60,37 +67,44 @@ export function buildBackdropPrompt(opts: {
   const style = opts.style.trim();
   const line = opts.lyricText.trim();
   const ctx = opts.context?.trim();
-  // What the scene depicts — the user's per-scene direction, falling back to the
-  // lyric line so an unedited scene behaves exactly as before.
+  // What THIS scene depicts — the user's per-scene direction, falling back to the
+  // lyric line so an unedited scene illustrates its own line.
   const subject = opts.direction?.trim() || line;
   const hasSubject = subject.length > 0;
 
+  // The consistency guide is framed as character/world constants ONLY — never as
+  // the subject of this frame. The subject always comes from the current line.
   const story = ctx
     ? [
-        `This is one scene from a single music video. About the song — depict the correct subject and point of view, NOT a literal stock reading: ${ctx}`,
+        `Consistency guide for the whole music video — use it ONLY to keep the recurring character and world the SAME across scenes (same character design, setting, motifs); do NOT make it the subject of this frame: ${ctx}`,
       ]
     : [];
+  const consistency = ctx
+    ? `Keep the character and world consistent with the guide above, but the action and imagery of THIS frame must come strictly from the moment below — do not fall back to a generic shot of the overall theme.`
+    : ``;
   const styled = [
     ...story,
-    `Cinematic ${ASPECT_HINT[aspectRatio]} frame for a music lyric video.`,
+    `Cinematic ${ASPECT_HINT[aspectRatio]} frame for a music lyric video. This is ONE specific moment in the song — illustrate exactly this moment, not a generic image of the whole song.`,
     `Art direction: ${style}.`,
-    `Depict this scene: ${subject}.`,
+    `Depict the literal action, imagery and emotion of this exact moment: ${subject}.`,
+    consistency,
     `Render this exact lyric as the hero typography of the image, large and beautifully legible, integrated INTO the scene and styled to match the art direction (for example: glowing neon tubing if the style is neon, gold foil if elegant, hand-painted if folk):`,
     `"${line}"`,
     `Spell it EXACTLY as written. Show ONLY this line of text — no other words, captions, watermarks, logos, signatures, or duplicate text.`,
     `Keep the text fully inside the frame with generous safe margins from every edge so it is never cut off, with strong contrast against the background.`,
     `No real recognizable people or singers. Rich depth, dramatic lighting, high detail.`,
   ];
-  // Text-free scene that still evokes the direction (used by Cinematic, where the
+  // Text-free scene that still evokes the moment (used by Cinematic, where the
   // lyrics are overlaid later by ffmpeg — letting the video model warp baked-in
   // text is what made Cinematic unreadable).
   const sceneOnly = [
     ...story,
-    `Cinematic ${ASPECT_HINT[aspectRatio]} frame for a music video.`,
+    `Cinematic ${ASPECT_HINT[aspectRatio]} frame for a music video. This is ONE specific moment in the song.`,
     `Art direction: ${style}.`,
     hasSubject
-      ? `Create a scene that evokes the mood and imagery of: ${subject} (do NOT write any text).`
+      ? `Create a scene that evokes the literal imagery and mood of this exact moment: ${subject} (do NOT write any text).`
       : `Atmospheric instrumental scene.`,
+    hasSubject ? consistency : ``,
     `Absolutely NO text, letters, words, captions, or watermarks anywhere in the image.`,
     `No real recognizable people. Rich depth, dramatic lighting, high detail.`,
   ];
@@ -101,8 +115,8 @@ export function buildBackdropPrompt(opts: {
     hasSubject ? `Depict this scene with no text of any kind: ${subject}.` : `Atmospheric, no text or words of any kind.`,
     `No real recognizable people. Rich depth, dramatic lighting, high detail.`,
   ];
-  if (!renderText) return sceneOnly.join(" ");
-  return (line ? styled : instrumental).join(" ");
+  if (!renderText) return sceneOnly.filter(Boolean).join(" ");
+  return (line ? styled : instrumental).filter(Boolean).join(" ");
 }
 
 async function requestImageOnce(

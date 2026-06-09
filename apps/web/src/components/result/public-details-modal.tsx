@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { ExternalLink, Image as ImageIcon, Loader2, Plus, Sparkles, Wand2, X } from "lucide-react";
 import type { MetaSuggestions, Song, SongLink } from "@syllary/shared";
-import { ApiError, getMetaSuggestions, matchLinks, updateSong, uploadCover } from "@/lib/api";
+import {
+  ApiError,
+  generateCover,
+  getMetaSuggestions,
+  matchLinks,
+  saveGeneratedCover,
+  updateSong,
+  uploadCover,
+} from "@/lib/api";
+import { GENRES } from "@/lib/genres";
 import { useToast } from "@/components/ui/toast";
 import { Modal } from "@/components/ui/modal";
 import { CoverCropper } from "@/components/result/cover-cropper";
@@ -285,6 +294,7 @@ export function PublicDetailsModal({
       });
       toast("Public details saved.");
       onSaved(updated);
+      onClose();
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "Couldn't save details.", "error");
     } finally {
@@ -314,9 +324,13 @@ export function PublicDetailsModal({
         <CoverCropper src={cropSrc} busy={coverBusy} onApply={applyCrop} onCancel={closeCrop} />
       ) : aiOpen ? (
         <AiCoverPanel
-          songId={song.id}
           defaultPrompt={coverSeed}
-          onSaved={onSaved}
+          onGenerate={(prompt, model) => generateCover(song.id, prompt, model)}
+          onCommit={async (key) => {
+            const updated = await saveGeneratedCover(song.id, key);
+            onSaved(updated);
+            setAiOpen(false);
+          }}
           onCancel={() => setAiOpen(false)}
         />
       ) : (
@@ -449,10 +463,14 @@ export function PublicDetailsModal({
                   placeholder="2024"
                 />
               </label>
-              <label className="flex flex-col gap-1">
-                <span className="text-[11px] uppercase tracking-[0.5px] text-white/40">Genre</span>
-                <input value={genre} disabled={saving} onChange={(e) => setGenre(e.target.value)} className={FIELD} placeholder="e.g. Indie folk" />
-              </label>
+              <AutoField
+                label="Genre"
+                value={genre}
+                onChange={setGenre}
+                suggestions={GENRES}
+                placeholder="e.g. Indie folk"
+                disabled={saving}
+              />
             </div>
 
             <div className="mt-5">

@@ -5,9 +5,8 @@ import {
   COVER_MODEL_INFO,
   coverImageTokens,
   type CoverModel,
-  type Song,
 } from "@syllary/shared";
-import { ApiError, generateCover, saveGeneratedCover } from "@/lib/api";
+import { ApiError } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 
@@ -15,16 +14,18 @@ import { cn } from "@/lib/utils";
 export const COVER_TOKENS_FROM = coverImageTokens("flux");
 
 /** In-modal panel to AI-generate a square cover: pick a model, describe →
- *  generate → preview, then regenerate, save, or cancel. */
+ *  generate → preview, then regenerate, save, or cancel. Source-agnostic — the
+ *  caller wires generate/commit to a song or an artist/album entity. The commit
+ *  callback owns the post-save UI (update parent state, close the panel). */
 export function AiCoverPanel({
-  songId,
   defaultPrompt,
-  onSaved,
+  onGenerate,
+  onCommit,
   onCancel,
 }: {
-  songId: string;
   defaultPrompt: string;
-  onSaved: (song: Song) => void;
+  onGenerate: (prompt: string, model: CoverModel) => Promise<{ key: string; url: string }>;
+  onCommit: (key: string) => Promise<void>;
   onCancel: () => void;
 }) {
   const toast = useToast();
@@ -43,7 +44,7 @@ export function AiCoverPanel({
     }
     setBusy(true);
     try {
-      const res = await generateCover(songId, prompt.trim(), model);
+      const res = await onGenerate(prompt.trim(), model);
       setPreview({ key: res.key, url: res.url });
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "Couldn't generate the cover.", "error");
@@ -56,9 +57,8 @@ export function AiCoverPanel({
     if (!preview) return;
     setSaving(true);
     try {
-      const updated = await saveGeneratedCover(songId, preview.key);
+      await onCommit(preview.key);
       toast("Cover updated.");
-      onSaved(updated);
     } catch (e) {
       setSaving(false);
       toast(e instanceof ApiError ? e.message : "Couldn't save the image.", "error");

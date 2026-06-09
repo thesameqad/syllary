@@ -1,0 +1,1 @@
+ALTER TABLE "video_jobs" ADD COLUMN "reuse_frames" boolean DEFAULT false NOT NULL;

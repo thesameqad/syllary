@@ -65,7 +65,6 @@ export const PLAN_TIERS: PlanTier[] = [
       { text: "15,000 tokens / month — 3× Starter" },
       { text: "Everything in Starter" },
       { text: "API access", comingSoon: true },
-      { text: "Cancel or upgrade anytime" },
     ],
     featured: true,
   },

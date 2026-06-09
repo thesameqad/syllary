@@ -239,17 +239,12 @@ async function finalize(job: VideoJobRow, outFile: string): Promise<void> {
       target: [songVideos.songId, songVideos.model],
       set: { videoKey, isPreview: job.isPreview, updatedAt: new Date() },
     });
-  // Default the public page to the first FULL style the user generates — never a
-  // preview (a preview shouldn't become the public video).
+  // A finished video is NOT made public automatically — the user explicitly
+  // chooses which style (if any) appears on their public page from the video
+  // tabs. We only track the latest rendered key here.
   await db
     .update(songs)
-    .set({
-      latestVideoKey: videoKey,
-      publicVideoModel: job.isPreview
-        ? sql`${songs.publicVideoModel}`
-        : sql`coalesce(${songs.publicVideoModel}, ${job.model})`,
-      updatedAt: new Date(),
-    })
+    .set({ latestVideoKey: videoKey, updatedAt: new Date() })
     .where(eq(songs.id, job.songId));
 }
 
@@ -508,7 +503,14 @@ export async function runVideoPipeline(jobId: string): Promise<void> {
   const aspectRatio = job.aspectRatio as AspectRatio;
   let segments: VideoSegment[];
   let audioStartSeconds = 0;
-  if (job.isPreview) {
+  if (job.reuseFrames && job.segments && job.segments.length > 0) {
+    // Seeded with another style's frames: trust the persisted timeline + imageKeys
+    // (the source's deterministic full-song buildSegments output). No rebuild and
+    // no cap — materializeFrame downloads each imageKey instead of regenerating.
+    // NOTE: safe only while every model has previewSeconds = null (no capping);
+    // revisit if any style starts rendering a capped window.
+    segments = job.segments;
+  } else if (job.isPreview) {
     // A ~10s sample starting at the first lyric line (audio seeked to match).
     const preview = buildPreviewSegments(song.lyrics, song.durationSeconds);
     segments = preview.segments;

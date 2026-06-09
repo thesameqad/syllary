@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Check, Clapperboard, Download, Globe, Loader2, Maximize2 } from "lucide-react";
 import {
+  estimateVideoCost,
   type ReviewSegment,
   VIDEO_MODELS,
   VIDEO_MODEL_INFO,
@@ -9,7 +10,13 @@ import {
   type VideoJob,
   type VideoModel,
 } from "@syllary/shared";
-import { ApiError, generateFullVideo, getVideoJob, setPublicVideo } from "@/lib/api";
+import {
+  ApiError,
+  createVideoFromFrames,
+  generateFullVideo,
+  getVideoJob,
+  setPublicVideo,
+} from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { Button3D } from "@/components/ui/button-3d";
 import { ManualReview } from "@/components/result/manual-review";
@@ -73,9 +80,10 @@ export function VideoTabs({
     return () => clearTimeout(t);
   }, [liveJob, onJobComplete, onJobFailed]);
 
-  // Which styles get a tab: any with a finished video, plus the one generating.
+  // Which styles get a tab: any with a finished video, plus the one generating
+  // (the seeded activeJob, or a reuse-from-frames job started here via liveJob).
   const tabModels = VIDEO_MODELS.filter(
-    (m) => song.videos.some((v) => v.model === m) || activeJob?.model === m,
+    (m) => song.videos.some((v) => v.model === m) || activeJob?.model === m || liveJob?.model === m,
   );
   if (tabModels.length === 0) return null;
 
@@ -118,13 +126,52 @@ export function VideoTabs({
   const previewShown = !!url && (liveUrl ? !!liveJob?.isPreview : !!completed?.isPreview);
   const isPublic = !!completed && song.publicVideoModel === selected;
 
-  async function choosePublic() {
+  // The selected tab shows a finished FULL video → its frames can seed other styles.
+  const sourceIsFull = !!completed && !previewShown;
+  const reuseTargets = sourceIsFull
+    ? VIDEO_MODELS.filter(
+        (m) =>
+          m !== selected &&
+          VIDEO_MODEL_INFO[m].enabled &&
+          !song.videos.some((v) => v.model === m && !v.isPreview),
+      )
+    : [];
+  // Clip-only price (images are reused). quality/size don't affect the clip term.
+  const reuseTokens = (m: VideoModel) =>
+    estimateVideoCost({
+      model: m,
+      quality: "fast",
+      imageSize: "1K",
+      lyrics: song.lyrics,
+      durationSeconds: song.durationSeconds,
+      reuseImages: true,
+    }).tokens;
+
+  async function createFromFrames(target: VideoModel) {
+    setPromoting(true);
+    try {
+      const job = await createVideoFromFrames(song.id, target, selected);
+      setSelected(target); // focus the new style's tab so its progress shows
+      setLiveJob(job);
+    } catch (e) {
+      setPromoting(false);
+      toast(e instanceof ApiError ? e.message : "Couldn't start the video.", "error");
+    }
+  }
+
+  async function togglePublic() {
     if (!completed) return;
     setBusy(true);
     try {
-      const updated = await setPublicVideo(song.id, selected);
+      // Public toggles both ways: pick this style, or pass null to unpublish.
+      const next = isPublic ? null : selected;
+      const updated = await setPublicVideo(song.id, next);
       onUpdate(updated);
-      toast(`${VIDEO_MODEL_INFO[selected].label} is now on your public page.`);
+      toast(
+        next
+          ? `${VIDEO_MODEL_INFO[selected].label} is now on your public page.`
+          : "Removed from your public page.",
+      );
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "Couldn't update the public video.", "error");
     } finally {
@@ -215,6 +262,7 @@ export function VideoTabs({
               </Button3D>
             </div>
           ) : (
+            <>
             <div className="mt-3 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <a
@@ -236,17 +284,47 @@ export function VideoTabs({
               </div>
               {completed &&
                 (isPublic ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-success/[0.12] px-3.5 py-1.5 text-[12px] font-medium text-success">
-                    <Check className="h-3.5 w-3.5" />
-                    On your public page
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-success/[0.12] px-3.5 py-1.5 text-[12px] font-medium text-success">
+                      <Check className="h-3.5 w-3.5" />
+                      On your public page
+                    </span>
+                    <Button3D variant="secondary" onClick={() => void togglePublic()} disabled={busy}>
+                      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      Make private
+                    </Button3D>
+                  </div>
                 ) : (
-                  <Button3D onClick={() => void choosePublic()} disabled={busy}>
-                    <Globe className="h-4 w-4" />
-                    Choose as public
+                  <Button3D onClick={() => void togglePublic()} disabled={busy}>
+                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />}
+                    Make public
                   </Button3D>
                 ))}
             </div>
+            {reuseTargets.length > 0 && (
+              <div className="mt-3 border-t border-white/[0.06] pt-3">
+                <p className="mb-2 text-[11px] uppercase tracking-[0.5px] text-white/40">
+                  Reuse these frames
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {reuseTargets.map((m) => (
+                    <Button3D
+                      key={m}
+                      variant="secondary"
+                      disabled={promoting || liveBusy}
+                      onClick={() => void createFromFrames(m)}
+                    >
+                      <Clapperboard className="h-4 w-4" />
+                      Make {VIDEO_MODEL_INFO[m].label} · {reuseTokens(m)} tokens
+                    </Button3D>
+                  ))}
+                </div>
+                <p className="mt-1.5 text-[11px] text-white/35">
+                  Reuses these images — only the motion is generated, so it costs far less.
+                </p>
+              </div>
+            )}
+            </>
           )}
         </>
       ) : (

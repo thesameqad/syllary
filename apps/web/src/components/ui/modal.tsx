@@ -43,11 +43,13 @@ export function Modal({
             exit={{ opacity: 0, y: 8, scale: 0.97 }}
             transition={{ type: "spring", stiffness: 320, damping: 28 }}
             className={cn(
-              "relative w-full overflow-hidden rounded-[16px] border border-white/[0.08] bg-stage shadow-[0_30px_60px_rgba(0,0,0,0.6)]",
+              // Cap to the viewport and lay out as a column so the body scrolls
+              // instead of the whole dialog overflowing the screen.
+              "relative flex max-h-[calc(100dvh-2rem)] w-full flex-col overflow-hidden rounded-[16px] border border-white/[0.08] bg-stage shadow-[0_30px_60px_rgba(0,0,0,0.6)]",
               widthClass,
             )}
           >
-            <div className="flex items-center justify-between border-b border-white/[0.06] px-5 py-3.5">
+            <div className="flex shrink-0 items-center justify-between border-b border-white/[0.06] px-5 py-3.5">
               <h2 className="text-[14px] font-medium text-white">{title}</h2>
               <button
                 type="button"
@@ -58,7 +60,7 @@ export function Modal({
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="px-5 py-4">{children}</div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
           </motion.div>
         </motion.div>
       )}

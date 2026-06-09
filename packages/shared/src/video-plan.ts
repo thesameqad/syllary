@@ -231,6 +231,9 @@ export function estimateVideoCost(opts: {
   durationSeconds: number | null;
   /** Price a ~10s preview window instead of the full (capped) timeline. */
   preview?: boolean;
+  /** Frames are reused from another already-rendered style, so the image term is
+   *  free — only the motion-clip step is charged. */
+  reuseImages?: boolean;
 }): VideoCostEstimate {
   const { model, quality, imageSize } = opts;
 
@@ -244,7 +247,8 @@ export function estimateVideoCost(opts: {
     if (cap != null) segs = capForPreview(segs, cap);
   }
 
-  const images = segs.length;
+  // When reusing an existing style's frames, the (expensive) image step is skipped.
+  const images = opts.reuseImages ? 0 : segs.length;
   const imageUsd = images * IMAGE_COST_USD[quality][imageSize];
 
   let clipSeconds = 0;

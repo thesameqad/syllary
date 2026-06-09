@@ -168,6 +168,10 @@ export const videoJobs = pgTable(
     motionMode: text("motion_mode").notNull().default("ffmpeg"),
     // True when this job renders only a short preview (not the full song).
     isPreview: boolean("is_preview").notNull().default(false),
+    // True when seeded with another style's already-generated frames (imageKeys):
+    // the pipeline skips the segment rebuild + image generation and only renders
+    // motion. Always an autopilot full render.
+    reuseFrames: boolean("reuse_frames").notNull().default(false),
     // One-time AI "art brief" (who/what the song depicts) injected into every
     // per-line image prompt so the model gets the subject/POV right.
     sceneBrief: text("scene_brief"),

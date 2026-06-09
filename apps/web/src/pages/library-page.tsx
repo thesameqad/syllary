@@ -10,6 +10,8 @@ import {
 } from "@syllary/shared";
 import {
   ApiError,
+  deleteAlbum,
+  deleteArtist,
   deleteSong,
   getAccount,
   listAlbums,
@@ -115,6 +117,36 @@ export function LibraryPage() {
       },
       onDelete: async () => {
         await deleteSong(song.id);
+        await load();
+      },
+    }),
+    [load],
+  );
+
+  const albumManage = useCallback(
+    (album: Album) => ({
+      onEdit: () =>
+        setEditTarget({
+          kind: "albums",
+          id: album.id,
+          name: album.name,
+          coverUrl: album.coverUrl,
+          releaseDate: album.releaseDate,
+        }),
+      onDelete: async () => {
+        await deleteAlbum(album.id);
+        await load();
+      },
+    }),
+    [load],
+  );
+
+  const artistManage = useCallback(
+    (artist: Artist) => ({
+      onEdit: () =>
+        setEditTarget({ kind: "artists", id: artist.id, name: artist.name, coverUrl: artist.coverUrl }),
+      onDelete: async () => {
+        await deleteArtist(artist.id);
         await load();
       },
     }),
@@ -337,6 +369,7 @@ export function LibraryPage() {
                 subtitle={sub}
                 cover={a.coverUrl}
                 onOpen={() => go({ tab: "albums", albumId: a.id })}
+                manage={albumManage(a)}
               />
             );
           })}
@@ -402,6 +435,7 @@ export function LibraryPage() {
                     subtitle={sub}
                     cover={a.coverUrl}
                     onOpen={() => go({ tab: "artists", artistId, albumId: a.id })}
+                    manage={albumManage(a)}
                   />
                 );
               })}
@@ -451,6 +485,7 @@ export function LibraryPage() {
           subtitle={sub}
           cover={a.coverUrl}
           onOpen={() => go({ tab: "artists", artistId: a.id })}
+          manage={artistManage(a)}
         />
       );
     });

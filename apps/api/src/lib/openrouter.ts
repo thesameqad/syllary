@@ -267,18 +267,20 @@ export async function directCinematicPrompt(opts: {
   }
 }
 
-const ART_BRIEF_PROMPT = `You are an art director for an AI-generated music video. You are given the FULL lyrics and the chosen visual style.
-Write a SHORT brief (2-3 sentences) that tells an image generator WHO/WHAT to actually depict, so it doesn't misread the song.
-- Resolve the narrator's point of view and name the concrete MAIN SUBJECT to show. If the narrator is an animal, a child, an object, or anything non-obvious, SAY SO explicitly (e.g. "the narrator is a small dog"). Lyrics like "I pressed my nose against the window" must be read through that POV.
-- Name the recurring SETTING and a few key visual motifs that should appear across scenes.
-- End with a short "Avoid:" clause for what NOT to depict (e.g. "Avoid: depicting the narrator as a human").
-- Be concrete and visual. Do NOT mention the art style (it's applied separately). Do NOT quote lyrics. No preamble.
-Return ONLY the brief text.`;
+const ART_BRIEF_PROMPT = `You are the art director for an AI-generated music video. You are given the FULL lyrics and the chosen visual style.
+EACH line of the song becomes its own scene, and every scene depicts that specific line's own action and imagery. Your job is NOT to summarize one image for the whole song — it is to write a short CONSISTENCY GUIDE (a "show bible") so the independently-generated scenes share the same world and character.
+Write 2-3 sentences covering ONLY persistent, scene-to-scene constants:
+- WHO the recurring character / narrator is, resolving point of view. If the narrator is an animal, a child, an object, or anything non-obvious, SAY SO explicitly (e.g. "the narrator is a small monster") so scenes don't default to a literal human. Describe their fixed look so they're recognizable across scenes.
+- The recurring SETTING / world and a few visual motifs that should stay consistent across scenes.
+- End with a short "Avoid:" clause for what to never depict (e.g. "Avoid: depicting the narrator as a human").
+Do NOT describe a single action, plot, or "what happens" — each scene gets its action from its own lyric line, and your guide must not override that. Do NOT mention the art style (it's applied separately). Do NOT quote lyrics. No preamble.
+Return ONLY the guide text.`;
 
-/** A concise, visually-actionable brief describing who/what a song is really
- *  about (POV, main subject, setting, motifs), injected into every per-line
- *  image prompt so the model depicts the right subject. Returns "" on failure
- *  so the caller can fall back to the song summary / no context. */
+/** A concise consistency guide ("show bible") describing the song's persistent
+ *  character (POV, look), setting, and motifs — injected into every per-line
+ *  image prompt so scenes stay visually consistent WITHOUT overriding each
+ *  line's own subject. Returns "" on failure so the caller can fall back to the
+ *  song summary / no context. */
 export async function videoArtBrief(lines: string[], style: string): Promise<string> {
   if (lines.length === 0) return "";
   try {
