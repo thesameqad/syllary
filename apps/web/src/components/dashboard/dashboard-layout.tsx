@@ -1,4 +1,4 @@
-import { Clock, Library, LayoutDashboard, Megaphone, Upload } from "lucide-react";
+import { Clock, Library, LayoutDashboard, LifeBuoy, Megaphone, Upload } from "lucide-react";
 import { Link, Navigate, NavLink, Outlet } from "react-router-dom";
 import { SignedIn, SignedOut, UserButton } from "@clerk/clerk-react";
 import { LogoWordmark } from "@/components/logo";
@@ -44,7 +44,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
             </NavLink>
           ))}
         </nav>
-        {authConfigured && <UserCard />}
+        <div className="mt-auto">
+          <NavLink to="/contact" className={cn(navClass({ isActive: false }), "mb-2")}>
+            <LifeBuoy className="h-4 w-4" />
+            Support
+          </NavLink>
+          {authConfigured && <UserCard />}
+        </div>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -55,6 +61,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 <item.icon className="h-4 w-4" />
               </NavLink>
             ))}
+            <NavLink to="/contact" className={navClass} aria-label="Support">
+              <LifeBuoy className="h-4 w-4" />
+            </NavLink>
           </div>
           <div className="ml-auto">{authConfigured && <UserButton afterSignOutUrl="/" />}</div>
         </header>
