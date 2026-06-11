@@ -65,7 +65,11 @@ export async function contactRoutes(app: FastifyInstance) {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          from: env.EMAIL_FROM,
+          // From a DIFFERENT address than the recipient: Gmail hides mail that
+          // appears to be "from yourself" (skips inbox / lands in spam) when
+          // From == To == the owner's own alias. Any local-part on the
+          // verified domain can send.
+          from: "Syllary Contact Form <contact-form@syllary.com>",
           to: [env.CONTACT_TO_EMAIL],
           reply_to: email,
           subject,
