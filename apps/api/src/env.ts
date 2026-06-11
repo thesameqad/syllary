@@ -63,6 +63,17 @@ const envSchema = z.object({
   // Comma-separated Clerk user ids allowed into the landing-page management
   // dashboard (admin API + UI). Empty = no admins (landing admin locked down).
   ADMIN_CLERK_IDS: z.string().default(""),
+  // Email (Resend). Optional: without a key, the contact form logs instead of
+  // sending — nothing breaks while credentials are pending.
+  RESEND_API_KEY: z.string().optional(),
+  EMAIL_FROM: z.string().default("Syllary <hello@syllary.com>"),
+  CONTACT_TO_EMAIL: z.string().default("hello@syllary.com"),
+  // Server-side product analytics (PostHog). Optional: without a key, capture
+  // calls are no-ops — local dev stays clean.
+  POSTHOG_API_KEY: z.string().optional(),
+  POSTHOG_HOST: z.string().url().default("https://us.i.posthog.com"),
+  // Error tracking (Sentry). Optional: without a DSN, Sentry never initializes.
+  SENTRY_DSN: z.string().optional(),
   // Optional so the API still runs (anonymous-only) before auth/billing are configured.
   CLERK_SECRET_KEY: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),

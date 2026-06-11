@@ -16,6 +16,12 @@ import { LibraryPage } from "@/pages/library-page";
 import { UpgradePage } from "@/pages/upgrade-page";
 import { LandingListPage } from "@/pages/admin/landing-list";
 import { LandingEditPage } from "@/pages/admin/landing-edit";
+import { TermsPage } from "@/pages/static/terms-page";
+import { PrivacyPage } from "@/pages/static/privacy-page";
+import { RefundPage } from "@/pages/static/refund-page";
+import { FaqPage } from "@/pages/static/faq-page";
+import { ContactPage } from "@/pages/static/contact-page";
+import { UnsubscribePage } from "@/pages/static/unsubscribe-page";
 import { authConfigured } from "@/lib/auth";
 import { trackVisit } from "@/lib/api";
 import { ToastProvider } from "@/components/ui/toast";
@@ -51,6 +57,12 @@ export function App() {
       <Route path="/tools/*" element={<SeoLandingPage />} />
       <Route path="/compare/*" element={<SeoLandingPage />} />
       <Route path="/guides/*" element={<SeoLandingPage />} />
+      <Route path="/terms" element={<TermsPage />} />
+      <Route path="/privacy" element={<PrivacyPage />} />
+      <Route path="/refunds" element={<RefundPage />} />
+      <Route path="/faq" element={<FaqPage />} />
+      <Route path="/contact" element={<ContactPage />} />
+      <Route path="/unsubscribe" element={<UnsubscribePage />} />
       <Route path="/sign-in/*" element={<SignInPage />} />
       <Route path="/sign-up/*" element={<SignUpPage />} />
       <Route path="/account" element={<AccountPage />} />

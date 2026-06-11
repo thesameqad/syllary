@@ -62,7 +62,7 @@ import {
   type VideoModel,
 } from "@syllary/shared";
 
-const API_BASE =
+export const API_BASE =
   (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "") || "http://localhost:3000";
 
 // Clerk's getToken is a React hook; a bridge component registers it here so the

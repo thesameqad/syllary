@@ -10,6 +10,7 @@ import type { UserRow } from "../db/schema.js";
 import { env } from "../env.js";
 import { isAdminClerkId } from "../lib/admin.js";
 import { getAuthUserId } from "../lib/clerk.js";
+import { captureServer } from "../lib/posthog.js";
 import { getOrCreateCustomer, isAllowedPrice, stripe } from "../lib/stripe.js";
 import { reconcileCustomer } from "../lib/subscription.js";
 import { getOrCreateUser } from "../lib/users.js";
@@ -90,6 +91,10 @@ export async function billingRoutes(app: FastifyInstance) {
       allow_promotion_codes: true,
     });
     if (!session.url) return reply.code(502).send({ error: "Could not start checkout." });
+    captureServer(`clerk:${clerkId}`, "checkout_started", {
+      plan: parsed.data.tier,
+      interval: parsed.data.billingPeriod,
+    });
     return reply.send({ url: session.url });
   });
 

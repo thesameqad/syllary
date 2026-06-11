@@ -273,6 +273,17 @@ export const users = pgTable("users", {
   // registration + upgrade attribution.
   acquisitionLandingSlug: text("acquisition_landing_slug"),
   acquisitionAt: timestamp("acquisition_at", { withTimezone: true }),
+  // First-touch paid-ads click id (gclid/msclkid) + which network it came from
+  // ('google' | 'microsoft'), bridged from anonymous visits the same way as the
+  // landing slug. Lets the Stripe webhook report purchases back to the ad
+  // platform (offline conversion import) so bidding can optimize on real money.
+  acquisitionClickId: text("acquisition_click_id"),
+  acquisitionClickSource: text("acquisition_click_source"),
+  // First-touch UTM set (source/medium/campaign/term/content), when present.
+  acquisitionUtm: jsonb("acquisition_utm").$type<Record<string, string>>(),
+  // Opted out of non-transactional email (drip/nudges). Set via the
+  // unsubscribe link; transactional sends (song-ready, receipts) are exempt.
+  emailOptOut: boolean("email_opt_out").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
@@ -330,6 +341,56 @@ export const analyticsEvents = pgTable(
 );
 
 export type AnalyticsEventRow = typeof analyticsEvents.$inferSelect;
+
+// Paid-ads offline conversions awaiting upload to Google/Microsoft Ads. One row
+// per purchase by a click-attributed user; the admin export endpoint serves
+// these as the platforms' "conversions from clicks" CSV and stamps exportedAt.
+export const conversionExports = pgTable(
+  "conversion_exports",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    // 'google' | 'microsoft' — decides which CSV template the row belongs to.
+    source: text("source").notNull(),
+    clickId: text("click_id").notNull(),
+    conversionName: text("conversion_name").notNull().default("purchase"),
+    conversionAt: timestamp("conversion_at", { withTimezone: true }).notNull(),
+    valueCents: integer("value_cents").notNull().default(0),
+    currency: text("currency").notNull().default("usd"),
+    exportedAt: timestamp("exported_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pendingIdx: index("conversion_exports_pending_idx").on(t.exportedAt),
+    sourceIdx: index("conversion_exports_source_idx").on(t.source),
+  }),
+);
+
+export type ConversionExportRow = typeof conversionExports.$inferSelect;
+
+// One row per lifecycle email actually sent — the unique (userId, kind) pair is
+// what makes every drip/nudge/transactional send idempotent (pollers and event
+// hooks can both fire without double-sending). `kind` examples: welcome,
+// song_ready:<songId>, token_low, drip_video_day2, drip_upgrade_day5.
+export const emailLog = pgTable(
+  "email_log",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    uniqueUserKind: unique("email_log_user_kind_unique").on(t.userId, t.kind),
+    userIdx: index("email_log_user_idx").on(t.userId),
+  }),
+);
+
+export type EmailLogRow = typeof emailLog.$inferSelect;
 
 // Keep in sync with the landing schemas in @syllary/shared.
 export const landingCategory = pgEnum("landing_category", [

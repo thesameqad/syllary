@@ -162,6 +162,20 @@
       "when": 1780986714787,
       "tag": "0022_lying_iron_fist",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1781197438396,
+      "tag": "0023_dazzling_ender_wiggin",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1781205669712,
+      "tag": "0024_true_norman_osborn",
+      "breakpoints": true
     }
   ]
 }

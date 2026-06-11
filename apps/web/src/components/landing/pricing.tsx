@@ -125,6 +125,74 @@ function PlanGroup({
   );
 }
 
+/** Token grants translated into things a musician can count. Derived from the
+ *  real cost functions (creditCost / estimateVideoCost in @syllary/shared) for
+ *  a typical 3:30 song at default settings: pro-mode lyrics ≈ 500 tokens;
+ *  full videos ≈ 15.7k (Slideshow) / 82k (Living Scenes) / 69k (Cinematic).
+ *  Songs/videos shown are per month (Free is a one-time grant). */
+const PLAN_VALUE_ROWS: {
+  plan: string;
+  tokens: string;
+  songs: string;
+  slideshow: string;
+  living: string;
+  cinematic: string;
+}[] = [
+  { plan: "Free", tokens: "1,000 once", songs: "≈2", slideshow: "previews", living: "—", cinematic: "—" },
+  { plan: "Starter", tokens: "5,000", songs: "≈10", slideshow: "previews", living: "—", cinematic: "—" },
+  { plan: "Creator", tokens: "15,000", songs: "≈30", slideshow: "≈1", living: "—", cinematic: "—" },
+  { plan: "Pro", tokens: "60,000", songs: "≈120", slideshow: "≈3", living: "—", cinematic: "—" },
+  { plan: "Reel", tokens: "80,000", songs: "≈160", slideshow: "≈5", living: "0–1", cinematic: "≈1" },
+  { plan: "Studio", tokens: "220,000", songs: "≈440", slideshow: "≈14", living: "≈2", cinematic: "≈3" },
+  { plan: "Premiere", tokens: "620,000", songs: "≈1,240", slideshow: "≈39", living: "≈7", cinematic: "≈8" },
+];
+
+/** Tokens are opaque at the moment of purchase — this answers "how many songs
+ *  and videos is that?" in one glance. */
+function PlanValueTable() {
+  return (
+    <div className="mx-auto mt-16 max-w-[760px] text-left">
+      <h3 className="mb-1 text-center text-[17px] font-medium tracking-[-0.4px] text-white">
+        What your plan buys
+      </h3>
+      <p className="mb-5 text-center text-[12px] text-white/40">
+        For a typical 3:30 song at default settings — the exact token price is always shown
+        before you confirm.
+      </p>
+      <div className="overflow-x-auto rounded-[14px] border-[0.5px] border-white/[0.08] bg-white/[0.02]">
+        <table className="w-full min-w-[560px] border-collapse text-[12px]">
+          <thead>
+            <tr className="border-b border-white/[0.08] text-left text-[11px] uppercase tracking-[1px] text-white/40">
+              <th className="px-4 py-3 font-medium">Plan</th>
+              <th className="px-4 py-3 font-medium">Tokens / mo</th>
+              <th className="px-4 py-3 font-medium">Synced-lyric songs</th>
+              <th className="px-4 py-3 font-medium">Slideshow videos</th>
+              <th className="px-4 py-3 font-medium">Living Scenes</th>
+              <th className="px-4 py-3 font-medium">Cinematic</th>
+            </tr>
+          </thead>
+          <tbody>
+            {PLAN_VALUE_ROWS.map((r) => (
+              <tr key={r.plan} className="border-b border-white/[0.04] last:border-0">
+                <td className="px-4 py-2.5 font-medium text-white">{r.plan}</td>
+                <td className="px-4 py-2.5 text-white/60">{r.tokens}</td>
+                <td className="px-4 py-2.5 text-white/60">{r.songs}</td>
+                <td className="px-4 py-2.5 text-white/60">{r.slideshow}</td>
+                <td className="px-4 py-2.5 text-white/60">{r.living}</td>
+                <td className="px-4 py-2.5 text-white/60">{r.cinematic}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-3 text-center text-[11px] text-white/30">
+        Mix freely — tokens are one wallet. Longer songs cost proportionally more; shorter ones
+        less.
+      </p>
+    </div>
+  );
+}
+
 export function Pricing() {
   const [period, setPeriod] = useState<BillingPeriod>("monthly");
 
@@ -173,6 +241,8 @@ export function Pricing() {
           period={period}
         />
       </div>
+
+      <PlanValueTable />
 
       <p className="mt-10 text-[12px] text-white/30">
         Annual plans save 2 months. Free tier: 3 songs to start, no credit card.

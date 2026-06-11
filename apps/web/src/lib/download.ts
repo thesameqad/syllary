@@ -1,3 +1,5 @@
+import { captureClient } from "./analytics";
+
 function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -8,6 +10,7 @@ function triggerDownload(blob: Blob, filename: string) {
 }
 
 export function downloadText(filename: string, content: string, mime: string) {
+  captureClient("format_downloaded", { format: filename.split(".").pop() ?? "unknown" });
   triggerDownload(new Blob([content], { type: `${mime};charset=utf-8` }), filename);
 }
 
@@ -16,6 +19,10 @@ export async function downloadZip(
   zipName: string,
   files: { filename: string; content: string }[],
 ) {
+  captureClient("format_downloaded", {
+    format: "zip",
+    formats: files.map((f) => f.filename.split(".").pop() ?? "unknown"),
+  });
   const { default: JSZip } = await import("jszip");
   const zip = new JSZip();
   for (const f of files) zip.file(f.filename, f.content);

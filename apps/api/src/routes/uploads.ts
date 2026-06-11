@@ -15,6 +15,7 @@ import { songs } from "../db/schema.js";
 import { env } from "../env.js";
 import { getAuthUserId } from "../lib/clerk.js";
 import { ownerHash } from "../lib/hash.js";
+import { captureServer } from "../lib/posthog.js";
 import { presignPut } from "../lib/r2.js";
 import { getOrCreateUser } from "../lib/users.js";
 import { resolveArtistAlbum } from "../lib/catalog.js";
@@ -39,6 +40,9 @@ export async function uploadsRoutes(app: FastifyInstance) {
     const userRow = clerkId ? await getOrCreateUser(clerkId) : null;
 
     // Anonymous users are capped at 3 minutes; signed-in users are not.
+    // Early-UX check only — durationSeconds here is client-reported. The
+    // authoritative cap + token pricing run against the ffmpeg-measured
+    // duration in /songs/:id/process.
     if (!userRow && durationSeconds != null && durationSeconds > MAX_DURATION_SECONDS) {
       return reply.code(400).send({ error: "Track is over 3 minutes. Sign up to remove the limit." });
     }
@@ -72,6 +76,7 @@ export async function uploadsRoutes(app: FastifyInstance) {
         .from(songs)
         .where(eq(songs.userId, userRow.id));
       if ((rows[0]?.value ?? 0) >= FREE_SONG_LIMIT) {
+        captureServer(hash, "paywall_viewed", { trigger: "library_limit", wanted: "upload" });
         return reply.code(409).send({
           error: `Free libraries hold up to ${FREE_SONG_LIMIT} songs. Delete one or upgrade.`,
         });
@@ -111,6 +116,13 @@ export async function uploadsRoutes(app: FastifyInstance) {
       ownerHash: hash,
       userId: userRow?.id ?? null,
       isAnonymous: !clerkId,
+    });
+
+    captureServer(hash, "song_uploaded", {
+      song_id: id,
+      file_type: extensionOf(filename),
+      size_bytes: size,
+      authed: !!clerkId,
     });
 
     const uploadUrl = await presignPut(key, contentType);

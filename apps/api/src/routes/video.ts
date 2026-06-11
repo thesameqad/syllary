@@ -22,6 +22,7 @@ import {
 import { db } from "../db/client.js";
 import { bandMembers, type SongRow, songs, users, videoJobs, type VideoJobRow } from "../db/schema.js";
 import { getAuthUserId } from "../lib/clerk.js";
+import { captureServer } from "../lib/posthog.js";
 import { presignGet } from "../lib/r2.js";
 import { getOrCreateUser } from "../lib/users.js";
 import { videoArtBrief } from "../lib/openrouter.js";
@@ -224,11 +225,24 @@ export async function videoRoutes(app: FastifyInstance) {
 
     const { job, cost, insufficient } = await startVideoJob(user.id, user.credits, song, settings);
     if (insufficient) {
+      captureServer(`clerk:${clerkId}`, "paywall_viewed", {
+        trigger: "tokens",
+        wanted: settings.preview ? "video_preview" : "video_full",
+        style: settings.model,
+        cost_tokens: cost,
+      });
       return reply.code(402).send({
         error: `Not enough tokens — ${settings.preview ? "a preview" : "a lyric video"} costs ${cost}. Upgrade for more.`,
       });
     }
     if (!job) return reply.code(500).send({ error: "Could not start the job." });
+
+    captureServer(`clerk:${clerkId}`, settings.preview ? "video_preview_started" : "video_full_started", {
+      song_id: song.id,
+      style: settings.model,
+      cost_tokens: cost,
+      image_quality: settings.imageQuality,
+    });
 
     return reply.send(await toVideoJobDto(job));
   });
@@ -314,11 +328,25 @@ export async function videoRoutes(app: FastifyInstance) {
         permissive ? "ai_permissive" : undefined,
       );
       if (insufficient) {
+        captureServer(`clerk:${clerkId}`, "paywall_viewed", {
+          trigger: "tokens",
+          wanted: "video_full",
+          style: model,
+          cost_tokens: cost,
+        });
         return reply.code(402).send({
           error: `Not enough tokens — the full video costs ${cost}. Upgrade for more.`,
         });
       }
       if (!job) return reply.code(500).send({ error: "Could not start the job." });
+
+      captureServer(`clerk:${clerkId}`, "video_full_started", {
+        song_id: song.id,
+        style: model,
+        cost_tokens: cost,
+        promoted_from_preview: true,
+        permissive,
+      });
 
       return reply.send(await toVideoJobDto(job));
     },
@@ -401,11 +429,24 @@ export async function videoRoutes(app: FastifyInstance) {
         { segments },
       );
       if (insufficient) {
+        captureServer(`clerk:${clerkId}`, "paywall_viewed", {
+          trigger: "tokens",
+          wanted: "video_full",
+          style: targetModel,
+          cost_tokens: cost,
+        });
         return reply.code(402).send({
           error: `Not enough tokens — this costs ${cost}. Upgrade for more.`,
         });
       }
       if (!job) return reply.code(500).send({ error: "Could not start the job." });
+
+      captureServer(`clerk:${clerkId}`, "video_full_started", {
+        song_id: song.id,
+        style: targetModel,
+        cost_tokens: cost,
+        reused_frames_from: sourceModel,
+      });
 
       return reply.send(await toVideoJobDto(job));
     },
@@ -428,6 +469,13 @@ export async function videoRoutes(app: FastifyInstance) {
         .returning();
       if (failed) {
         await refund(failed);
+        captureServer(`clerk:${clerkId}`, "video_failed", {
+          song_id: failed.songId,
+          style: failed.model,
+          preview: failed.isPreview,
+          error: "timeout",
+          tokens_refunded: failed.tokensCharged,
+        });
         row = failed;
       }
     }

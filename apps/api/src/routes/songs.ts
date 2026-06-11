@@ -14,6 +14,7 @@ import {
   editLyricsSchema,
   generateCoverSchema,
   type GenerationMode,
+  MAX_DURATION_SECONDS,
   normalizeCharacterRefs,
   parseLyricsText,
   type Plan,
@@ -52,9 +53,11 @@ import { buildLyricsFromScribe, realignFromText } from "../lib/transcript.js";
 import { summarizeSong } from "../lib/openrouter.js";
 import { generateCoverImage } from "../lib/cover-image.js";
 import { matchStreamingLinks } from "../lib/music-links.js";
-import { transcodeForDownload } from "../lib/ffmpeg.js";
+import { probeDurationSeconds, transcodeForDownload } from "../lib/ffmpeg.js";
 import { resolveArtistAlbum } from "../lib/catalog.js";
 import { estimateGenerationCost, firstTouchLandingSlug, recordEvent } from "../lib/analytics.js";
+import { sendOnce, songReadyEmail, tokenLowEmail, userForEmail } from "../lib/email.js";
+import { captureServer } from "../lib/posthog.js";
 import { getOrCreateUser } from "../lib/users.js";
 
 const RES_HEIGHT: Record<VideoDownloadResolution, number> = { "1080p": 1080, "720p": 720, "480p": 480 };
@@ -336,6 +339,8 @@ async function markFailed(id: string, error: string): Promise<SongRow | undefine
     .set({ status: "failed", error, updatedAt: new Date() })
     .where(and(eq(songs.id, id), eq(songs.status, "processing")))
     .returning();
+  // Guarded update fires once, so this can't double-count.
+  if (row) captureServer(row.ownerHash, "processing_failed", { song_id: row.id, error });
   return row;
 }
 
@@ -440,6 +445,20 @@ async function finalizeIfDone(row: SongRow): Promise<SongRow> {
           ...cost,
         },
       });
+      captureServer(updated.ownerHash, "processing_completed", {
+        song_id: updated.id,
+        mode: updated.mode,
+        duration_seconds: duration,
+        raw_cost_usd: cost.totalCostUsd,
+        ...(landingSlug ? { landing_slug: landingSlug } : {}),
+      });
+      // "Your song is ready" — recovers everyone who closed the tab during the
+      // render. Deduped per song; fire-and-forget.
+      if (updated.userId) {
+        void userForEmail(updated.userId).then((u) => {
+          if (u) return sendOnce(u, `song_ready:${updated.id}`, () => songReadyEmail(updated.id, updated.title ?? "Your song"));
+        });
+      }
     }
     return updated ?? (await getSongRow(row.id)) ?? row;
   }
@@ -485,13 +504,36 @@ export async function songsRoutes(app: FastifyInstance) {
     }
     const mode: GenerationMode = bodyParse.data.mode ?? "pro";
 
+    // Tokens are priced per duration, so duration must be MEASURED server-side
+    // (the presign-time value comes from the client and could be forged or
+    // omitted — `?? 60` would make omission the cheapest attack).
+    const audioUrl = await presignGet(row.r2Key);
+    const measured = await probeDurationSeconds(audioUrl);
+    if (measured === null) {
+      return reply.code(400).send({ error: "We couldn't read that audio file. Please re-upload it." });
+    }
+    const durationSeconds = Math.round(measured);
+
     // Server-side check before any Replicate call (rule #2).
     const clerkId = await getAuthUserId(req);
     let authedUser: UserRow | null = null;
-    const cost = creditCost(row.durationSeconds ?? 60, mode);
+
+    // The anonymous 3-minute cap, enforced against the measured value (the
+    // presign check only sees the client-reported duration).
+    if (!clerkId && durationSeconds > MAX_DURATION_SECONDS + 1) {
+      return reply.code(400).send({ error: "Track is over 3 minutes. Sign up to remove the limit." });
+    }
+
+    const cost = creditCost(durationSeconds, mode);
     if (clerkId) {
       authedUser = await getOrCreateUser(clerkId);
       if (authedUser.credits < cost) {
+        captureServer(`clerk:${clerkId}`, "paywall_viewed", {
+          trigger: "tokens",
+          wanted: "lyrics",
+          cost_tokens: cost,
+          balance: authedUser.credits,
+        });
         return reply.code(402).send({
           error: `Not enough tokens — this track costs ${cost}. Upgrade for more.`,
         });
@@ -524,7 +566,6 @@ export async function songsRoutes(app: FastifyInstance) {
       }
     }
 
-    const audioUrl = await presignGet(row.r2Key);
     let predictionId: string;
     try {
       // Step 1: isolate vocals (Demucs); WhisperX runs on the stem in finalize.
@@ -545,6 +586,7 @@ export async function songsRoutes(app: FastifyInstance) {
         status: "processing",
         stage: "separating",
         mode,
+        durationSeconds,
         replicatePredictionId: predictionId,
         processingStartedAt: startedAt,
         updatedAt: startedAt,
@@ -562,6 +604,22 @@ export async function songsRoutes(app: FastifyInstance) {
           updatedAt: new Date(),
         })
         .where(eq(users.id, authedUser.id));
+    }
+
+    captureServer(row.ownerHash, "processing_started", {
+      song_id: row.id,
+      mode,
+      duration_seconds: durationSeconds,
+      cost_tokens: cost,
+      authed: !!authedUser,
+    });
+
+    // Low-balance nudge once the wallet dips under ~one song's worth.
+    if (authedUser) {
+      const remaining = Math.max(0, authedUser.credits - cost);
+      if (remaining < 600) {
+        void sendOnce(authedUser, "token_low", () => tokenLowEmail(remaining), { marketing: true });
+      }
     }
 
     return reply.send(await toSongDto(updated ?? row));
@@ -595,14 +653,28 @@ export async function songsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "Original upload no longer available." });
     }
 
-    const cost = creditCost(row.durationSeconds ?? 60, mode);
+    // Same trust rule as /process: price from the measured duration, never the
+    // stored value (older rows may still carry a client-supplied number).
+    const audioUrl = await presignGet(row.r2Key);
+    const measured = await probeDurationSeconds(audioUrl);
+    if (measured === null) {
+      return reply.code(400).send({ error: "Original upload could not be read. Please re-upload." });
+    }
+    const durationSeconds = Math.round(measured);
+
+    const cost = creditCost(durationSeconds, mode);
     if (user.credits < cost) {
+      captureServer(`clerk:${clerkId}`, "paywall_viewed", {
+        trigger: "tokens",
+        wanted: "lyrics_regenerate",
+        cost_tokens: cost,
+        balance: user.credits,
+      });
       return reply.code(402).send({
         error: `Not enough tokens — regenerating this track costs ${cost}. Upgrade for more.`,
       });
     }
 
-    const audioUrl = await presignGet(row.r2Key);
     let predictionId: string;
     try {
       predictionId = await startSeparation(audioUrl, mode);
@@ -618,6 +690,7 @@ export async function songsRoutes(app: FastifyInstance) {
         status: "processing",
         stage: "separating",
         mode,
+        durationSeconds,
         replicatePredictionId: predictionId,
         processingStartedAt: startedAt,
         // Clear the previous run's output so the result page shows the new
@@ -638,6 +711,15 @@ export async function songsRoutes(app: FastifyInstance) {
         updatedAt: new Date(),
       })
       .where(eq(users.id, user.id));
+
+    captureServer(row.ownerHash, "processing_started", {
+      song_id: row.id,
+      mode,
+      duration_seconds: durationSeconds,
+      cost_tokens: cost,
+      authed: true,
+      regenerate: true,
+    });
 
     return reply.send(await toSongDto(updated ?? row, true));
   });
@@ -1057,12 +1139,19 @@ export async function songsRoutes(app: FastifyInstance) {
       // The stored video is the clean master. Clean at native resolution = serve it
       // directly (no transcode). Everything else is derived + cached.
       if (!watermark && resolution === "1080p") {
+        captureServer(`clerk:${clerkId}`, "video_downloaded", {
+          song_id: row.id, style: model, resolution, watermarked: false,
+        });
         return reply.send({ status: "ready", url: await presignGet(v.videoKey) });
       }
       const dir = v.videoKey.replace(/\/[^/]+$/, "");
-      // `v2` busts old cached variants baked with the prior low-res watermark.
-      const cacheKey = `${dir}/dl/v2-${resolution}-${watermark ? "wm" : "clean"}.mp4`;
+      // `v3` busts cached variants baked with the prior watermark (logo-only,
+      // no domain text) — the current asset is the syllary.com lockup.
+      const cacheKey = `${dir}/dl/v3-${resolution}-${watermark ? "wm" : "clean"}.mp4`;
       if ((await objectSize(cacheKey)) !== null) {
+        captureServer(`clerk:${clerkId}`, "video_downloaded", {
+          song_id: row.id, style: model, resolution, watermarked: watermark,
+        });
         return reply.send({ status: "ready", url: await presignGet(cacheKey) });
       }
       if (!downloadInFlight.has(cacheKey)) {

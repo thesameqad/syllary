@@ -1,9 +1,15 @@
 import "./load-env.js";
+import { Sentry } from "./instrument.js";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { env } from "./env.js";
+import { startEmailDrip } from "./lib/email-drip.js";
+import { shutdownPosthog } from "./lib/posthog.js";
 import { billingRoutes } from "./routes/billing.js";
 import { catalogRoutes } from "./routes/catalog.js";
+import { contactRoutes } from "./routes/contact.js";
+import { conversionsRoutes } from "./routes/conversions.js";
+import { emailRoutes } from "./routes/email.js";
 import { landingRoutes } from "./routes/landing.js";
 import { memberRoutes } from "./routes/members.js";
 import { seoRoutes } from "./routes/seo.js";
@@ -15,6 +21,9 @@ import { videoRoutes } from "./routes/video.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 
 const app = Fastify({ logger: true, trustProxy: true });
+
+// Report unhandled route errors to Sentry (no-op without a DSN).
+if (env.SENTRY_DSN) Sentry.setupFastifyErrorHandler(app);
 
 // Keep the raw body (Stripe webhook signature verification needs it) while still
 // parsing JSON for normal routes.
@@ -63,6 +72,21 @@ await app.register(toolsRoutes, { prefix: "/api" });
 await app.register(landingRoutes, { prefix: "/api" });
 await app.register(billingRoutes, { prefix: "/api" });
 await app.register(webhookRoutes, { prefix: "/api" });
+await app.register(conversionsRoutes, { prefix: "/api" });
+await app.register(contactRoutes, { prefix: "/api" });
+await app.register(emailRoutes, { prefix: "/api" });
+
+// Onboarding drip poller (no-op without RESEND_API_KEY).
+startEmailDrip();
+
+// Flush queued analytics on shutdown (Render restarts on every deploy).
+const shutdown = async () => {
+  await shutdownPosthog();
+  await app.close();
+  process.exit(0);
+};
+process.on("SIGTERM", () => void shutdown());
+process.on("SIGINT", () => void shutdown());
 
 await app.listen({ port: env.PORT, host: "0.0.0.0" });
 app.log.info(

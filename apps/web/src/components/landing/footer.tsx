@@ -1,4 +1,13 @@
+import { Link } from "react-router-dom";
 import { LogoMark } from "@/components/logo";
+
+const LINKS = [
+  { to: "/terms", label: "Terms" },
+  { to: "/privacy", label: "Privacy" },
+  { to: "/refunds", label: "Refunds" },
+  { to: "/faq", label: "FAQ" },
+  { to: "/contact", label: "Contact" },
+];
 
 export function Footer() {
   return (
@@ -8,15 +17,11 @@ export function Footer() {
         <span>© 2026 Syllary</span>
       </div>
       <nav className="flex items-center gap-4 text-[11px] text-white/25">
-        <a href="#terms" className="transition-colors hover:text-white/60">
-          Terms
-        </a>
-        <a href="#privacy" className="transition-colors hover:text-white/60">
-          Privacy
-        </a>
-        <a href="#contact" className="transition-colors hover:text-white/60">
-          Contact
-        </a>
+        {LINKS.map((l) => (
+          <Link key={l.to} to={l.to} className="transition-colors hover:text-white/60">
+            {l.label}
+          </Link>
+        ))}
       </nav>
     </footer>
   );

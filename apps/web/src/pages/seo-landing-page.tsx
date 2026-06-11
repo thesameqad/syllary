@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { ChevronRight, Loader2 } from "lucide-react";
 import { LANDING_CATEGORIES, type LandingPage } from "@syllary/shared";
+import { captureClient } from "@/lib/analytics";
 import { ApiError, getLanding } from "@/lib/api";
 import { LogoWordmark } from "@/components/logo";
 import { LandingBlocks } from "@/components/landing/landing-blocks";
@@ -124,6 +125,7 @@ export function SeoLandingPage() {
         if (!active) return;
         setPage(p);
         setStatus("ready");
+        captureClient("landing_viewed", { slug: p.slug, category: p.category });
       })
       .catch((err) => {
         if (!active) return;

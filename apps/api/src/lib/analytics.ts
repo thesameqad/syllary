@@ -26,32 +26,84 @@ export async function recordEvent(stage: AnalyticsStage, opts: EventOpts): Promi
   }
 }
 
-type VisitOpts = { userId?: string | null; landingSlug?: string | null; referrer?: string | null };
+/** Paid-ads click attribution parsed from a landing URL's query string. */
+export type ClickAttribution = {
+  clickId: string;
+  /** Which ad network minted the click id. */
+  source: "google" | "microsoft";
+  utm: Record<string, string> | null;
+};
+
+const UTM_KEYS = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"] as const;
+
+/** Extract gclid/msclkid + UTM params from a client-sent path (path?query).
+ *  Returns null when the URL carries no ad click id. UTMs without a click id
+ *  are returned too (source attribution from non-ad campaigns). */
+export function clickAttributionFromPath(
+  path: unknown,
+): { click: ClickAttribution | null; utm: Record<string, string> | null } {
+  if (typeof path !== "string" || !path.includes("?")) return { click: null, utm: null };
+  let params: URLSearchParams;
+  try {
+    params = new URL(path, "https://x.invalid").searchParams;
+  } catch {
+    return { click: null, utm: null };
+  }
+  let utm: Record<string, string> | null = null;
+  for (const key of UTM_KEYS) {
+    const v = params.get(key);
+    if (v) (utm ??= {})[key.slice(4)] = v.slice(0, 200);
+  }
+  const gclid = params.get("gclid");
+  const msclkid = params.get("msclkid");
+  const clickId = gclid ?? msclkid;
+  if (!clickId) return { click: null, utm };
+  return {
+    click: { clickId: clickId.slice(0, 200), source: gclid ? "google" : "microsoft", utm },
+    utm,
+  };
+}
+
+type VisitOpts = {
+  userId?: string | null;
+  landingSlug?: string | null;
+  referrer?: string | null;
+  click?: ClickAttribution | null;
+  utm?: Record<string, string> | null;
+};
 
 /** Record a site visit. Deduped to one per identity (ownerHash) per UTC day so
  *  repeat page-loads don't bloat the table — EXCEPT we always capture the first
- *  visit that carries a landing slug (first-touch attribution), so a later
- *  landing arrival isn't swallowed by an earlier plain page-load that day. */
+ *  visit that carries a landing slug OR an ad click id (first-touch
+ *  attribution), so a later attributed arrival isn't swallowed by an earlier
+ *  plain page-load that day. */
 export async function recordVisit(ownerHash: string, opts: VisitOpts = {}): Promise<void> {
   try {
     const landingSlug = opts.landingSlug ?? null;
-    const props =
-      landingSlug || opts.referrer
-        ? { ...(landingSlug ? { landingSlug } : {}), ...(opts.referrer ? { referrer: opts.referrer } : {}) }
-        : null;
+    const click = opts.click ?? null;
+    const propEntries: Record<string, unknown> = {
+      ...(landingSlug ? { landingSlug } : {}),
+      ...(opts.referrer ? { referrer: opts.referrer } : {}),
+      ...(click ? { clickId: click.clickId, clickSource: click.source } : {}),
+      ...(opts.utm ? { utm: opts.utm } : {}),
+    };
+    const props = Object.keys(propEntries).length ? propEntries : null;
 
-    if (landingSlug) {
-      // First-touch: only record a landing visit if this identity has no prior
-      // landing-attributed visit yet.
-      const prior = await firstTouchLandingSlug(ownerHash);
-      if (prior) return;
+    if (landingSlug || click) {
+      // First-touch: record an attributed visit only while this identity has no
+      // prior visit carrying the same kind of attribution. Landing and click
+      // first-touches are tracked independently (an ad can land on the
+      // homepage; a landing page can be reached organically).
+      const skipForLanding = landingSlug ? !!(await firstTouchLandingSlug(ownerHash)) : true;
+      const skipForClick = click ? !!(await firstTouchClick(ownerHash)) : true;
+      if (skipForLanding && skipForClick) return;
       await db
         .insert(analyticsEvents)
         .values({ stage: "visited", ownerHash, userId: opts.userId ?? null, props });
       return;
     }
 
-    // Non-landing visit: keep the cheap one-per-day dedup.
+    // Non-attributed visit: keep the cheap one-per-day dedup.
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const [recent] = await db
       .select({ id: analyticsEvents.id })
@@ -67,9 +119,38 @@ export async function recordVisit(ownerHash: string, opts: VisitOpts = {}): Prom
     if (recent) return;
     await db
       .insert(analyticsEvents)
-      .values({ stage: "visited", ownerHash, userId: opts.userId ?? null });
+      .values({ stage: "visited", ownerHash, userId: opts.userId ?? null, props });
   } catch {
     // ignore
+  }
+}
+
+/** The ad click attribution of an identity's earliest click-attributed visit,
+ *  or null. Drives first-touch click stamping onto users (mirrors
+ *  firstTouchLandingSlug). Best-effort: never throws. */
+export async function firstTouchClick(ownerHash: string): Promise<ClickAttribution | null> {
+  try {
+    const [row] = await db
+      .select({
+        clickId: sql<string | null>`${analyticsEvents.props}->>'clickId'`,
+        source: sql<string | null>`${analyticsEvents.props}->>'clickSource'`,
+        utm: sql<Record<string, string> | null>`${analyticsEvents.props}->'utm'`,
+      })
+      .from(analyticsEvents)
+      .where(
+        and(
+          eq(analyticsEvents.stage, "visited"),
+          eq(analyticsEvents.ownerHash, ownerHash),
+          sql`${analyticsEvents.props}->>'clickId' is not null`,
+        ),
+      )
+      .orderBy(asc(analyticsEvents.createdAt))
+      .limit(1);
+    if (!row?.clickId) return null;
+    const source = row.source === "microsoft" ? "microsoft" : "google";
+    return { clickId: row.clickId, source, utm: row.utm ?? null };
+  } catch {
+    return null;
   }
 }
 

@@ -41,6 +41,36 @@ export type StitchSegment = {
   clipEnd: number;
 };
 
+/** Measure a media file's duration by letting ffmpeg read the container header
+ *  (no decode, no output file — works directly on a presigned R2 URL). This is
+ *  the AUTHORITATIVE duration for token pricing: the client-supplied value at
+ *  presign time is a hint only and must never price a job. Returns seconds, or
+ *  null when the input can't be read or reports no duration. */
+export function probeDurationSeconds(input: string, timeoutMs = 30_000): Promise<number | null> {
+  return new Promise((resolve) => {
+    // `ffmpeg -i <input>` with no output exits non-zero by design; we only
+    // want the "Duration: HH:MM:SS.cc" line it prints while inspecting input.
+    const proc = spawn(ffmpegPath(), ["-hide_banner", "-i", input], { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    const timer = setTimeout(() => proc.kill("SIGKILL"), timeoutMs);
+    proc.stderr.on("data", (d) => {
+      stderr += d.toString();
+      if (stderr.length > 16_000) stderr = stderr.slice(-16_000);
+    });
+    proc.on("error", () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+    proc.on("close", () => {
+      clearTimeout(timer);
+      const m = /Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)/.exec(stderr);
+      if (!m) return resolve(null);
+      const seconds = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+      resolve(Number.isFinite(seconds) && seconds > 0 ? seconds : null);
+    });
+  });
+}
+
 function runFfmpeg(args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn(ffmpegPath(), ["-hide_banner", "-loglevel", "error", ...args], { cwd });
@@ -75,7 +105,9 @@ export async function transcodeForDownload(opts: {
   const enc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "copy", "-movflags", "+faststart"];
   let args: string[];
   if (opts.watermark) {
-    const logoH = Math.round(h * 0.075); // logo ~7.5% of frame height
+    // ~9% of frame height: the watermark doubles as the ad on shared/YouTube
+    // videos, so "syllary.com" must survive mobile sizes after compression.
+    const logoH = Math.round(h * 0.09);
     const margin = Math.round(h * 0.03);
     const fc =
       `[0:v]${scale}[bg];` +

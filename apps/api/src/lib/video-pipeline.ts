@@ -33,6 +33,7 @@ import {
   type StitchSegment,
 } from "./ffmpeg.js";
 import { env } from "../env.js";
+import { captureForUserId } from "./posthog.js";
 import { presignGet, putObject } from "./r2.js";
 
 // How many backdrop images to generate concurrently. Keeps us well under
@@ -73,6 +74,13 @@ async function failJob(job: VideoJobRow, message: string): Promise<void> {
       .set({ credits: sql`${users.credits} + ${job.tokensCharged}`, updatedAt: new Date() })
       .where(eq(users.id, job.userId));
   }
+  void captureForUserId(job.userId, "video_failed", {
+    song_id: job.songId,
+    style: job.model,
+    preview: job.isPreview,
+    error: message,
+    tokens_refunded: job.tokensCharged,
+  });
 }
 
 async function bumpProgress(jobId: string, segments: VideoSegment[]): Promise<void> {
@@ -258,6 +266,12 @@ async function finalize(job: VideoJobRow, outFile: string): Promise<void> {
     .update(songs)
     .set({ latestVideoKey: videoKey, updatedAt: new Date() })
     .where(eq(songs.id, job.songId));
+  void captureForUserId(job.userId, "video_completed", {
+    song_id: job.songId,
+    style: job.model,
+    preview: job.isPreview,
+    render_seconds: Math.round((Date.now() - job.createdAt.getTime()) / 1000),
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import { motion, useMotionValue, useSpring } from "framer-motion";
 import { useAuth } from "@clerk/clerk-react";
 import { AlertCircle, Check, Code2, Copy, ExternalLink, Loader2, Maximize2, Music, Pause, Play, Share2 } from "lucide-react";
 import type { AudioFeatures, Lyrics, PublicSong, SongLink } from "@syllary/shared";
+import { captureClient } from "@/lib/analytics";
 import { ApiError, getPublicSong, rateSong } from "@/lib/api";
 import { useWavesurfer } from "@/hooks/use-wavesurfer";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
@@ -92,7 +93,11 @@ function PublicPageInner({ signedIn }: { signedIn: boolean }) {
     if (!songId) return;
     let active = true;
     getPublicSong(songId)
-      .then((s) => active && setSong(s))
+      .then((s) => {
+        if (!active) return;
+        setSong(s);
+        captureClient("public_page_viewed", { song_id: songId });
+      })
       .catch((e) => active && setError(e instanceof ApiError ? e.message : "This page isn't available."));
     return () => {
       active = false;

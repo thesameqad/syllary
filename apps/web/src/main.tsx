@@ -4,11 +4,23 @@ import "./index.css";
 import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
-import { ClerkProvider, useAuth } from "@clerk/clerk-react";
+import { ClerkProvider, useAuth, useUser } from "@clerk/clerk-react";
 import { dark } from "@clerk/themes";
+import * as Sentry from "@sentry/react";
 import { App } from "./App";
+import { initAdTags, reportSignupConversion } from "@/lib/ad-tags";
+import { identifyUser, initAnalytics } from "@/lib/analytics";
 import { setTokenGetter } from "@/lib/api";
 import { clerkPublishableKey } from "@/lib/auth";
+
+// Error tracking — no DSN (local dev, previews) = never initializes.
+const sentryDsn = import.meta.env.VITE_SENTRY_DSN as string | undefined;
+if (sentryDsn) {
+  Sentry.init({ dsn: sentryDsn, environment: import.meta.env.MODE, tracesSampleRate: 0 });
+}
+
+initAdTags();
+initAnalytics();
 
 function TokenBridge() {
   const { getToken } = useAuth();
@@ -16,6 +28,23 @@ function TokenBridge() {
     setTokenGetter(() => getToken());
     return () => setTokenGetter(null);
   }, [getToken]);
+  return null;
+}
+
+/** Ties the browser to the signed-in PostHog person, and reports a fresh
+ *  sign-up to the ad platforms exactly once (sessionStorage de-dupes reloads;
+ *  "fresh" = account created in the last few minutes). */
+function AnalyticsBridge() {
+  const { user } = useUser();
+  useEffect(() => {
+    if (!user) return;
+    identifyUser(user.id, { email: user.primaryEmailAddress?.emailAddress });
+    const created = user.createdAt ? Date.now() - user.createdAt.getTime() : Infinity;
+    if (created < 5 * 60 * 1000 && !sessionStorage.getItem("syl_signup_reported")) {
+      sessionStorage.setItem("syl_signup_reported", "1");
+      reportSignupConversion();
+    }
+  }, [user]);
   return null;
 }
 
@@ -49,6 +78,7 @@ createRoot(rootElement).render(
         afterSignOutUrl="/"
       >
         <TokenBridge />
+        <AnalyticsBridge />
         {tree}
       </ClerkProvider>
     ) : (

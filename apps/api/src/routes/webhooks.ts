@@ -2,9 +2,10 @@ import type { FastifyInstance } from "fastify";
 import type Stripe from "stripe";
 import { eq } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { processedEvents, users } from "../db/schema.js";
+import { conversionExports, processedEvents, users } from "../db/schema.js";
 import { env } from "../env.js";
 import { recordEvent } from "../lib/analytics.js";
+import { captureServer } from "../lib/posthog.js";
 import { stripe } from "../lib/stripe.js";
 import { applySubscription, clearSubscription } from "../lib/subscription.js";
 
@@ -24,6 +25,44 @@ async function recordBilling(
     .limit(1);
   if (!user) return;
   await recordEvent(stage, { ownerHash: `clerk:${user.clerkUserId}`, userId: user.id, props });
+  if (stage === "subscribed") {
+    captureServer(`clerk:${user.clerkUserId}`, "subscription_activated", props);
+  }
+}
+
+/** Queue an offline ad conversion for a purchase by a click-attributed user.
+ *  The admin export endpoint later serves these as the Google/Microsoft
+ *  "conversions from clicks" CSV. Best-effort: never fails the webhook. */
+async function queueAdConversion(
+  customer: string | Stripe.Customer | Stripe.DeletedCustomer | null,
+  valueCents: number,
+  currency: string,
+): Promise<void> {
+  try {
+    const customerId = typeof customer === "string" ? customer : customer?.id;
+    if (!customerId) return;
+    const [user] = await db
+      .select({
+        id: users.id,
+        clickId: users.acquisitionClickId,
+        source: users.acquisitionClickSource,
+      })
+      .from(users)
+      .where(eq(users.stripeCustomerId, customerId))
+      .limit(1);
+    if (!user?.clickId || !user.source) return;
+    await db.insert(conversionExports).values({
+      userId: user.id,
+      source: user.source,
+      clickId: user.clickId,
+      conversionName: "purchase",
+      conversionAt: new Date(),
+      valueCents,
+      currency,
+    });
+  } catch {
+    // conversion export is best-effort
+  }
 }
 
 export async function webhookRoutes(app: FastifyInstance) {
@@ -59,11 +98,15 @@ export async function webhookRoutes(app: FastifyInstance) {
         case "customer.subscription.created": {
           const sub = event.data.object;
           await applySubscription(sub);
+          const price = sub.items.data[0]?.price;
           await recordBilling("subscribed", sub.customer, {
             subscriptionId: sub.id,
-            priceId: sub.items.data[0]?.price.id ?? null,
+            priceId: price?.id ?? null,
             status: sub.status,
+            amountCents: price?.unit_amount ?? null,
+            interval: price?.recurring?.interval ?? null,
           });
+          await queueAdConversion(sub.customer, price?.unit_amount ?? 0, price?.currency ?? "usd");
           break;
         }
         case "customer.subscription.updated":
