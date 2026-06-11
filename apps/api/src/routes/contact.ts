@@ -31,12 +31,22 @@ function allow(hash: string): boolean {
 export async function contactRoutes(app: FastifyInstance) {
   app.post("/contact", async (req, reply) => {
     const parsed = contactSchema.safeParse(req.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ error: "Invalid message." });
+    if (!parsed.success) {
+      const issuePaths = parsed.error.issues.map((i) => i.path[0]);
+      const error = issuePaths.includes("message")
+        ? "Tell us a little more. Messages need at least 5 characters."
+        : issuePaths.includes("email")
+          ? "That email address doesn't look right. Mind double-checking it?"
+          : "Please check the form and try again.";
+      return reply.code(400).send({ error });
+    }
     const { name, email, topic, message } = parsed.data;
 
     const hash = ownerHash(req.ip, req.headers["user-agent"] ?? "");
     if (!allow(hash)) {
-      return reply.code(429).send({ error: "Too many messages — please try again later." });
+      return reply.code(429).send({
+        error: "You've sent a few messages recently. Give it an hour, or email hello@syllary.com directly.",
+      });
     }
 
     const subject = `[Syllary contact] ${topic}${name ? ` — ${name}` : ""}`;
