@@ -132,8 +132,10 @@ async function download(videoUrl: string): Promise<Buffer> {
 }
 
 // Provider-reported failures that are usually transient (e.g. the model briefly
-// couldn't fetch the input image). Worth resubmitting the whole clip.
-const TRANSIENT = /could not be fetched|failed to fetch|fetch failed|timed out|timeout|HTTP 5\d\d|network/i;
+// couldn't fetch the input image, or a server-side "internal error … try again").
+// Worth resubmitting the whole clip rather than failing the entire job.
+const TRANSIENT =
+  /could not be fetched|failed to fetch|fetch failed|timed out|timeout|HTTP 5\d\d|network|internal error|try again|temporarily/i;
 
 /** Generate one image-to-video clip and return its MP4 bytes. A `lastFrameUrl`
  *  makes the model interpolate first→last (used by Cinematic for seamless,

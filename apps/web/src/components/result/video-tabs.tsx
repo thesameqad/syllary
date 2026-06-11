@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Check, Clapperboard, Download, Globe, Loader2, Maximize2 } from "lucide-react";
+import { AlertCircle, Check, Clapperboard, Download, Globe, Loader2, Lock, Maximize2, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import {
+  canRemoveWatermark,
   estimateVideoCost,
   type ReviewSegment,
+  VIDEO_DOWNLOAD_RESOLUTIONS,
+  type VideoDownloadResolution,
   VIDEO_MODELS,
   VIDEO_MODEL_INFO,
   type Song,
@@ -13,15 +16,40 @@ import {
 import {
   ApiError,
   createVideoFromFrames,
+  deleteSongVideo,
   generateFullVideo,
   getVideoJob,
+  requestVideoDownload,
   setPublicVideo,
 } from "@/lib/api";
+import { useAccount } from "@/lib/account-context";
 import { useToast } from "@/components/ui/toast";
 import { Button3D } from "@/components/ui/button-3d";
+import { Modal } from "@/components/ui/modal";
 import { ManualReview } from "@/components/result/manual-review";
 import { TheaterMode } from "@/components/result/theater-mode";
 import { cn } from "@/lib/utils";
+
+/** The Cinematic (Seedance) model rejected the frames as possibly a real person —
+ *  worth offering a retry on the more permissive motion model. */
+function isModerationError(raw: string | null | undefined): boolean {
+  return !!raw && /real person|sensitive content|privacy|moderation/i.test(raw);
+}
+
+/** Turn a raw pipeline/provider error into something a user can read. */
+function humanizeVideoError(raw: string | null | undefined): string {
+  if (!raw) return "Something went wrong while generating this video.";
+  if (isModerationError(raw)) {
+    return "The Cinematic video model rejected a frame as possibly showing a real person. Retry with a more permissive model that still keeps the cinematic transitions — or switch to Living Scenes / a more stylized art direction (which usually passes).";
+  }
+  if (/not enough tokens|credits/i.test(raw)) return raw;
+  // Strip our wrapper + nested HTTP/JSON noise; keep it short and legible.
+  const cleaned = raw
+    .replace(/^video (submit|generation|download)[^:]*:\s*/i, "")
+    .replace(/\{[\s\S]*$/, "")
+    .trim();
+  return cleaned.length > 0 ? cleaned : "Generation failed — please try again.";
+}
 
 /** Edit-mode lyric-video panel: a tab per generated style (plus the one being
  *  generated), the player for the active tab — or a live progress view while
@@ -41,7 +69,14 @@ export function VideoTabs({
   onJobFailed: (message: string) => void;
 }) {
   const toast = useToast();
+  const { account } = useAccount();
+  const allowClean = !!account && canRemoveWatermark(account.plan);
   const [theaterOpen, setTheaterOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const [dlResolution, setDlResolution] = useState<VideoDownloadResolution>("1080p");
+  const [dlWatermark, setDlWatermark] = useState(true);
+  const [downloading, setDownloading] = useState(false);
   const [liveJob, setLiveJob] = useState<VideoJob | null>(activeJob);
   const [selected, setSelected] = useState<VideoModel>(
     () => activeJob?.model ?? VIDEO_MODELS.find((m) => song.videos.some((v) => v.model === m)) ?? "fast",
@@ -71,6 +106,7 @@ export function VideoTabs({
       try {
         const next = await getVideoJob(liveJob.id);
         setLiveJob(next);
+        if (next.status === "ready" || next.status === "failed") setPromoting(false);
         if (next.status === "ready") onJobComplete();
         else if (next.status === "failed") onJobFailed(next.error ?? "Video generation failed.");
       } catch {
@@ -99,6 +135,9 @@ export function VideoTabs({
   // Manual mode is awaiting per-line review for this style.
   const showReview =
     !!liveJob && liveJob.status === "review" && selected === liveJob.model;
+  // This style's generation failed — show the error + retry in the player slot.
+  const showFailed =
+    !!liveJob && liveJob.status === "failed" && selected === liveJob.model && !showProgress;
 
   function applySegment(seg: ReviewSegment) {
     setLiveJob((j) =>
@@ -106,11 +145,12 @@ export function VideoTabs({
     );
   }
 
-  async function generateFull() {
+  async function generateFull(permissive = false) {
     setPromoting(true);
     try {
-      // Promote the preview → full render with the same settings; resume polling.
-      const job = await generateFullVideo(song.id, selected);
+      // Promote the preview → full render (also the failure retry); `permissive`
+      // retries Cinematic on the more permissive motion model. Resume polling.
+      const job = await generateFullVideo(song.id, selected, permissive);
       setLiveJob(job);
     } catch (e) {
       setPromoting(false);
@@ -159,6 +199,26 @@ export function VideoTabs({
     }
   }
 
+  async function deleteVideo() {
+    if (!completed) return;
+    setBusy(true);
+    try {
+      const updated = await deleteSongVideo(song.id, selected);
+      setDeleteOpen(false);
+      // Drop a lingering live/failed job for this style, and move the selection
+      // to another remaining style if there is one.
+      if (liveJob?.model === selected) setLiveJob(null);
+      const remaining = VIDEO_MODELS.filter((m) => updated.videos.some((v) => v.model === m));
+      if (remaining.length > 0) setSelected(remaining[0]!);
+      onUpdate(updated);
+      toast(`${VIDEO_MODEL_INFO[selected].label} video deleted.`);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't delete the video.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function togglePublic() {
     if (!completed) return;
     setBusy(true);
@@ -176,6 +236,44 @@ export function VideoTabs({
       toast(e instanceof ApiError ? e.message : "Couldn't update the public video.", "error");
     } finally {
       setBusy(false);
+    }
+  }
+
+  // Request a download variant (resolution ± watermark). The server produces and
+  // caches it on demand from the clean master, so we poll until it's ready, then
+  // fetch → blob → trigger the browser download with a friendly filename.
+  async function startDownload() {
+    const watermark = !(allowClean && !dlWatermark);
+    setDownloading(true);
+    try {
+      let url: string | null = null;
+      // Poll the idempotent endpoint until the variant is ready in R2.
+      for (let i = 0; i < 80; i++) {
+        const res = await requestVideoDownload(song.id, selected, {
+          resolution: dlResolution,
+          watermark,
+        });
+        if (res.status === "ready" && res.url) {
+          url = res.url;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 2500));
+      }
+      if (!url) throw new Error("Download timed out — please try again.");
+      const blob = await (await fetch(url)).blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = `${song.title || "lyrics"}-${selected}-${dlResolution}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+      setDownloadOpen(false);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Download failed.", "error");
+    } finally {
+      setDownloading(false);
     }
   }
 
@@ -231,6 +329,19 @@ export function VideoTabs({
           done={liveJob?.completedSegments ?? 0}
           total={liveJob?.totalSegments ?? 0}
         />
+      ) : showFailed ? (
+        <FailedPanel
+          message={humanizeVideoError(liveJob?.error)}
+          busy={promoting}
+          retryLabel={
+            selected === "pro" && isModerationError(liveJob?.error)
+              ? "Retry with a more permissive model"
+              : "Retry"
+          }
+          onRetry={() =>
+            void generateFull(selected === "pro" && isModerationError(liveJob?.error))
+          }
+        />
       ) : url ? (
         <>
           <div className="relative mt-3">
@@ -238,8 +349,10 @@ export function VideoTabs({
               key={url}
               src={url}
               controls
+              controlsList="nodownload"
+              onContextMenu={(e) => e.preventDefault()}
               crossOrigin="anonymous"
-              className="aspect-video w-full overflow-hidden rounded-[10px] border border-white/10 bg-black"
+              className="block aspect-video w-full overflow-hidden rounded-[10px] border border-white/10 bg-black"
             />
             {previewShown && (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden rounded-[10px]">
@@ -265,14 +378,18 @@ export function VideoTabs({
             <>
             <div className="mt-3 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <a
-                  href={url}
-                  download={`${song.title || "lyrics"}-${selected}.mp4`}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDlResolution("1080p");
+                    setDlWatermark(true);
+                    setDownloadOpen(true);
+                  }}
                   className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
                 >
                   <Download className="h-3.5 w-3.5 text-pulse" />
                   Download
-                </a>
+                </button>
                 <button
                   type="button"
                   onClick={() => setTheaterOpen(true)}
@@ -280,6 +397,15 @@ export function VideoTabs({
                 >
                   <Maximize2 className="h-3.5 w-3.5 text-pulse" />
                   Theater
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeleteOpen(true)}
+                  disabled={busy}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/60 transition-colors hover:border-pulse/50 hover:text-pulse disabled:opacity-60"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete
                 </button>
               </div>
               {completed &&
@@ -339,6 +465,152 @@ export function VideoTabs({
           onClose={() => setTheaterOpen(false)}
         />
       )}
+
+      <Modal
+        open={downloadOpen}
+        onClose={() => !downloading && setDownloadOpen(false)}
+        title="Download video"
+      >
+        <div className="space-y-5">
+          <div>
+            <p className="mb-2 text-[12px] font-medium uppercase tracking-[0.5px] text-white/40">
+              Resolution
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              {VIDEO_DOWNLOAD_RESOLUTIONS.map((res) => (
+                <button
+                  key={res}
+                  type="button"
+                  disabled={downloading}
+                  onClick={() => setDlResolution(res)}
+                  className={cn(
+                    "rounded-[10px] border px-3 py-2.5 text-[13px] font-medium transition-colors disabled:opacity-60",
+                    dlResolution === res
+                      ? "border-pulse bg-pulse/[0.12] text-white"
+                      : "border-white/10 bg-white/[0.03] text-white/60 hover:border-white/25 hover:text-white",
+                  )}
+                >
+                  {res}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-2 text-[12px] font-medium uppercase tracking-[0.5px] text-white/40">
+              Watermark
+            </p>
+            {allowClean ? (
+              <button
+                type="button"
+                disabled={downloading}
+                onClick={() => setDlWatermark((v) => !v)}
+                className="flex w-full items-center justify-between rounded-[10px] border border-white/10 bg-white/[0.03] px-3.5 py-3 text-left transition-colors hover:border-white/25 disabled:opacity-60"
+              >
+                <span className="text-[13px] text-white/80">Remove Syllary watermark</span>
+                <span
+                  className={cn(
+                    "relative h-[22px] w-[38px] rounded-full transition-colors",
+                    !dlWatermark ? "bg-pulse" : "bg-white/15",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-[3px] h-4 w-4 rounded-full bg-white transition-all",
+                      !dlWatermark ? "left-[19px]" : "left-[3px]",
+                    )}
+                  />
+                </span>
+              </button>
+            ) : (
+              <div className="flex items-start gap-2.5 rounded-[10px] border border-white/10 bg-white/[0.03] px-3.5 py-3">
+                <Lock className="mt-0.5 h-4 w-4 shrink-0 text-white/40" />
+                <div className="text-[12.5px] leading-relaxed text-white/55">
+                  The Syllary watermark is included on every download.{" "}
+                  <span className="inline-flex items-center gap-1 font-medium text-pulse">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Music-video plans
+                  </span>{" "}
+                  can download without it.
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              disabled={downloading}
+              onClick={() => setDownloadOpen(false)}
+              className="rounded-[10px] px-4 py-2 text-[13px] text-white/70 transition-colors hover:bg-white/[0.06] hover:text-white disabled:opacity-60"
+            >
+              Cancel
+            </button>
+            <Button3D onClick={() => void startDownload()} disabled={downloading}>
+              {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              {downloading ? "Preparing…" : "Download"}
+            </Button3D>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={deleteOpen}
+        onClose={() => !busy && setDeleteOpen(false)}
+        title={`Delete ${VIDEO_MODEL_INFO[selected].label} video`}
+      >
+        <p className="text-[13px] leading-relaxed text-white/60">
+          Delete the <span className="font-medium text-white">{VIDEO_MODEL_INFO[selected].label}</span>{" "}
+          video for <span className="font-medium text-white">{song.title}</span>? This removes that
+          rendered video (the other styles are untouched). You can regenerate it afterwards. This
+          can&apos;t be undone.
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setDeleteOpen(false)}
+            className="rounded-[10px] px-4 py-2 text-[13px] text-white/70 transition-colors hover:bg-white/[0.06] hover:text-white disabled:opacity-60"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void deleteVideo()}
+            className="inline-flex items-center gap-1.5 rounded-[10px] bg-pulse px-4 py-2 text-[13px] font-medium text-white transition-transform hover:scale-[1.03] disabled:opacity-60"
+          >
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Delete
+          </button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+/** Shown in the player slot when a style's generation failed: a readable error
+ *  and a retry button (re-runs the style with the same settings). */
+function FailedPanel({
+  message,
+  busy,
+  retryLabel,
+  onRetry,
+}: {
+  message: string;
+  busy: boolean;
+  retryLabel: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="mt-3 flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-[10px] border border-pulse/30 bg-black px-6 text-center">
+      <AlertCircle className="h-8 w-8 text-pulse" />
+      <p className="text-[14px] font-medium text-white">Couldn&apos;t generate this video</p>
+      <p className="max-w-[460px] text-[12.5px] leading-relaxed text-white/55">{message}</p>
+      <Button3D onClick={onRetry} disabled={busy}>
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+        {busy ? "Retrying…" : retryLabel}
+      </Button3D>
     </div>
   );
 }

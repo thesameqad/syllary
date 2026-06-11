@@ -43,6 +43,13 @@ const envSchema = z.object({
   // scene-changing shots) — Grok does NOT (first_frame only), Seedance/Wan/Kling
   // do. Seedance 2.0 Fast is the cheapest confirmed first+last option.
   OPENROUTER_CINEMATIC_MODEL: z.string().default("bytedance/seedance-2.0-fast"),
+  // Permissive fallback for Cinematic when the default model rejects the frames
+  // as "possibly a real person" (the user clicks "Retry with a more permissive
+  // model"). MUST also support first+last frame so the morphing transitions —
+  // what makes Cinematic distinct from Living Scenes — survive. Kling supports it
+  // and uses a different provider/moderation than Seedance. Kling clips are 5s or
+  // 10s, so the pipeline snaps the gen duration when this is active.
+  OPENROUTER_CINEMATIC_FALLBACK_MODEL: z.string().default("kwaivgi/kling-v3.0-std"),
   // Override the ffmpeg binary path. Defaults to the bundled ffmpeg-static
   // binary (works on Render's native runtime, no Docker); set this to use a
   // system install locally.

@@ -126,6 +126,90 @@ export const VIDEO_MODEL_INFO: Record<
  *  line, so users can try a style before committing to the full spend. */
 export const PREVIEW_SECONDS = 10;
 
+// ---- Band members / character references -----------------------------------
+
+/** Max photos a user may upload per band member (for choice; only the first few
+ *  are sent as references per frame). */
+export const MEMBER_IMAGE_MAX = 6;
+/** Max characters selectable for one video. */
+export const MAX_VIDEO_CHARACTERS = 4;
+/** Max reference images sent to the image model per frame (cost + identity-blend
+ *  bound). Distributed across the selected characters via `referenceCountFor`. */
+export const CHARACTER_REFS_PER_FRAME = 4;
+
+/** One stored member photo as persisted in the DB jsonb column: an R2 key
+ *  (object, not a bare string, so we can add fields like a `primary` flag later
+ *  without a migration). The client-facing form (with a presigned url) is
+ *  `MemberImage` in members.ts. */
+export type StoredMemberImage = { key: string };
+
+/** A selected character on a video job: the member's name + the reference image
+ *  R2 keys that depict them. Stored grouped (one per member) so references can be
+ *  labeled by name for the image model. */
+export type CharacterReference = { name: string; imageKeys: string[] };
+
+/** Which of `names` are mentioned in `text` (case-insensitive, ignoring a leading
+ *  "@"), returned in `names` order. Shared so the manual UI's highlight and the
+ *  server's per-scene character subset use identical matching. */
+export function findMentionedNames(text: string, names: string[]): string[] {
+  const hay = text.toLowerCase();
+  return names.filter((n) => {
+    const needle = n.trim().toLowerCase();
+    return needle.length > 0 && hay.includes(needle);
+  });
+}
+
+/** Read the persisted character references, tolerating the legacy shape (a bare
+ *  string[][] of image keys, before names were stored). Drops empty groups. */
+export function normalizeCharacterRefs(raw: unknown): CharacterReference[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CharacterReference[] = [];
+  for (const entry of raw) {
+    if (Array.isArray(entry)) {
+      const keys = entry.filter((k): k is string => typeof k === "string");
+      if (keys.length > 0) out.push({ name: "", imageKeys: keys });
+    } else if (entry && typeof entry === "object") {
+      const e = entry as { name?: unknown; imageKeys?: unknown };
+      const keys = Array.isArray(e.imageKeys)
+        ? e.imageKeys.filter((k): k is string => typeof k === "string")
+        : [];
+      if (keys.length > 0) out.push({ name: typeof e.name === "string" ? e.name : "", imageKeys: keys });
+    }
+  }
+  return out;
+}
+
+/** The characters to actually depict in one frame: those named in the per-scene
+ *  direction (manual) → else those named in the brief (autopilot) → else all.
+ *  Only ever narrows the set, never adds, so cost never exceeds the up-front quote. */
+export function selectActiveCharacters(
+  all: CharacterReference[],
+  directionText?: string | null,
+  brief?: string | null,
+): CharacterReference[] {
+  if (all.length === 0) return all;
+  const names = all.map((r) => r.name).filter((n) => n.trim().length > 0);
+  if (names.length === 0) return all; // legacy / unnamed → can't target
+  const fromDir = directionText ? findMentionedNames(directionText, names) : [];
+  const picked = fromDir.length > 0 ? fromDir : brief ? findMentionedNames(brief, names) : [];
+  if (picked.length === 0) return all;
+  const set = new Set(picked.map((n) => n.toLowerCase()));
+  return all.filter((r) => set.has(r.name.toLowerCase()));
+}
+
+/** How many reference images to actually send per frame given the selected
+ *  members' photo counts. Distributes up to CHARACTER_REFS_PER_FRAME slots: one
+ *  member → up to 3 of its photos; otherwise spread evenly, capped at the total.
+ *  Pure + shared so the modal's price quote and the server's charge agree. */
+export function referenceCountFor(memberImageCounts: number[]): number {
+  const counts = memberImageCounts.filter((n) => n > 0);
+  if (counts.length === 0) return 0;
+  const perMember = counts.length === 1 ? 3 : 2;
+  let total = 0;
+  for (const n of counts) total += Math.min(n, perMember);
+  return Math.min(total, CHARACTER_REFS_PER_FRAME);
+}
+
 /** Autopilot renders the whole video end-to-end; manual lets the owner review
  *  and regenerate each line before stitching. */
 export const VIDEO_PIPELINE_MODES = ["autopilot", "manual"] as const;

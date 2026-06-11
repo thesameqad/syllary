@@ -11,9 +11,12 @@ import {
   Images,
   Loader2,
   Sparkles,
+  User,
+  Users,
   Wand2,
 } from "lucide-react";
 import {
+  type BandMember,
   IMAGE_QUALITIES,
   IMAGE_QUALITY_INFO,
   estimateVideoCost,
@@ -21,6 +24,8 @@ import {
   IMAGE_SIZE_INFO,
   type ImageQuality,
   type ImageSize,
+  MAX_VIDEO_CHARACTERS,
+  referenceCountFor,
   type Song,
   type VideoJob,
   VIDEO_MODELS,
@@ -29,12 +34,13 @@ import {
   type VideoPipelineMode,
   VIDEO_STYLE_PRESETS,
 } from "@syllary/shared";
-import { ApiError, createLyricsVideo, getVideoBrief } from "@/lib/api";
+import { ApiError, createLyricsVideo, getVideoBrief, listMembers } from "@/lib/api";
 import { useAccount } from "@/lib/account-context";
 import { useToast } from "@/components/ui/toast";
 import { Modal } from "@/components/ui/modal";
 import { Button3D } from "@/components/ui/button-3d";
 import { VideoFormatPreview } from "@/components/result/video-format-preview";
+import { MentionTextarea } from "@/components/ui/mention-textarea";
 import { cn } from "@/lib/utils";
 
 const STYLE_ICON: Record<VideoModel, typeof Images> = {
@@ -43,8 +49,8 @@ const STYLE_ICON: Record<VideoModel, typeof Images> = {
   pro: Film,
 };
 
-// Visual-look picker → video-format picker → quality/generation settings → brief.
-type Step = "style" | "format" | "settings" | "direction";
+// Visual-look → video-format → quality/generation → (optional) cast → brief.
+type Step = "style" | "format" | "settings" | "cast" | "direction";
 
 const PLACEHOLDER =
   "e.g. dreamy neon synthwave city at night, cinematic, volumetric haze, deep blues and magenta";
@@ -80,6 +86,18 @@ export function GenerateVideoModal({
   const [sceneBrief, setSceneBrief] = useState("");
   const [briefLoading, setBriefLoading] = useState(false);
   const [briefLoaded, setBriefLoaded] = useState(false);
+  // Band members ("cast") the user can optionally depict as characters.
+  const [members, setMembers] = useState<BandMember[]>([]);
+  const [selectedCharacterIds, setSelectedCharacterIds] = useState<string[]>([]);
+
+  // Reference images sent per frame for the selected characters — matches the
+  // server's resolution so the quoted price equals the charged price.
+  const referenceImages = useMemo(() => {
+    const counts = members
+      .filter((m) => selectedCharacterIds.includes(m.id))
+      .map((m) => m.images.length);
+    return referenceCountFor(counts);
+  }, [members, selectedCharacterIds]);
 
   // Live price for the chosen settings, computed from the same timeline the
   // renderer will produce — recomputes on every mode/quality/resolution change.
@@ -91,8 +109,9 @@ export function GenerateVideoModal({
         imageSize,
         lyrics: song.lyrics,
         durationSeconds: song.durationSeconds,
+        referenceImages,
       }),
-    [model, imageQuality, imageSize, song.lyrics, song.durationSeconds],
+    [model, imageQuality, imageSize, song.lyrics, song.durationSeconds, referenceImages],
   );
   const cost = estimate.tokens;
   // Cost of a cheap ~10s preview (same formula, preview window).
@@ -105,8 +124,9 @@ export function GenerateVideoModal({
         lyrics: song.lyrics,
         durationSeconds: song.durationSeconds,
         preview: true,
+        referenceImages,
       }).tokens,
-    [model, imageQuality, imageSize, song.lyrics, song.durationSeconds],
+    [model, imageQuality, imageSize, song.lyrics, song.durationSeconds, referenceImages],
   );
   const credits = account?.credits ?? null;
   const broke = credits !== null && credits < cost;
@@ -136,8 +156,37 @@ export function GenerateVideoModal({
       setSceneBrief("");
       setBriefLoaded(false);
       setBriefLoading(false);
+      setSelectedCharacterIds([]);
+      // Load the user's band members so the optional "cast" step can offer them.
+      listMembers()
+        .then(setMembers)
+        .catch(() => setMembers([]));
     }
   }, [open]);
+
+  // Only members with at least one photo are usable as references.
+  const usableMembers = members.filter((m) => m.images.length > 0);
+  // Selected cast names — power the @mention autosuggest in the brief.
+  const selectedCastNames = usableMembers
+    .filter((m) => selectedCharacterIds.includes(m.id))
+    .map((m) => m.name);
+
+  // After settings: stop at the optional cast step when the user has members,
+  // otherwise jump straight to the brief.
+  function afterSettings() {
+    if (usableMembers.length > 0) setStep("cast");
+    else goToDirection();
+  }
+
+  function toggleCharacter(id: string) {
+    setSelectedCharacterIds((prev) =>
+      prev.includes(id)
+        ? prev.filter((x) => x !== id)
+        : prev.length >= MAX_VIDEO_CHARACTERS
+          ? prev
+          : [...prev, id],
+    );
+  }
 
   // Move to the final "direction" step and prefill the AI brief (once).
   function goToDirection() {
@@ -172,6 +221,7 @@ export function GenerateVideoModal({
         imageSize,
         imageQuality,
         preview,
+        characterIds: selectedCharacterIds.length > 0 ? selectedCharacterIds : undefined,
       });
       refresh(); // tokens were just charged
       onStarted(created);
@@ -467,6 +517,82 @@ export function GenerateVideoModal({
                 <ArrowLeft className="h-4 w-4" />
                 Back
               </Button3D>
+              <Button3D onClick={afterSettings}>Next</Button3D>
+            </div>
+          </motion.div>
+        )}
+
+        {step === "cast" && (
+          <motion.div
+            key="cast"
+            initial={{ opacity: 0, x: 12 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -12 }}
+            transition={{ duration: 0.18 }}
+          >
+            <div className="mb-3 flex items-start gap-3">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-pulse/25 to-pulse/5 text-pulse shadow-[inset_0_1px_0_rgba(255,255,255,0.15)]">
+                <Users className="h-4 w-4" />
+              </span>
+              <div>
+                <h3 className="text-[14px] font-medium text-white">Band members (optional)</h3>
+                <p className="mt-0.5 text-[12px] leading-snug text-white/50">
+                  Pick who should appear in the video — we'll use their photos as references and
+                  draw them in your chosen style. Up to {MAX_VIDEO_CHARACTERS}.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid max-h-[52vh] grid-cols-2 gap-2.5 overflow-y-auto pr-1 sm:grid-cols-3">
+              {usableMembers.map((m) => {
+                const sel = selectedCharacterIds.includes(m.id);
+                const atMax = !sel && selectedCharacterIds.length >= MAX_VIDEO_CHARACTERS;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    disabled={atMax}
+                    onClick={() => toggleCharacter(m.id)}
+                    className={cn(
+                      "overflow-hidden rounded-[12px] border text-left transition-colors disabled:opacity-40",
+                      sel
+                        ? "border-pulse bg-pulse/[0.08]"
+                        : "border-white/10 bg-white/[0.02] hover:border-white/25",
+                    )}
+                  >
+                    <div className="relative aspect-[3/4] w-full overflow-hidden bg-black/40">
+                      {m.images[0] ? (
+                        <img src={m.images[0].url} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center">
+                          <User className="h-7 w-7 text-white/25" />
+                        </div>
+                      )}
+                      {sel && (
+                        <span className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-pulse text-white shadow">
+                          <Check className="h-3 w-3" />
+                        </span>
+                      )}
+                    </div>
+                    <div className="px-2.5 py-1.5 text-[12px] font-medium text-white">
+                      <span className="block truncate">{m.name}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <p className="mt-3 text-[11px] text-white/40">
+              {selectedCharacterIds.length === 0
+                ? "None selected — the video uses abstract scenes (no specific people)."
+                : `${selectedCharacterIds.length} selected · their reference cost is included in the ${cost}-token price.`}
+            </p>
+
+            <div className="mt-5 flex items-center justify-between gap-2 border-t border-white/[0.06] pt-4">
+              <Button3D variant="secondary" onClick={() => setStep("settings")}>
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </Button3D>
               <Button3D onClick={goToDirection}>Next</Button3D>
             </div>
           </motion.div>
@@ -499,9 +625,10 @@ export function GenerateVideoModal({
                 Analyzing the song…
               </div>
             ) : (
-              <textarea
+              <MentionTextarea
                 value={sceneBrief}
-                onChange={(e) => setSceneBrief(e.target.value)}
+                onChange={setSceneBrief}
+                names={selectedCastNames}
                 rows={5}
                 placeholder="Describe what the lyric video should be about — the subject, story, and point of view."
                 className="w-full resize-none rounded-[12px] border border-white/10 bg-black/30 px-3.5 py-3 text-[13px] leading-relaxed text-white/90 outline-none transition-colors placeholder:text-white/30 focus:border-pulse/60 focus:bg-pulse/[0.04]"
@@ -553,7 +680,10 @@ export function GenerateVideoModal({
               </div>
             ) : (
               <div className="mt-5 flex items-center justify-between gap-2 border-t border-white/[0.06] pt-4">
-                <Button3D variant="secondary" onClick={() => setStep("settings")}>
+                <Button3D
+                  variant="secondary"
+                  onClick={() => setStep(usableMembers.length > 0 ? "cast" : "settings")}
+                >
                   <ArrowLeft className="h-4 w-4" />
                   Back
                 </Button3D>

@@ -3,6 +3,7 @@ export * from "./constants.js";
 export * from "./landing.js";
 export * from "./lyrics.js";
 export * from "./lyrics-text.js";
+export * from "./members.js";
 export * from "./punctuation.js";
 export * from "./songs.js";
 export * from "./tools.js";

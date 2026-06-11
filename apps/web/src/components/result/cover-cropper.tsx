@@ -2,33 +2,26 @@ import { useCallback, useState } from "react";
 import Cropper, { type Area } from "react-easy-crop";
 import { Loader2, ZoomIn } from "lucide-react";
 
-const OUTPUT_SIZE = 1000; // square cover, px
+const OUTPUT_MAX = 1000; // longest output edge, px
 
-/** Render the chosen crop area of an image to a square JPEG blob. */
-async function cropToBlob(src: string, area: Area): Promise<Blob> {
+/** Render the chosen crop area to a JPEG blob at the given aspect (w/h). */
+async function cropToBlob(src: string, area: Area, aspect: number): Promise<Blob> {
   const img = await new Promise<HTMLImageElement>((resolve, reject) => {
     const el = new Image();
     el.onload = () => resolve(el);
     el.onerror = () => reject(new Error("Could not load image."));
     el.src = src;
   });
+  // Keep the longest edge at OUTPUT_MAX so portrait/landscape crops stay sharp.
+  const outW = aspect >= 1 ? OUTPUT_MAX : Math.round(OUTPUT_MAX * aspect);
+  const outH = aspect >= 1 ? Math.round(OUTPUT_MAX / aspect) : OUTPUT_MAX;
   const canvas = document.createElement("canvas");
-  canvas.width = OUTPUT_SIZE;
-  canvas.height = OUTPUT_SIZE;
+  canvas.width = outW;
+  canvas.height = outH;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas unavailable.");
   ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(
-    img,
-    area.x,
-    area.y,
-    area.width,
-    area.height,
-    0,
-    0,
-    OUTPUT_SIZE,
-    OUTPUT_SIZE,
-  );
+  ctx.drawImage(img, area.x, area.y, area.width, area.height, 0, 0, outW, outH);
   return new Promise((resolve, reject) => {
     canvas.toBlob(
       (blob) => (blob ? resolve(blob) : reject(new Error("Could not export image."))),
@@ -38,18 +31,22 @@ async function cropToBlob(src: string, area: Area): Promise<Blob> {
   });
 }
 
-/** Facebook-style square crop: drag to reposition, slider to zoom. Calls
- *  onApply with a square JPEG blob. */
+/** Facebook-style crop: drag to reposition, slider to zoom. Square by default;
+ *  pass `aspect` (w/h) for non-square crops (e.g. 3/4 portrait for people). */
 export function CoverCropper({
   src,
   busy,
   onApply,
   onCancel,
+  aspect = 1,
+  caption,
 }: {
   src: string;
   busy: boolean;
   onApply: (blob: Blob) => void;
   onCancel: () => void;
+  aspect?: number;
+  caption?: string;
 }) {
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
@@ -64,7 +61,7 @@ export function CoverCropper({
     if (!areaPixels) return;
     setWorking(true);
     try {
-      const blob = await cropToBlob(src, areaPixels);
+      const blob = await cropToBlob(src, areaPixels, aspect);
       onApply(blob);
     } finally {
       setWorking(false);
@@ -80,7 +77,7 @@ export function CoverCropper({
           image={src}
           crop={crop}
           zoom={zoom}
-          aspect={1}
+          aspect={aspect}
           cropShape="rect"
           showGrid
           onCropChange={setCrop}
@@ -103,7 +100,9 @@ export function CoverCropper({
           aria-label="Zoom"
         />
       </div>
-      <p className="mt-2 text-[11px] text-white/40">Drag to reposition · slide to zoom. Saved as a square cover.</p>
+      <p className="mt-2 text-[11px] text-white/40">
+        {caption ?? "Drag to reposition · slide to zoom. Saved as a square cover."}
+      </p>
 
       <div className="mt-4 flex items-center justify-end gap-2">
         <button

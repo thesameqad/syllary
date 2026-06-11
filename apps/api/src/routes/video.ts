@@ -1,12 +1,15 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import {
   type AspectRatio,
+  type CharacterReference,
   type CreateVideoRequest,
   createVideoSchema,
   estimateVideoCost,
   type ImageQuality,
   type ImageSize,
+  normalizeCharacterRefs,
+  referenceCountFor,
   regenerateSegmentSchema,
   singleImageTokens,
   updateVideoJobSchema,
@@ -17,7 +20,7 @@ import {
   type VideoSegment,
 } from "@syllary/shared";
 import { db } from "../db/client.js";
-import { type SongRow, songs, users, videoJobs, type VideoJobRow } from "../db/schema.js";
+import { bandMembers, type SongRow, songs, users, videoJobs, type VideoJobRow } from "../db/schema.js";
 import { getAuthUserId } from "../lib/clerk.js";
 import { presignGet } from "../lib/r2.js";
 import { getOrCreateUser } from "../lib/users.js";
@@ -64,6 +67,9 @@ async function toVideoJobDto(row: VideoJobRow): Promise<VideoJob> {
     totalSegments: row.totalSegments,
     completedSegments: row.completedSegments,
     segments,
+    characterNames: normalizeCharacterRefs(row.characterImageKeys)
+      .map((c) => c.name)
+      .filter((n) => n.trim().length > 0),
     videoUrl,
     error: row.error,
     createdAt: row.createdAt.toISOString(),
@@ -79,6 +85,43 @@ async function refund(job: VideoJobRow): Promise<void> {
   }
 }
 
+/** Resolve selected band-member ids → reference image R2 keys GROUPED PER MEMBER
+ *  (one inner array per distinct character). Distributes up to
+ *  CHARACTER_REFS_PER_FRAME images across the members round-robin (so every
+ *  selected member gets at least one photo before any gets a second), capped at
+ *  `perMember` (1 member → up to 3; else 2). Owner-scoped; null when nothing usable. */
+async function resolveCharacterRefs(
+  userId: string,
+  characterIds?: string[],
+): Promise<CharacterReference[] | null> {
+  if (!characterIds || characterIds.length === 0) return null;
+  const rows = await db
+    .select({ id: bandMembers.id, name: bandMembers.name, images: bandMembers.images })
+    .from(bandMembers)
+    .where(and(eq(bandMembers.userId, userId), inArray(bandMembers.id, characterIds)));
+  const byId = new Map(rows.map((r) => [r.id, { name: r.name, images: r.images ?? [] }]));
+  // Preserve the user's selection order; drop ids that weren't found / have no photos.
+  const ordered = characterIds
+    .map((id) => byId.get(id))
+    .filter((m): m is { name: string; images: { key: string }[] } => !!m && m.images.length > 0);
+  if (ordered.length === 0) return null;
+  const total = referenceCountFor(ordered.map((m) => m.images.length));
+  const perMember = ordered.length === 1 ? 3 : 2;
+  const groups: CharacterReference[] = ordered.map((m) => ({ name: m.name, imageKeys: [] }));
+  let used = 0;
+  for (let round = 0; round < perMember && used < total; round++) {
+    for (let i = 0; i < ordered.length && used < total; i++) {
+      const img = ordered[i]?.images[round];
+      if (img) {
+        groups[i]!.imageKeys.push(img.key);
+        used++;
+      }
+    }
+  }
+  const nonEmpty = groups.filter((g) => g.imageKeys.length > 0);
+  return nonEmpty.length > 0 ? nonEmpty : null;
+}
+
 /** Price, insert, charge, and fire a video job. Previews are forced to autopilot.
  *  Returns `{ insufficient, cost }` if the caller can't afford it, else `{ job }`.
  *  Shared by the create route and the preview→full promote route. */
@@ -91,8 +134,20 @@ async function startVideoJob(
    *  pipeline then skips the segment rebuild + image generation (autopilot only),
    *  and the image term is dropped from the cost. */
   reuse?: { segments: VideoSegment[] },
+  /** Use these resolved character references directly (preview→full promote
+   *  carries them from the source job) instead of resolving from settings.characterIds. */
+  charactersOverride?: CharacterReference[] | null,
+  /** Override the persisted motionMode (e.g. "ai_permissive" to make a Cinematic
+   *  retry use the more permissive Grok model instead of Seedance). */
+  motionModeOverride?: string,
 ): Promise<{ job?: VideoJobRow; cost: number; insufficient: boolean }> {
   const mode = reuse ? "autopilot" : settings.preview ? "autopilot" : settings.mode;
+  // Reuse jobs don't call the image model (frames already exist), so no refs.
+  const characterImageKeys = reuse
+    ? null
+    : charactersOverride !== undefined
+      ? charactersOverride
+      : await resolveCharacterRefs(userId, settings.characterIds);
   const cost = estimateVideoCost({
     model: settings.model,
     quality: settings.imageQuality,
@@ -101,6 +156,8 @@ async function startVideoJob(
     durationSeconds: song.durationSeconds,
     preview: settings.preview,
     reuseImages: !!reuse,
+    // Cost scales with total reference IMAGES per frame (sum across members).
+    referenceImages: characterImageKeys?.reduce((n, c) => n + c.imageKeys.length, 0) ?? 0,
   }).tokens;
   if (userCredits < cost) return { cost, insufficient: true };
 
@@ -121,7 +178,8 @@ async function startVideoJob(
       isPreview: reuse ? false : settings.preview,
       reuseFrames: !!reuse,
       segments: reuse?.segments ?? null,
-      motionMode: settings.model === "fast" ? "ffmpeg" : "ai",
+      characterImageKeys: characterImageKeys ?? null,
+      motionMode: motionModeOverride ?? (settings.model === "fast" ? "ffmpeg" : "ai"),
       tokensCharged: cost,
     })
     .returning();
@@ -209,6 +267,10 @@ export async function videoRoutes(app: FastifyInstance) {
       if (!(VIDEO_MODELS as readonly string[]).includes(model)) {
         return reply.code(400).send({ error: "Unknown style." });
       }
+      // Retry Cinematic with the more permissive Grok model (when Seedance
+      // rejected the frames). Only meaningful for the pro/Cinematic style.
+      const body = (req.body ?? {}) as { permissive?: unknown };
+      const permissive = body.permissive === true && model === "pro";
 
       const [song] = await db.select().from(songs).where(eq(songs.id, req.params.id)).limit(1);
       if (!song || song.userId !== user.id) return reply.code(404).send({ error: "Not found." });
@@ -225,16 +287,32 @@ export async function videoRoutes(app: FastifyInstance) {
         .limit(1);
       if (!prev) return reply.code(404).send({ error: "Nothing to generate yet." });
 
-      const { job, cost, insufficient } = await startVideoJob(user.id, user.credits, song, {
-        styleDescription: prev.styleDescription,
-        sceneBrief: prev.sceneBrief ?? undefined,
-        mode: "autopilot",
-        model: prev.model,
-        aspectRatio: prev.aspectRatio as AspectRatio,
-        imageSize: prev.imageSize as ImageSize,
-        imageQuality: prev.imageQuality as ImageQuality,
-        preview: false,
-      });
+      // If the source job reused another style's frames, keep reusing them on the
+      // retry (re-seed its segments) so we don't regenerate images — only the
+      // motion step re-runs. Otherwise it's a normal full render.
+      const reuseSeed =
+        prev.reuseFrames && prev.segments && prev.segments.length > 0
+          ? { segments: prev.segments.map((s) => ({ ...s, status: "pending" as const })) }
+          : undefined;
+
+      const { job, cost, insufficient } = await startVideoJob(
+        user.id,
+        user.credits,
+        song,
+        {
+          styleDescription: prev.styleDescription,
+          sceneBrief: prev.sceneBrief ?? undefined,
+          mode: "autopilot",
+          model: prev.model,
+          aspectRatio: prev.aspectRatio as AspectRatio,
+          imageSize: prev.imageSize as ImageSize,
+          imageQuality: prev.imageQuality as ImageQuality,
+          preview: false,
+        },
+        reuseSeed,
+        prev.characterImageKeys, // carry the source's characters into the render
+        permissive ? "ai_permissive" : undefined,
+      );
       if (insufficient) {
         return reply.code(402).send({
           error: `Not enough tokens — the full video costs ${cost}. Upgrade for more.`,

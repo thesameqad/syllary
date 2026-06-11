@@ -10,10 +10,11 @@ import {
   RefreshCw,
   SlidersHorizontal,
 } from "lucide-react";
-import { type ReviewSegment, singleImageTokens, type VideoJob } from "@syllary/shared";
+import { findMentionedNames, type ReviewSegment, singleImageTokens, type VideoJob } from "@syllary/shared";
 import { ApiError, finalizeVideoJob, regenerateSegment, updateVideoJob } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { Button3D } from "@/components/ui/button-3d";
+import { MentionTextarea } from "@/components/ui/mention-textarea";
 import { cn } from "@/lib/utils";
 
 const FIELD =
@@ -58,6 +59,18 @@ export function ManualReview({
     setDirection(segments[index]?.direction ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index]);
+
+  const cast = job.characterNames ?? [];
+  const mentioned = cast.length > 0 ? findMentionedNames(direction, cast) : [];
+
+  // Append "@Name " to the direction (no-op if already mentioned).
+  function insertMention(name: string) {
+    setDirection((d) => {
+      if (findMentionedNames(d, [name]).length > 0) return d;
+      const base = d.trimEnd();
+      return `${base ? base + " " : ""}@${name} `;
+    });
+  }
 
   if (!seg) {
     return (
@@ -171,9 +184,10 @@ export function ManualReview({
                   <span className="text-[11px] uppercase tracking-[0.5px] text-white/35">
                     Song context
                   </span>
-                  <textarea
+                  <MentionTextarea
                     value={context}
-                    onChange={(e) => setContext(e.target.value)}
+                    onChange={setContext}
+                    names={cast}
                     onBlur={() => void saveShared()}
                     rows={2}
                     disabled={busy}
@@ -274,9 +288,10 @@ export function ManualReview({
               <span className="text-[11px] uppercase tracking-[0.5px] text-white/35">
                 Direction — what to show in this scene
               </span>
-              <textarea
+              <MentionTextarea
                 value={direction}
-                onChange={(e) => setDirection(e.target.value)}
+                onChange={setDirection}
+                names={cast}
                 rows={2}
                 disabled={regenBusy}
                 placeholder={
@@ -286,6 +301,35 @@ export function ManualReview({
                 }
                 className={FIELD}
               />
+              {cast.length > 0 && (
+                <div className="mt-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {cast.map((name) => {
+                      const active = mentioned.includes(name);
+                      return (
+                        <button
+                          key={name}
+                          type="button"
+                          disabled={regenBusy}
+                          onClick={() => insertMention(name)}
+                          className={cn(
+                            "rounded-full border px-2.5 py-1 text-[11px] transition-colors disabled:opacity-50",
+                            active
+                              ? "border-pulse/60 bg-pulse/[0.12] text-white"
+                              : "border-white/10 bg-white/[0.03] text-white/65 hover:border-pulse/50 hover:text-white",
+                          )}
+                        >
+                          @{name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-white/40">
+                    Tap to feature a member in this scene (e.g. “@{cast[0]} gives flowers to{" "}
+                    {cast[1] ? `@${cast[1]}` : "someone"}”). Mention none to include everyone.
+                  </p>
+                </div>
+              )}
             </div>
           </motion.div>
         </AnimatePresence>

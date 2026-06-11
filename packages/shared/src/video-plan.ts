@@ -183,6 +183,15 @@ export const CLIP_COST_USD_PER_SEC: Record<VideoModel, number> = {
   pro: 0.04, //   Seedance 2.0 Fast @480p (Cinematic)
 };
 
+/** Raw INPUT cost per character reference image fed to the model, by image-model
+ *  tier (USD). A reference ≈ 560 input tokens; Nano Banana Pro input @ $2/M ≈
+ *  $0.0011. Estimates — tune against the OpenRouter dashboard. Folded into rawUsd
+ *  (then ×3 markup) so character videos are still priced on the standard formula. */
+export const REF_IMAGE_INPUT_USD: Record<ImageQuality, number> = {
+  fast: 0.0003,
+  pro: 0.0011,
+};
+
 /** Token cost to (re)generate a SINGLE backdrop image — the manual-mode
  *  Regenerate price. One image at the 3× markup, rounded up to the nearest 10. */
 export function singleImageTokens(quality: ImageQuality, imageSize: ImageSize): number {
@@ -234,6 +243,9 @@ export function estimateVideoCost(opts: {
   /** Frames are reused from another already-rendered style, so the image term is
    *  free — only the motion-clip step is charged. */
   reuseImages?: boolean;
+  /** Character reference images sent to the model PER FRAME (their input cost is
+   *  added to rawUsd before the markup). 0/undefined when no characters chosen. */
+  referenceImages?: number;
 }): VideoCostEstimate {
   const { model, quality, imageSize } = opts;
 
@@ -257,7 +269,12 @@ export function estimateVideoCost(opts: {
   }
   const clipUsd = clipSeconds * CLIP_COST_USD_PER_SEC[model];
 
-  const rawUsd = imageUsd + clipUsd;
+  // Character reference images are input on every generated frame. When reusing
+  // frames the model isn't called, so there's no reference cost either.
+  const refsPerFrame = opts.reuseImages ? 0 : (opts.referenceImages ?? 0);
+  const refUsd = images * refsPerFrame * REF_IMAGE_INPUT_USD[quality];
+
+  const rawUsd = imageUsd + clipUsd + refUsd;
   const chargeUsd = rawUsd * VIDEO_COST_MARKUP;
   // Round up to a tidy multiple of 100 tokens (only ever helps the margin).
   const tokens = Math.max(MIN_VIDEO_TOKENS, Math.ceil(chargeUsd / USD_PER_TOKEN / 100) * 100);

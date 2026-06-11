@@ -1,8 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { and, desc, eq, isNotNull, ne, or, sql } from "drizzle-orm";
 import {
   type AspectRatio,
+  canRemoveWatermark,
   coverCommitSchema,
   coverImageTokens,
   coverPresignSchema,
@@ -10,7 +14,9 @@ import {
   editLyricsSchema,
   generateCoverSchema,
   type GenerationMode,
+  normalizeCharacterRefs,
   parseLyricsText,
+  type Plan,
   PLAN_CREDITS,
   processSongSchema,
   type PublicSong,
@@ -24,7 +30,10 @@ import {
   type SongSummary,
   type SongVideo,
   syncLyricsSchema,
+  videoDownloadSchema,
+  type VideoDownloadResolution,
   type VideoJob,
+  type VideoModel,
   type Uploader,
   updateSongSchema,
 } from "@syllary/shared";
@@ -43,9 +52,36 @@ import { buildLyricsFromScribe, realignFromText } from "../lib/transcript.js";
 import { summarizeSong } from "../lib/openrouter.js";
 import { generateCoverImage } from "../lib/cover-image.js";
 import { matchStreamingLinks } from "../lib/music-links.js";
+import { transcodeForDownload } from "../lib/ffmpeg.js";
 import { resolveArtistAlbum } from "../lib/catalog.js";
 import { estimateGenerationCost, firstTouchLandingSlug, recordEvent } from "../lib/analytics.js";
 import { getOrCreateUser } from "../lib/users.js";
+
+const RES_HEIGHT: Record<VideoDownloadResolution, number> = { "1080p": 1080, "720p": 720, "480p": 480 };
+// Cache keys currently being transcoded — dedupes concurrent/poll requests so we
+// don't kick off the same encode twice (single API instance).
+const downloadInFlight = new Set<string>();
+
+/** Download the clean master, transcode to the requested variant (scale ±
+ *  watermark), and upload it to the R2 cache key. */
+async function produceDownloadVariant(
+  videoKey: string,
+  cacheKey: string,
+  height: number,
+  watermark: boolean,
+): Promise<void> {
+  const workDir = path.join(os.tmpdir(), `syllary-dl-${randomUUID()}`);
+  await mkdir(workDir, { recursive: true });
+  try {
+    const res = await fetch(await presignGet(videoKey));
+    if (!res.ok) throw new Error(`fetch master HTTP ${res.status}`);
+    await writeFile(path.join(workDir, "master.mp4"), Buffer.from(await res.arrayBuffer()));
+    await transcodeForDownload({ workDir, inName: "master.mp4", outName: "out.mp4", height, watermark });
+    await putObject(cacheKey, await readFile(path.join(workDir, "out.mp4")), "video/mp4");
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
 
 // Two Replicate steps (Demucs + WhisperX), so allow more headroom than one.
 const PROCESSING_TIMEOUT_MS = 10 * 60 * 1000;
@@ -122,6 +158,9 @@ async function activeVideoJobFor(songId: string): Promise<VideoJob | null> {
     totalSegments: row.totalSegments,
     completedSegments: row.completedSegments,
     segments,
+    characterNames: normalizeCharacterRefs(row.characterImageKeys)
+      .map((c) => c.name)
+      .filter((n) => n.trim().length > 0),
     videoUrl: null,
     error: row.error,
     createdAt: row.createdAt.toISOString(),
@@ -950,6 +989,91 @@ export async function songsRoutes(app: FastifyInstance) {
       .returning();
     return reply.send(await toSongDto(updated ?? row, true));
   });
+
+  // Delete a generated lyric video for one style. Removes the saved video + its
+  // R2 object and unpublishes it if it was the public one. Frames/job history are
+  // left intact (frames may be reused by other styles). Owner-only.
+  app.delete<{ Params: { id: string; model: string } }>(
+    "/songs/:id/videos/:model",
+    async (req, reply) => {
+      const clerkId = await getAuthUserId(req);
+      if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+      const user = await getOrCreateUser(clerkId);
+      const row = await getSongRow(req.params.id);
+      if (!row || row.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+
+      const model = req.params.model as VideoModel;
+      const [v] = await db
+        .select({ videoKey: songVideos.videoKey })
+        .from(songVideos)
+        .where(and(eq(songVideos.songId, row.id), eq(songVideos.model, model)))
+        .limit(1);
+      if (!v) return reply.code(404).send({ error: "No video for that style." });
+
+      await deleteObject(v.videoKey);
+      await db
+        .delete(songVideos)
+        .where(and(eq(songVideos.songId, row.id), eq(songVideos.model, model)));
+
+      let updatedRow = row;
+      if (row.publicVideoModel === model) {
+        const [u] = await db
+          .update(songs)
+          .set({ publicVideoModel: null, updatedAt: new Date() })
+          .where(eq(songs.id, row.id))
+          .returning();
+        updatedRow = u ?? row;
+      }
+      return reply.send(await toSongDto(updatedRow, true));
+    },
+  );
+
+  // On-demand download: produce a (resolution × watermark) variant from the stored
+  // (clean) master, cache it in R2, and return a presigned URL. Removing the
+  // watermark is gated to Music-video plans; the watermark is baked here on demand.
+  // Async: the client polls this same endpoint until status === "ready".
+  app.post<{ Params: { id: string; model: string } }>(
+    "/songs/:id/videos/:model/download",
+    async (req, reply) => {
+      const clerkId = await getAuthUserId(req);
+      if (!clerkId) return reply.code(401).send({ error: "Sign in to download." });
+      const user = await getOrCreateUser(clerkId);
+      const row = await getSongRow(req.params.id);
+      if (!row || row.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+      const parsed = videoDownloadSchema.safeParse(req.body ?? {});
+      if (!parsed.success) return reply.code(400).send({ error: "Invalid request." });
+      const { resolution, watermark } = parsed.data;
+      if (!watermark && !canRemoveWatermark(user.plan as Plan)) {
+        return reply.code(403).send({ error: "Removing the watermark needs a Music-video plan." });
+      }
+      const model = req.params.model as VideoModel;
+      const [v] = await db
+        .select({ videoKey: songVideos.videoKey })
+        .from(songVideos)
+        .where(and(eq(songVideos.songId, row.id), eq(songVideos.model, model)))
+        .limit(1);
+      if (!v) return reply.code(404).send({ error: "No video for that style." });
+
+      // The stored video is the clean master. Clean at native resolution = serve it
+      // directly (no transcode). Everything else is derived + cached.
+      if (!watermark && resolution === "1080p") {
+        return reply.send({ status: "ready", url: await presignGet(v.videoKey) });
+      }
+      const dir = v.videoKey.replace(/\/[^/]+$/, "");
+      // `v2` busts old cached variants baked with the prior low-res watermark.
+      const cacheKey = `${dir}/dl/v2-${resolution}-${watermark ? "wm" : "clean"}.mp4`;
+      if ((await objectSize(cacheKey)) !== null) {
+        return reply.send({ status: "ready", url: await presignGet(cacheKey) });
+      }
+      if (!downloadInFlight.has(cacheKey)) {
+        downloadInFlight.add(cacheKey);
+        void produceDownloadVariant(v.videoKey, cacheKey, RES_HEIGHT[resolution], watermark)
+          .catch((err) => req.log.error({ err }, "download transcode failed"))
+          .finally(() => downloadInFlight.delete(cacheKey));
+      }
+      return reply.send({ status: "processing", url: null });
+    },
+  );
 
   app.delete<{ Params: { id: string } }>("/songs/:id", async (req, reply) => {
     const clerkId = await getAuthUserId(req);

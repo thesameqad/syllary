@@ -4,6 +4,11 @@ import {
   albumListSchema,
   type Artist,
   artistListSchema,
+  type BandMember,
+  bandMemberListSchema,
+  bandMemberSchema,
+  type CreateBandMember,
+  type UpdateBandMember,
   type CatalogImportResult,
   catalogImportResultSchema,
   coverGenerateResponseSchema,
@@ -49,6 +54,9 @@ import {
   type UpdateArtist,
   type UpdateSong,
   type UpdateVideoJob,
+  type VideoDownloadRequest,
+  type VideoDownloadResponse,
+  videoDownloadResponseSchema,
   type VideoJob,
   videoJobSchema,
   type VideoModel,
@@ -455,6 +463,83 @@ export async function saveEntityCover(
   return coverUrlFrom(data);
 }
 
+// ---- Band members (characters) ---------------------------------------------
+
+export async function listMembers(): Promise<BandMember[]> {
+  const res = await fetch(`${API_BASE}/api/members`, { headers: { ...(await authHeaders()) } });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't load members."), res.status);
+  return bandMemberListSchema.parse(data);
+}
+
+export async function createMember(body: CreateBandMember): Promise<BandMember> {
+  const res = await fetch(`${API_BASE}/api/members`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(body),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't create the member."), res.status);
+  return bandMemberSchema.parse(data);
+}
+
+export async function updateMember(id: string, body: UpdateBandMember): Promise<BandMember> {
+  const res = await fetch(`${API_BASE}/api/members/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(body),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't save the member."), res.status);
+  return bandMemberSchema.parse(data);
+}
+
+export async function deleteMember(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/members/${id}`, {
+    method: "DELETE",
+    headers: { ...(await authHeaders()) },
+  });
+  if (!res.ok) {
+    const data: unknown = await res.json().catch(() => ({}));
+    throw new ApiError(errorMessage(data, "Couldn't delete the member."), res.status);
+  }
+}
+
+/** Upload + commit one member photo; returns the updated member. */
+export async function uploadMemberImage(id: string, blob: Blob): Promise<BandMember> {
+  const presignRes = await fetch(`${API_BASE}/api/members/${id}/images/presign`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ contentType: "image/jpeg" }),
+  });
+  const presignData: unknown = await presignRes.json();
+  if (!presignRes.ok) {
+    throw new ApiError(errorMessage(presignData, "Couldn't start the upload."), presignRes.status);
+  }
+  const { uploadUrl, key } = coverPresignResponseSchema.parse(presignData);
+  await uploadToR2(uploadUrl, blob, "image/jpeg", () => {});
+  const res = await fetch(`${API_BASE}/api/members/${id}/images`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ key }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't save the image."), res.status);
+  return bandMemberSchema.parse(data);
+}
+
+/** Remove one member photo by key; returns the updated member. */
+export async function removeMemberImage(id: string, key: string): Promise<BandMember> {
+  const res = await fetch(`${API_BASE}/api/members/${id}/images`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ key }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't remove the image."), res.status);
+  return bandMemberSchema.parse(data);
+}
+
 /** Import an artist/album catalog from a Deezer link (metadata only). */
 export async function importCatalog(url: string): Promise<CatalogImportResult> {
   const res = await fetch(`${API_BASE}/api/catalog/import`, {
@@ -610,15 +695,50 @@ export async function updateVideoJob(jobId: string, body: UpdateVideoJob): Promi
   return videoJobSchema.parse(data);
 }
 
-/** Promote a preview to the full music video, reusing its exact settings. */
-export async function generateFullVideo(songId: string, model: VideoModel): Promise<VideoJob> {
+/** Promote a preview to the full music video, reusing its exact settings (also
+ *  used as a retry). `permissive` retries Cinematic with the more permissive
+ *  motion model when the default one rejected the frames. */
+export async function generateFullVideo(
+  songId: string,
+  model: VideoModel,
+  permissive = false,
+): Promise<VideoJob> {
   const res = await fetch(`${API_BASE}/api/songs/${songId}/videos/${model}/full`, {
     method: "POST",
-    headers: { ...(await authHeaders()) },
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(permissive ? { permissive: true } : {}),
   });
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not start the full video."), res.status);
   return videoJobSchema.parse(data);
+}
+
+/** Request a download variant (resolution × watermark). The variant is transcoded
+ *  on demand + cached, so poll until status === "ready" then fetch `url`. */
+export async function requestVideoDownload(
+  songId: string,
+  model: VideoModel,
+  body: VideoDownloadRequest,
+): Promise<VideoDownloadResponse> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/videos/${model}/download`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(body),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't prepare the download."), res.status);
+  return videoDownloadResponseSchema.parse(data);
+}
+
+/** Delete a generated lyric video for one style. Returns the updated song. */
+export async function deleteSongVideo(songId: string, model: VideoModel): Promise<Song> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/videos/${model}`, {
+    method: "DELETE",
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't delete the video."), res.status);
+  return songSchema.parse(data);
 }
 
 /** Create a new style reusing another finished style's frames (skips image

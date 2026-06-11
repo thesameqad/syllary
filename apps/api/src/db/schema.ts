@@ -14,6 +14,7 @@ import {
 import type {
   AlbumTrack,
   AudioFeatures,
+  CharacterReference,
   FaqItem,
   GenerationMode,
   ImageQuality,
@@ -22,6 +23,7 @@ import type {
   Lyrics,
   SongInsights,
   SongLink,
+  StoredMemberImage,
   VideoModel,
   VideoPipelineMode,
   VideoSegment,
@@ -133,6 +135,38 @@ export const albums = pgTable(
 
 export type AlbumRow = typeof albums.$inferSelect;
 
+// Reusable band members ("characters") that belong to an artist (band). Each
+// carries one or more uploaded reference photos (R2 keys). Optionally selected
+// at video time so the AI scenes depict them, restyled to the art direction.
+export const bandMembers = pgTable(
+  "band_members",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    artistId: uuid("artist_id")
+      .notNull()
+      .references(() => artists.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    // Uploaded reference photos as R2 keys (jsonb array; mirrors albums.tracks).
+    images: jsonb("images").$type<StoredMemberImage[]>().notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    uniqueUserArtistName: unique("band_members_user_artist_name_unique").on(
+      t.userId,
+      t.artistId,
+      t.name,
+    ),
+    userIdx: index("band_members_user_idx").on(t.userId),
+    artistIdx: index("band_members_artist_idx").on(t.artistId),
+  }),
+);
+
+export type BandMemberRow = typeof bandMembers.$inferSelect;
+
 // Keep in sync with VIDEO_JOB_STATUSES in @syllary/shared.
 export const videoJobStatus = pgEnum("video_job_status", [
   "pending",
@@ -172,6 +206,12 @@ export const videoJobs = pgTable(
     // the pipeline skips the segment rebuild + image generation and only renders
     // motion. Always an autopilot full render.
     reuseFrames: boolean("reuse_frames").notNull().default(false),
+    // Resolved band-member characters for this video — one entry per distinct
+    // member with their name + reference image R2 keys. Snapshotted at job
+    // creation, fed to the image model on every frame (name-labeled so the prompt
+    // can reference "Emily"/"Justin"). Null = no characters. (Legacy jobs stored a
+    // bare string[][] here; normalizeCharacterRefs() reads both shapes.)
+    characterImageKeys: jsonb("character_image_keys").$type<CharacterReference[]>(),
     // One-time AI "art brief" (who/what the song depicts) injected into every
     // per-line image prompt so the model gets the subject/POV right.
     sceneBrief: text("scene_brief"),

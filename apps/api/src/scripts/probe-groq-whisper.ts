@@ -105,7 +105,7 @@ for (const v of variants) {
     summary.push({ label: v.label, segments: 0, chorus: 0, wallMs });
     continue;
   }
-  const data = await res.json();
+  const data = (await res.json()) as { segments?: unknown; words?: unknown };
   const outPath = resolve(__dirname, "..", "..", "debug", `groq-${v.label}.json`);
   await import("node:fs/promises").then((fs) => fs.writeFile(outPath, JSON.stringify(data, null, 2)));
   const segments = Array.isArray(data.segments) ? data.segments : [];

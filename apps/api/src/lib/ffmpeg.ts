@@ -2,10 +2,18 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AspectRatio } from "@syllary/shared";
 import { env } from "../env.js";
 
 const require = createRequire(import.meta.url);
+
+/** The Syllary watermark PNG (transparent), baked into downloads on demand.
+ *  Resolves from the module dir → apps/api/assets (works in dev src/ + dist/). */
+export const WATERMARK_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../assets/watermark.png",
+);
 
 /** Resolve the ffmpeg binary: explicit override, else the bundled static build
  *  (a precompiled binary in node_modules — no Docker/apt needed on Render). */
@@ -47,6 +55,47 @@ function runFfmpeg(args: string[], cwd: string): Promise<void> {
       else reject(new Error(`ffmpeg exited ${code}: ${stderr.trim().slice(-1000)}`));
     });
   });
+}
+
+/** Produce a download variant from a finished master mp4: scale to `height`
+ *  (never upscaling) and optionally bake the Syllary logo bottom-right. Re-encodes
+ *  the video; copies the audio stream untouched. Returns the output path. */
+export async function transcodeForDownload(opts: {
+  workDir: string;
+  inName: string;
+  outName: string;
+  height: number;
+  watermark: boolean;
+  logoPath?: string;
+}): Promise<string> {
+  const h = Math.round(opts.height);
+  // Escaped comma so min()'s arg list isn't read as a filter separator. Never
+  // upscale: cap the output height at the source height.
+  const scale = `scale=-2:min(ih\\,${h})`;
+  const enc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "copy", "-movflags", "+faststart"];
+  let args: string[];
+  if (opts.watermark) {
+    const logoH = Math.round(h * 0.075); // logo ~7.5% of frame height
+    const margin = Math.round(h * 0.03);
+    const fc =
+      `[0:v]${scale}[bg];` +
+      `[1:v]scale=-1:${logoH}[wm];` +
+      `[bg][wm]overlay=W-w-${margin}:H-h-${margin}[v]`;
+    args = [
+      "-y",
+      "-i", opts.inName,
+      "-i", opts.logoPath ?? WATERMARK_PATH,
+      "-filter_complex", fc,
+      "-map", "[v]",
+      "-map", "0:a",
+      ...enc,
+      opts.outName,
+    ];
+  } else {
+    args = ["-y", "-i", opts.inName, "-vf", scale, "-map", "0:v", "-map", "0:a", ...enc, opts.outName];
+  }
+  await runFfmpeg(args, opts.workDir);
+  return path.join(opts.workDir, opts.outName);
 }
 
 /** Gentle, centered Ken-Burns zoom. Because the lyric text is baked into the

@@ -6,6 +6,7 @@ import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { Footer } from "./footer";
 import { Hero } from "./hero";
 import { LivePreview } from "./live-preview";
+import { LyricVideoShowcase } from "./lyric-video-showcase";
 import { Nav } from "./nav";
 import { Pricing } from "./pricing";
 
@@ -84,6 +85,7 @@ export function LandingPage() {
       <Nav />
       <Hero />
       <LivePreview />
+      <LyricVideoShowcase />
       <Pricing />
       <Footer />
     </main>

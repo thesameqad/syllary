@@ -297,6 +297,8 @@ function PublicPageInner({ signedIn }: { signedIn: boolean }) {
             <video
               src={song.lyricVideoUrl}
               controls
+              controlsList="nodownload"
+              onContextMenu={(e) => e.preventDefault()}
               playsInline
               crossOrigin="anonymous"
               className="aspect-video w-full overflow-hidden rounded-[12px] border border-white/10 bg-black"

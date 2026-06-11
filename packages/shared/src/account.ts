@@ -12,6 +12,12 @@ export type Plan = z.infer<typeof planSchema>;
 /** Plans tailored to music-video generation (large token grants, no song cap). */
 export const VIDEO_PLANS = ["reel", "studio", "premiere"] as const;
 
+/** Whether a plan may download a lyric video WITHOUT the Syllary watermark.
+ *  Reserved for Music-video plans; everyone else downloads watermarked. */
+export function canRemoveWatermark(plan: Plan): boolean {
+  return (VIDEO_PLANS as readonly string[]).includes(plan);
+}
+
 /** Monthly token allowance granted per plan (free is granted once on signup).
  *  Video-plan grants use a 3× margin basis for Reel/Studio and a 2× basis for
  *  Premiere (the top tier is deliberately more generous per dollar). */

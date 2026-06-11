@@ -13,7 +13,9 @@ import {
   GROK_MIN_SECONDS,
   type ImageQuality,
   type ImageSize,
+  normalizeCharacterRefs,
   type ReviewSegment,
+  selectActiveCharacters,
   VIDEO_MODEL_INFO,
   type VideoSegment,
 } from "@syllary/shared";
@@ -93,6 +95,10 @@ async function makeFrame(
   // job-wide; direction is per-scene, defaulting to the lyric line) so editing a
   // shared field propagates to every not-yet-regenerated frame. Persisted for the
   // record (manual mode shows the parts, not this blob).
+  // Named per member. Narrow to the characters this scene actually features
+  // (mentioned in the direction, else the brief, else all).
+  const allCharacters = normalizeCharacterRefs(job.characterImageKeys);
+  const characterReferences = selectActiveCharacters(allCharacters, seg.direction, job.sceneBrief);
   const prompt = buildBackdropPrompt({
     style: job.styleDescription,
     lyricText: seg.text,
@@ -100,6 +106,7 @@ async function makeFrame(
     renderText,
     context: job.sceneBrief ?? undefined,
     direction: seg.direction ?? undefined,
+    characterReferences,
   });
   seg.prompt = prompt;
   const buf = await generateBackdrop({
@@ -110,6 +117,7 @@ async function makeFrame(
     quality: job.imageQuality as ImageQuality,
     renderText,
     promptOverride: prompt,
+    characterReferences: characterReferences.length > 0 ? characterReferences : undefined,
   });
   const imageFile = path.join(workDir, `img_${seg.index}.png`);
   await writeFile(imageFile, buf);
@@ -152,6 +160,8 @@ export async function regenerateSegmentImage(
   // An explicit direction (even empty → clear back to the lyric line) updates the
   // scene; omitted re-rolls with whatever is already stored.
   if (newDirection !== undefined) seg.direction = newDirection.trim() || null;
+  const allCharacters = normalizeCharacterRefs(job.characterImageKeys);
+  const characterReferences = selectActiveCharacters(allCharacters, seg.direction, job.sceneBrief);
   const prompt = buildBackdropPrompt({
     style: job.styleDescription,
     lyricText: seg.text,
@@ -159,6 +169,7 @@ export async function regenerateSegmentImage(
     renderText: true,
     context: job.sceneBrief ?? undefined,
     direction: seg.direction ?? undefined,
+    characterReferences,
   });
   seg.prompt = prompt;
 
@@ -170,6 +181,7 @@ export async function regenerateSegmentImage(
     quality: job.imageQuality as ImageQuality,
     renderText: true,
     promptOverride: prompt,
+    characterReferences: characterReferences.length > 0 ? characterReferences : undefined,
   });
   const imageKey = seg.imageKey ?? `video/${job.songId}/${job.id}/img_${seg.index}.png`;
   await uploadImageReliably(imageKey, buf);
@@ -363,6 +375,15 @@ async function runCinematic(
   workDir: string,
   audioStartSeconds = 0,
 ): Promise<void> {
+  // Fallback to the more permissive motion model when the default (Seedance)
+  // rejected the frames as "possibly a real person" and the user retried. The
+  // fallback (Kling) ALSO supports first+last frame, so the morphing transitions
+  // that make Cinematic distinct are preserved — but its clips are 5s/10s only,
+  // so we snap the gen duration below.
+  const permissive = job.motionMode === "ai_permissive";
+  const cinematicModel = permissive
+    ? env.OPENROUTER_CINEMATIC_FALLBACK_MODEL
+    : env.OPENROUTER_CINEMATIC_MODEL;
   const motionPrompt =
     `Cinematic camera motion that smoothly transforms the scene, in the style: ${job.styleDescription}. ` +
     `Keep any lyric text in the frame legible and stable; add no other text. No real recognizable people.`;
@@ -381,18 +402,22 @@ async function runCinematic(
   const clipNames = new Array<string>(segments.length);
   await mapPool(segments, VIDEO_CONCURRENCY, async (seg, i) => {
     const dur = seg.clipEnd - seg.clipStart;
-    // Seedance only generates 4–15s clips, so generate at >=4s and then
-    // speed-fit to the line's real length (preserves the first/last frames so
-    // the seamless join survives even for short lines).
-    const genDur = Math.min(CINEMATIC_MAX_SECONDS, Math.max(CINEMATIC_MIN_SECONDS, Math.ceil(dur)));
+    // Seedance does 4–15s; the Kling fallback does 5s or 10s only. Generate at a
+    // valid length, then speed-fit to the line's real length (preserves the
+    // first/last frames so the seamless join survives even for short lines).
+    const genDur = permissive
+      ? dur <= 7
+        ? 5
+        : 10
+      : Math.min(CINEMATIC_MAX_SECONDS, Math.max(CINEMATIC_MIN_SECONDS, Math.ceil(dur)));
     const raw = await generateMotionClip({
-      model: env.OPENROUTER_CINEMATIC_MODEL,
+      model: cinematicModel,
       prompt: motionPrompt,
       firstFrameUrl: frameUrls[i]!,
-      lastFrameUrl: frameUrls[i + 1], // undefined on the final clip
+      lastFrameUrl: frameUrls[i + 1], // first→last morph (undefined on the final clip)
       aspectRatio,
       durationSeconds: genDur,
-      resolution: "480p",
+      resolution: permissive ? "1080p" : "480p",
     });
     const rawFile = path.join(workDir, `raw_${i}.mp4`);
     await writeFile(rawFile, raw);

@@ -1,16 +1,17 @@
 import { cn } from "@/lib/utils";
 
-export const LIBRARY_TABS = ["artists", "albums", "songs", "videos"] as const;
+export const LIBRARY_TABS = ["artists", "albums", "members", "songs", "videos"] as const;
 export type LibraryTab = (typeof LIBRARY_TABS)[number];
 
 const LABEL: Record<LibraryTab, string> = {
   artists: "Artists",
   albums: "Albums",
+  members: "Members",
   songs: "Songs",
   videos: "Music Videos",
 };
 
-/** Four-tab bar for the Library. Selecting a tab clears any drill-down. */
+/** Tab bar for the Library. Selecting a tab clears any drill-down. */
 export function LibraryTabs({
   active,
   onSelect,

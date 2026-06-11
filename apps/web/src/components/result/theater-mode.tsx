@@ -223,7 +223,7 @@ export function TheaterMode({
           >
             <div
               ref={boxRef}
-              className="overflow-hidden rounded-[18px] will-change-transform"
+              className="relative overflow-hidden rounded-[18px] will-change-transform"
               style={{ boxShadow: `0 0 90px 0 rgba(${rgb},0.55), 0 30px 90px rgba(0,0,0,0.65)` }}
             >
               <video
@@ -231,6 +231,8 @@ export function TheaterMode({
                 ref={videoRef}
                 src={src}
                 controls
+                controlsList="nodownload"
+                onContextMenu={(e) => e.preventDefault()}
                 autoPlay
                 playsInline
                 {...(cors ? { crossOrigin: "anonymous" as const } : {})}

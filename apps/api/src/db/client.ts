@@ -7,18 +7,21 @@ if (!connectionString) {
   throw new Error("DATABASE_URL is not set");
 }
 
-// Connects to Supabase Postgres via the session pooler (port 5432); TLS comes
-// from `?sslmode=require` in DATABASE_URL. If you switch to the transaction
-// pooler (port 6543) for a serverless deploy, add `{ prepare: false }` here.
+// Connects to Supabase Postgres. TLS comes from `?sslmode=require` in the URL.
 //
-// The Supabase session pooler caps TOTAL clients at its pool_size (15 by
-// default). Keep our per-process pool small so the persistent server — plus a
-// parallel local-dev process and the occasional migration, all hitting the same
-// pooler — never exhaust it (the EMAXCONNSESSION error). Idle connections are
-// released quickly so they free up between bursts.
+// The SESSION pooler (port 5432) maps one client to one server connection and
+// caps total clients at pool_size (15), which we kept hitting locally (sharing
+// the pooler with prod) — surfacing as EMAXCONNSESSION and ECONNRESET. The
+// TRANSACTION pooler (port 6543) multiplexes many clients over fewer server
+// connections and tolerates churn far better; it requires `prepare: false`
+// (no session-level prepared statements). We auto-detect the port so prod can
+// keep using the session pooler / direct connection (with prepared statements)
+// unchanged, while local dev points at :6543.
+const isTransactionPooler = connectionString.includes(":6543");
 const client = postgres(connectionString, {
   max: Number(process.env.DB_POOL_MAX ?? 5),
   idle_timeout: 20,
+  prepare: !isTransactionPooler,
 });
 
 export const db = drizzle(client, { schema, casing: "snake_case" });

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { DownloadCloud, Loader2, Music, Pencil, Upload } from "lucide-react";
+import { DownloadCloud, Loader2, Music, Pencil, Plus, Upload } from "lucide-react";
 import {
   type Album,
   type AlbumTrack,
   type Artist,
+  type BandMember,
   FREE_SONG_LIMIT,
   type SongSummary,
 } from "@syllary/shared";
@@ -12,10 +13,12 @@ import {
   ApiError,
   deleteAlbum,
   deleteArtist,
+  deleteMember,
   deleteSong,
   getAccount,
   listAlbums,
   listArtists,
+  listMembers,
   listSongs,
   updateSong,
 } from "@/lib/api";
@@ -23,12 +26,14 @@ import { SongCard, type SongCardManage } from "@/components/dashboard/song-card"
 import { MusicVideoCard, musicVideoSongs } from "@/components/dashboard/music-video-card";
 import { ArtistCard } from "@/components/dashboard/artist-card";
 import { AlbumCard } from "@/components/dashboard/album-card";
+import { MemberCard } from "@/components/dashboard/member-card";
 import { LIBRARY_TABS, LibraryTabs, type LibraryTab } from "@/components/dashboard/library-tabs";
 import { LibraryBreadcrumb, type Crumb } from "@/components/dashboard/library-breadcrumb";
 import {
   EntityEditModal,
   type EntityEditTarget,
 } from "@/components/dashboard/entity-edit-modal";
+import { MemberEditModal } from "@/components/dashboard/member-edit-modal";
 import { ImportCatalogModal } from "@/components/dashboard/import-catalog-modal";
 
 const TILE_GRID = "grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4";
@@ -47,10 +52,13 @@ export function LibraryPage() {
   const [songs, setSongs] = useState<SongSummary[] | null>(null);
   const [artistRows, setArtistRows] = useState<Artist[]>([]);
   const [albumRows, setAlbumRows] = useState<Album[]>([]);
+  const [memberRows, setMemberRows] = useState<BandMember[]>([]);
   const [plan, setPlan] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [params, setParams] = useSearchParams();
   const [editTarget, setEditTarget] = useState<EntityEditTarget | null>(null);
+  // null = closed; { member } open (member null = create).
+  const [memberModal, setMemberModal] = useState<{ member: BandMember | null } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const navigate = useNavigate();
 
@@ -58,7 +66,12 @@ export function LibraryPage() {
     // Settle independently so a failing artists/albums call can't blank the page,
     // and a failed songs call sets an error (the poll effect retries) rather than
     // leaving "Loading…" stuck forever.
-    const [s, ar, al] = await Promise.allSettled([listSongs(), listArtists(), listAlbums()]);
+    const [s, ar, al, mem] = await Promise.allSettled([
+      listSongs(),
+      listArtists(),
+      listAlbums(),
+      listMembers(),
+    ]);
     if (s.status === "fulfilled") {
       setSongs(s.value);
       setError(null);
@@ -67,6 +80,7 @@ export function LibraryPage() {
     }
     if (ar.status === "fulfilled") setArtistRows(ar.value);
     if (al.status === "fulfilled") setAlbumRows(al.value);
+    if (mem.status === "fulfilled") setMemberRows(mem.value);
   }, []);
 
   useEffect(() => {
@@ -318,8 +332,57 @@ export function LibraryPage() {
     );
   }
 
+  function membersBody() {
+    const sorted = [...memberRows].sort((a, b) => a.name.localeCompare(b.name));
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[12px] text-white/45">
+            Reusable characters for your lyric videos — upload a few photos and pick them when
+            generating.
+          </p>
+          <button
+            type="button"
+            onClick={() => setMemberModal({ member: null })}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-pulse px-4 py-1.5 text-[13px] font-medium text-white transition-transform hover:scale-[1.03]"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add member
+          </button>
+        </div>
+        {sorted.length === 0 ? (
+          <p className="text-[14px] text-white/40">
+            No band members yet — add one and upload a few photos.
+          </p>
+        ) : (
+          <div className={TILE_GRID}>
+            {sorted.map((m) => (
+              <MemberCard
+                key={m.id}
+                name={m.name}
+                band={artistById.get(m.artistId)?.name ?? "Unknown band"}
+                cover={m.images[0]?.url ?? null}
+                imageCount={m.images.length}
+                onEdit={() => setMemberModal({ member: m })}
+                manage={{
+                  onEdit: () => setMemberModal({ member: m }),
+                  onDelete: async () => {
+                    await deleteMember(m.id);
+                    await load();
+                  },
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function renderBody() {
     if (songs === null) return <p className="text-[14px] text-white/40">Loading…</p>;
+
+    if (tab === "members") return membersBody();
 
     if (tab === "songs") return songGrid(all);
 
@@ -562,6 +625,14 @@ export function LibraryPage() {
       )}
       {importOpen && (
         <ImportCatalogModal onClose={() => setImportOpen(false)} onImported={() => void load()} />
+      )}
+      {memberModal && (
+        <MemberEditModal
+          member={memberModal.member}
+          artists={artistRows.map((a) => ({ id: a.id, name: a.name }))}
+          onClose={() => setMemberModal(null)}
+          onSaved={() => void load()}
+        />
       )}
     </div>
   );

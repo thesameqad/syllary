@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { IMAGE_QUALITIES, IMAGE_SIZES, VIDEO_MODELS, VIDEO_PIPELINE_MODES } from "./constants.js";
+import {
+  IMAGE_QUALITIES,
+  IMAGE_SIZES,
+  MAX_VIDEO_CHARACTERS,
+  VIDEO_MODELS,
+  VIDEO_PIPELINE_MODES,
+} from "./constants.js";
 
 // Keep in sync with the video_job_status pgEnum in apps/api/src/db/schema.ts.
 export const VIDEO_JOB_STATUSES = ["pending", "processing", "review", "ready", "failed"] as const;
@@ -28,6 +34,10 @@ export const createVideoSchema = z.object({
   imageQuality: imageQualitySchema.default("fast"),
   /** A cheap ~10s sample from the first lyric line (always autopilot). */
   preview: z.boolean().default(false),
+  /** Optional band-member ids to depict as the recurring characters — their
+   *  photos are fed to the image model as references, restyled to the art
+   *  direction. Resolved to reference image keys server-side. */
+  characterIds: z.array(z.string().uuid()).max(MAX_VIDEO_CHARACTERS).optional(),
 });
 export type CreateVideoRequest = z.infer<typeof createVideoSchema>;
 
@@ -107,9 +117,32 @@ export const videoJobSchema = z.object({
   completedSegments: z.number(),
   /** Per-line cards for manual review (empty until images are generated). */
   segments: z.array(reviewSegmentSchema).default([]),
+  /** Names of the band members selected as characters for this video — lets the
+   *  manual review UI offer @mentions. Empty when none were chosen. */
+  characterNames: z.array(z.string()).default([]),
   /** Presigned playback URL for the finished MP4; null until ready. */
   videoUrl: z.string().url().nullable(),
   error: z.string().nullable(),
   createdAt: z.string(),
 });
 export type VideoJob = z.infer<typeof videoJobSchema>;
+
+/** Download resolutions offered in the download modal (target heights). */
+export const VIDEO_DOWNLOAD_RESOLUTIONS = ["1080p", "720p", "480p"] as const;
+export type VideoDownloadResolution = (typeof VIDEO_DOWNLOAD_RESOLUTIONS)[number];
+
+/** Request a (resolution × watermark) download variant. `watermark:false` is
+ *  gated to Music-video plans server-side. */
+export const videoDownloadSchema = z.object({
+  resolution: z.enum(VIDEO_DOWNLOAD_RESOLUTIONS).default("1080p"),
+  watermark: z.boolean().default(true),
+});
+export type VideoDownloadRequest = z.infer<typeof videoDownloadSchema>;
+
+/** Async download response: the variant is transcoded on demand + cached, so the
+ *  client polls until `ready` and then fetches `url`. */
+export const videoDownloadResponseSchema = z.object({
+  status: z.enum(["processing", "ready"]),
+  url: z.string().url().nullable().default(null),
+});
+export type VideoDownloadResponse = z.infer<typeof videoDownloadResponseSchema>;
