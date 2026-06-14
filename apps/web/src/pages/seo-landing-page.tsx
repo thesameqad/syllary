@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Loader2 } from "lucide-react";
+import { ArrowRight, Loader2 } from "lucide-react";
 import { LANDING_CATEGORIES, type LandingPage } from "@syllary/shared";
 import { captureClient } from "@/lib/analytics";
 import { ApiError, getLanding } from "@/lib/api";
@@ -193,8 +193,9 @@ export function SeoLandingPage() {
                 and frame the rest as a clearly separate reference section.
                 Full-width divider, but the prose stays in a readable column
                 left-aligned to the hero's left edge. */}
-            <div className="border-t border-white/[0.06] pt-10">
-              <div className="max-w-3xl">
+            <div className="grid gap-8 border-t border-white/[0.06] pt-10 lg:grid-cols-[2fr_1fr]">
+              {/* Readable prose column (left edge aligns with the hero) */}
+              <div className="min-w-0">
                 <p className="mb-6 text-[12px] uppercase tracking-[0.18em] text-white/35">
                   Learn more
                 </p>
@@ -220,6 +221,27 @@ export function SeoLandingPage() {
                   </section>
                 )}
               </div>
+
+              {/* Sticky CTA fills the right column so both edges align with the
+                  hero, and keeps a conversion prompt in view while reading. */}
+              <aside className="hidden lg:block">
+                <div className="sticky top-[70px] rounded-2xl border border-pulse/25 bg-pulse/[0.06] p-5">
+                  <h3 className="text-[16px] font-medium tracking-tight text-white">
+                    Try it with your song
+                  </h3>
+                  <p className="mt-1.5 text-[13px] leading-relaxed text-white/60">
+                    Free to try, no sign-up. Synced lyrics in about a minute, and a lyric video in a
+                    few clicks.
+                  </p>
+                  <a
+                    href="#start"
+                    className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-pulse px-4 py-2.5 text-[13px] font-medium text-white transition-colors hover:bg-pulse/90"
+                  >
+                    Upload your track
+                    <ArrowRight className="h-4 w-4" />
+                  </a>
+                </div>
+              </aside>
             </div>
           </main>
         </>
