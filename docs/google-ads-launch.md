@@ -246,11 +246,16 @@ Then review the **Search terms report** daily in week 1 and add anything irrelev
 
 ## 5. Sitelinks & extensions (do once, account level — free, lifts CTR a lot)
 
-Sitelinks:
-- **Pricing** → `https://syllary.com/#pricing`
-- **Free tools** → `https://syllary.com/tools/lrc-validator`
-- **Lyric videos** → `https://syllary.com/guides/how-to-make-a-lyric-video`
-- **How it works** → `https://syllary.com`
+Sitelinks (Google requires a minimum of 6; descriptions optional but lift CTR — if you fill one line you must fill both, ≤25 char text / ≤35 char descriptions):
+
+| Text | Desc 1 | Desc 2 | Final URL |
+|---|---|---|---|
+| Pricing | Plans from $6 a month | Cancel anytime | `https://syllary.com/#pricing` |
+| Lyric videos | Turn your song into a video | 1080p, ready for YouTube | `https://syllary.com/guides/how-to-make-a-lyric-video` |
+| Free LRC tools | Validate and fix LRC files | No sign-up needed | `https://syllary.com/tools/lrc-validator` |
+| Make an LRC file | Synced lyrics in a minute | Every format included | `https://syllary.com/guides/how-to-make-an-lrc-file` |
+| MP3 to LRC | Upload audio, get .lrc | Word by word timing | `https://syllary.com/convert/mp3-to-lrc` |
+| FAQ | How Syllary works | Formats, pricing, and more | `https://syllary.com/faq` |
 
 Also add: **Callout extensions** (e.g. "Every format", "Word-by-word sync", "Free to try", "1080p MP4") and a **Structured snippet** (header "Service catalog": LRC, TTML, SRT, VTT, Lyric videos).
 
