@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { ChevronRight, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { LANDING_CATEGORIES, type LandingPage } from "@syllary/shared";
 import { captureClient } from "@/lib/analytics";
 import { ApiError, getLanding } from "@/lib/api";
 import { LogoWordmark } from "@/components/logo";
 import { LandingBlocks } from "@/components/landing/landing-blocks";
+import { LandingHero } from "@/components/landing/landing-hero";
 import { ToolHost } from "@/tools/registry";
 import { useSeo } from "@/lib/seo";
 
@@ -16,12 +17,12 @@ function Nav() {
         <Link to="/" aria-label="Syllary home">
           <LogoWordmark />
         </Link>
-        <Link
-          to="/"
+        <a
+          href="#start"
           className="rounded-lg bg-pulse px-3.5 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-pulse/90"
         >
-          Get my lyric files
-        </Link>
+          Try it free
+        </a>
       </div>
     </header>
   );
@@ -159,41 +160,34 @@ export function SeoLandingPage() {
   return (
     <div className="min-h-dvh bg-void text-white">
       <Nav />
-      <main className="mx-auto max-w-3xl px-5 py-10">
-        {status === "loading" && (
-          <div className="flex items-center gap-2 py-20 text-[14px] text-white/45">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading…
-          </div>
-        )}
 
-        {status === "notfound" && (
-          <div className="py-20 text-center">
-            <h1 className="text-[22px] font-medium text-white">Page not found</h1>
-            <p className="mt-2 text-[14px] text-white/55">This page isn&apos;t available.</p>
-            <Link to="/" className="mt-5 inline-block text-[13px] text-pulse hover:underline">
-              Go to Syllary →
-            </Link>
-          </div>
-        )}
+      {status === "loading" && (
+        <div className="mx-auto flex max-w-3xl items-center gap-2 px-5 py-20 text-[14px] text-white/45">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+        </div>
+      )}
 
-        {status === "error" && (
-          <p className="py-20 text-center text-[14px] text-white/55">
-            Something went wrong loading this page.
-          </p>
-        )}
+      {status === "notfound" && (
+        <div className="mx-auto max-w-3xl px-5 py-20 text-center">
+          <h1 className="text-[22px] font-medium text-white">Page not found</h1>
+          <p className="mt-2 text-[14px] text-white/55">This page isn&apos;t available.</p>
+          <Link to="/" className="mt-5 inline-block text-[13px] text-pulse hover:underline">
+            Go to Syllary →
+          </Link>
+        </div>
+      )}
 
-        {status === "ready" && page && (
-          <article>
-            <nav aria-label="Breadcrumb" className="mb-3 flex items-center gap-1.5 text-[13px] text-white/40">
-              <Link to="/" className="transition-colors hover:text-white/70">
-                Home
-              </Link>
-              <ChevronRight className="h-3.5 w-3.5" />
-              <span>{categoryLabel(page.category)}</span>
-            </nav>
-            <h1 className="text-[34px] font-medium leading-[1.1] tracking-[-1px] text-white md:text-[40px]">
-              {page.title}
-            </h1>
+      {status === "error" && (
+        <p className="mx-auto max-w-3xl px-5 py-20 text-center text-[14px] text-white/55">
+          Something went wrong loading this page.
+        </p>
+      )}
+
+      {status === "ready" && page && (
+        <>
+          <LandingHero page={page} />
+          <main className="mx-auto max-w-3xl px-5 py-12">
+            {/* The original guide content — kept for SEO depth + Ads quality. */}
             <LandingBlocks blocks={page.blocks} />
             {showStandaloneTool && page.toolKey && (
               <div className="mt-8">
@@ -215,9 +209,10 @@ export function SeoLandingPage() {
                 </dl>
               </section>
             )}
-          </article>
-        )}
-      </main>
+          </main>
+        </>
+      )}
+
       <Footer />
     </div>
   );
