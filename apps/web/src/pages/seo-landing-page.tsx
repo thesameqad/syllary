@@ -13,7 +13,7 @@ import { useSeo } from "@/lib/seo";
 function Nav() {
   return (
     <header className="sticky top-0 z-20 border-b border-white/[0.06] bg-void/85 backdrop-blur">
-      <div className="mx-auto flex h-[54px] max-w-3xl items-center justify-between px-5">
+      <div className="mx-auto flex h-[54px] max-w-6xl items-center justify-between px-5">
         <Link to="/" aria-label="Syllary home">
           <LogoWordmark />
         </Link>
@@ -31,7 +31,7 @@ function Nav() {
 function Footer() {
   return (
     <footer className="mt-16 border-t border-white/[0.06] py-8">
-      <div className="mx-auto flex max-w-3xl flex-col gap-2 px-5 text-[12px] text-white/40">
+      <div className="mx-auto flex max-w-6xl flex-col gap-2 px-5 text-[12px] text-white/40">
         <Link to="/" aria-label="Syllary home" className="w-fit">
           <LogoWordmark />
         </Link>
@@ -186,36 +186,40 @@ export function SeoLandingPage() {
       {status === "ready" && page && (
         <>
           <LandingHero page={page} />
-          <main className="mx-auto max-w-3xl px-5 py-12">
+          <main className="mx-auto max-w-6xl px-5 py-12">
             {/* Original guide content, kept for SEO depth + Ads quality. The
                 hero already shows the how-it-works flow, so drop the duplicate
                 `steps` block here (it stays in page.blocks for the HowTo JSON-LD)
-                and frame the rest as a clearly separate reference section. */}
+                and frame the rest as a clearly separate reference section.
+                Full-width divider, but the prose stays in a readable column
+                left-aligned to the hero's left edge. */}
             <div className="border-t border-white/[0.06] pt-10">
-              <p className="mb-6 text-[12px] uppercase tracking-[0.18em] text-white/35">
-                Learn more
-              </p>
-              <LandingBlocks blocks={page.blocks.filter((b) => b.kind !== "steps")} />
-              {showStandaloneTool && page.toolKey && (
-                <div className="mt-8">
-                  <ToolHost toolKey={page.toolKey} />
-                </div>
-              )}
-              {page.faq && page.faq.length > 0 && (
-                <section className="mt-12">
-                  <h2 className="text-[26px] font-medium tracking-[-0.5px] text-white">
-                    Frequently asked questions
-                  </h2>
-                  <dl className="mt-5 space-y-5">
-                    {page.faq.map((item, i) => (
-                      <div key={i}>
-                        <dt className="text-[15px] font-medium text-white">{item.q}</dt>
-                        <dd className="mt-1.5 text-[15px] leading-[1.7] text-white/65">{item.a}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                </section>
-              )}
+              <div className="max-w-3xl">
+                <p className="mb-6 text-[12px] uppercase tracking-[0.18em] text-white/35">
+                  Learn more
+                </p>
+                <LandingBlocks blocks={page.blocks.filter((b) => b.kind !== "steps")} />
+                {showStandaloneTool && page.toolKey && (
+                  <div className="mt-8">
+                    <ToolHost toolKey={page.toolKey} />
+                  </div>
+                )}
+                {page.faq && page.faq.length > 0 && (
+                  <section className="mt-12">
+                    <h2 className="text-[26px] font-medium tracking-[-0.5px] text-white">
+                      Frequently asked questions
+                    </h2>
+                    <dl className="mt-5 space-y-5">
+                      {page.faq.map((item, i) => (
+                        <div key={i}>
+                          <dt className="text-[15px] font-medium text-white">{item.q}</dt>
+                          <dd className="mt-1.5 text-[15px] leading-[1.7] text-white/65">{item.a}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </section>
+                )}
+              </div>
             </div>
           </main>
         </>
