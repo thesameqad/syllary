@@ -187,28 +187,36 @@ export function SeoLandingPage() {
         <>
           <LandingHero page={page} />
           <main className="mx-auto max-w-3xl px-5 py-12">
-            {/* The original guide content — kept for SEO depth + Ads quality. */}
-            <LandingBlocks blocks={page.blocks} />
-            {showStandaloneTool && page.toolKey && (
-              <div className="mt-8">
-                <ToolHost toolKey={page.toolKey} />
-              </div>
-            )}
-            {page.faq && page.faq.length > 0 && (
-              <section className="mt-12">
-                <h2 className="text-[26px] font-medium tracking-[-0.5px] text-white">
-                  Frequently asked questions
-                </h2>
-                <dl className="mt-5 space-y-5">
-                  {page.faq.map((item, i) => (
-                    <div key={i}>
-                      <dt className="text-[15px] font-medium text-white">{item.q}</dt>
-                      <dd className="mt-1.5 text-[15px] leading-[1.7] text-white/65">{item.a}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </section>
-            )}
+            {/* Original guide content, kept for SEO depth + Ads quality. The
+                hero already shows the how-it-works flow, so drop the duplicate
+                `steps` block here (it stays in page.blocks for the HowTo JSON-LD)
+                and frame the rest as a clearly separate reference section. */}
+            <div className="border-t border-white/[0.06] pt-10">
+              <p className="mb-6 text-[12px] uppercase tracking-[0.18em] text-white/35">
+                Learn more
+              </p>
+              <LandingBlocks blocks={page.blocks.filter((b) => b.kind !== "steps")} />
+              {showStandaloneTool && page.toolKey && (
+                <div className="mt-8">
+                  <ToolHost toolKey={page.toolKey} />
+                </div>
+              )}
+              {page.faq && page.faq.length > 0 && (
+                <section className="mt-12">
+                  <h2 className="text-[26px] font-medium tracking-[-0.5px] text-white">
+                    Frequently asked questions
+                  </h2>
+                  <dl className="mt-5 space-y-5">
+                    {page.faq.map((item, i) => (
+                      <div key={i}>
+                        <dt className="text-[15px] font-medium text-white">{item.q}</dt>
+                        <dd className="mt-1.5 text-[15px] leading-[1.7] text-white/65">{item.a}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </section>
+              )}
+            </div>
           </main>
         </>
       )}
