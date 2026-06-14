@@ -6,23 +6,32 @@ Budget frame: ~$35/day to start (G1 $15 + G2 $16 + G3 $4), inside the $1,500/mo 
 
 ---
 
-## 1. Account settings (do these once, first)
+## 1. Settings
 
+Google's nav splits these into two places. Only **auto-tagging** is a true pre-campaign account setting; Networks / Locations / Language / Bidding are **per-campaign** and only appear *inside the campaign-creation wizard* (§3), not beforehand.
+
+**Account-level (do now):**
 | Setting | Value | Where |
 |---|---|---|
-| **Auto-tagging** | **ON** | Admin → Account settings → Auto-tagging. *Critical* — this appends `gclid` to clicks, which our site stores and the weekly CSV needs. Without it, purchase tracking is dead. |
+| **Auto-tagging** | **ON** | **Admin** (bottom-left) → **Account settings** → **Auto-tagging** → check "Tag the URL…". *Critical* — appends `gclid` to clicks, which our site stores and the weekly CSV needs. Without it, purchase tracking is dead. |
 | Time zone / currency | confirm USD | Already set at signup; can't change later. |
-| Networks | **Search only** | In each campaign: uncheck "Display Network" and "Search partners" for clean first-data. |
-| Locations | **US, Canada, Australia, New Zealand** | Campaign setting. Then click **Location options → "Presence: People in or regularly in your targeted locations"** (not "interest") — avoids people merely searching *about* those countries. |
-| Language | English | Campaign setting. |
-| Bidding | **Manual CPC** (or Maximize Clicks with a max-CPC cap) | Switch to Maximize Conversions only after a campaign logs ≥30 conversions. |
+
+**Per-campaign (set these while building each campaign in §3):**
+| Setting | Value |
+|---|---|
+| Networks | **Search only** — untick "Search partners" and "Display Network". |
+| Locations | **US, Canada, Australia, New Zealand**, then **Location options → "Presence: People in or regularly in your targeted locations"** (not "interest") — avoids people merely searching *about* those countries. |
+| Language | English |
+| Bidding | **Manual CPC** (or Maximize Clicks with a max-CPC cap). Switch to Maximize Conversions only after a campaign logs ≥30 conversions. |
 
 ---
 
 ## 2. Conversion actions (create these two before campaigns)
 
+> **Where conversions live now:** the redesigned nav moved them out of Tools. Left menu → **Goals → Conversions → Summary** → **+ New conversion action**. (If you don't see "Goals," widen the window or look under the **Tools → Measurement** group — Google is mid-rollout and shows one or the other.)
+
 ### A. `purchase` — PRIMARY (offline import)
-Tools → **Conversions** → **+ New** → **Import** → **Other data sources / CRM** → "Conversions from clicks".
+Goals → Conversions → **+ New conversion action** → **Import** → **Other data sources or CRM** → "Track conversions from clicks".
 - **Conversion action name:** `purchase` ← must be exactly this. Our CSV's "Conversion Name" column is hardcoded to `purchase`; any other name and the import silently drops every row.
 - Category: **Purchase**
 - Value: **Use the value from the file** (our CSV sends real cents per plan)
@@ -31,7 +40,7 @@ Tools → **Conversions** → **+ New** → **Import** → **Other data sources 
 - Feeding it: weekly, download `https://api.syllary.com/admin/conversions/export.csv?source=google` (admin-only) and upload it under Conversions → Uploads. Rows auto-mark exported so each pull is only new conversions. *(I can wire a one-click admin button later; CSV is fine at this volume.)*
 
 ### B. `sign_up` — SECONDARY (website tag)
-Tools → **Conversions** → **+ New** → **Website**.
+Goals → Conversions → **+ New conversion action** → **Website**.
 - Name: `sign_up`
 - Category: **Sign-up**
 - Value: **Don't use a value** (or a small proxy like $2)
@@ -44,7 +53,16 @@ Tools → **Conversions** → **+ New** → **Website**.
 
 ## 3. Campaigns
 
-All three: Search, the account settings above, **exact + phrase match only** (no broad for the first 3 weeks). Each ad group gets one Responsive Search Ad (RSA). Final URLs below are all real, published pages.
+**Starting each campaign (so you get plain Search, not Performance Max):**
+1. Campaigns → **+ Create campaign**.
+2. Objective: choose **"Create a campaign without a goal's guidance"** (bottom option) — this stops Google steering you into Smart/Performance Max.
+3. Campaign type: **Search**.
+4. Uncheck any "broaden reach" / website-field prompts; click Continue.
+5. Now the settings page appears with **Networks, Locations, Language, Bidding** (the §1 per-campaign values). Set them here.
+6. Daily budget per the per-campaign amounts below.
+7. Build the ad group(s), paste keywords + the RSA, set the final URL.
+
+All three: Search, settings from §1, **exact + phrase match only** (no broad for the first 3 weeks). Each ad group gets one Responsive Search Ad (RSA). Final URLs below are all real, published pages.
 
 Headlines are ≤30 chars, descriptions ≤90 — paste as-is. **No competitor/tool trademarks appear in any ad text** (they live only in keywords + landing-page copy); a brand-new account gets trademark disapprovals easily, so we keep copy generic.
 
