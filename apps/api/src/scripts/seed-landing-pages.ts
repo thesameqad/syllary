@@ -4,6 +4,7 @@ import { createLandingSchema, type LandingBlock, renderBlocksToHtml } from "@syl
 import { db } from "../db/client.js";
 import { landingPages } from "../db/schema.js";
 import { BANNED_STRINGS, type SeedPage, VALID_TOOL_KEYS } from "./landing/types.js";
+import { ensureMinFaqs } from "./landing/faq-pool.js";
 import { COMPARISON_PAGES } from "./landing/comparison.js";
 import { HOWTO_PAGES } from "./landing/how-to.js";
 import { FORMAT_PAGES } from "./landing/format.js";
@@ -29,6 +30,10 @@ const BUCKETS: Record<string, SeedPage[]> = {
 };
 
 const all: SeedPage[] = Object.values(BUCKETS).flat();
+// Guarantee every page has at least 3 FAQs (one alone looks sparse). Applied
+// before validation/upsert so plainText, schema, and rendered HTML all reflect
+// the topped-up set.
+for (const p of all) p.faq = ensureMinFaqs(p);
 const batchSlugs = new Set(all.map((p) => `/${p.slug}`));
 
 const errors: string[] = [];
