@@ -31,6 +31,8 @@ Google's nav splits these into two places. Only **auto-tagging** is a true pre-c
 > **Where conversions live now:** the redesigned nav moved them out of Tools. Left menu → **Goals → Conversions → Summary** → **+ New conversion action**. (If you don't see "Goals," widen the window or look under the **Tools → Measurement** group — Google is mid-rollout and shows one or the other.)
 
 ### A. `purchase` — PRIMARY (offline import)
+⚠️ **Pick the Import source, NOT "Website."** Purchases happen server-side (Stripe webhook) and upload via our weekly CSV — a Website/event-snippet action would never receive data and the CSV import can't attach to it.
+
 Goals → Conversions → **+ New conversion action** → **Import** → **Other data sources or CRM** → "Track conversions from clicks".
 - **Conversion action name:** `purchase` ← must be exactly this. Our CSV's "Conversion Name" column is hardcoded to `purchase`; any other name and the import silently drops every row.
 - Category: **Purchase**
