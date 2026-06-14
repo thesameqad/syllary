@@ -1,12 +1,15 @@
 /** Paid-ads measurement tags (Google gtag + Microsoft UET), injected at runtime
  *  only when their env keys exist — local dev and preview builds stay clean.
- *  These complement the server-side attribution (gclid/msclkid capture + offline
- *  purchase import): browser tags report the cheap, high-volume signals (page
- *  views, sign-ups); the money signal goes server-side.
+ *  Purchases fire client-side on the Stripe success return page (/account?
+ *  checkout=success), which lands back on our own domain — so gtag attributes
+ *  them to the original ad click via its first-party cookie. gclid is still
+ *  captured server-side as a backup (conversion_exports), but the website
+ *  conversion is the live signal, so there's no weekly CSV upload to run.
  *
  *  Env:
  *    VITE_GTAG_ID                 e.g. "AW-123456789"
- *    VITE_GTAG_SIGNUP_LABEL       e.g. "AW-123456789/AbCdEfGh" (conversion action)
+ *    VITE_GTAG_SIGNUP_LABEL       e.g. "AW-123456789/AbCdEfGh" (secondary)
+ *    VITE_GTAG_PURCHASE_LABEL     e.g. "AW-123456789/IjKlMnOp" (primary)
  *    VITE_UET_TAG_ID              e.g. "12345678"
  */
 
@@ -20,6 +23,7 @@ declare global {
 
 const GTAG_ID = import.meta.env.VITE_GTAG_ID as string | undefined;
 const GTAG_SIGNUP_LABEL = import.meta.env.VITE_GTAG_SIGNUP_LABEL as string | undefined;
+const GTAG_PURCHASE_LABEL = import.meta.env.VITE_GTAG_PURCHASE_LABEL as string | undefined;
 const UET_TAG_ID = import.meta.env.VITE_UET_TAG_ID as string | undefined;
 
 /** Inject the Google tag and Microsoft UET snippets. Call once at boot. */
@@ -68,6 +72,31 @@ export function reportSignupConversion(): void {
     const uetq = window.uetq as { push?: (...a: unknown[]) => void } | unknown[] | undefined;
     if (uetq && "push" in (uetq as object)) {
       (uetq as { push: (...a: unknown[]) => void }).push("event", "signup", {});
+    }
+  } catch {
+    // measurement must never break the app
+  }
+}
+
+/** Report a completed purchase — the PRIMARY conversion that drives bidding.
+ *  Fired from the Stripe success page. `transactionId` (the Checkout session id)
+ *  lets Google dedupe if the page is refreshed or bookmarked. */
+export function reportPurchaseConversion(opts: { valueUsd: number | null; transactionId?: string }): void {
+  try {
+    if (window.gtag && GTAG_PURCHASE_LABEL) {
+      const payload: Record<string, unknown> = { send_to: GTAG_PURCHASE_LABEL };
+      if (opts.valueUsd != null) {
+        payload.value = opts.valueUsd;
+        payload.currency = "USD";
+      }
+      if (opts.transactionId) payload.transaction_id = opts.transactionId;
+      window.gtag("event", "conversion", payload);
+    }
+    const uetq = window.uetq as { push?: (...a: unknown[]) => void } | unknown[] | undefined;
+    if (uetq && "push" in (uetq as object)) {
+      (uetq as { push: (...a: unknown[]) => void }).push("event", "purchase", {
+        ...(opts.valueUsd != null ? { revenue_value: opts.valueUsd, currency: "USD" } : {}),
+      });
     }
   } catch {
     // measurement must never break the app

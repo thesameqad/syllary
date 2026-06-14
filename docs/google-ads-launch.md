@@ -28,28 +28,31 @@ Google's nav splits these into two places. Only **auto-tagging** is a true pre-c
 
 ## 2. Conversion actions (create these two before campaigns)
 
-> **Where conversions live now:** the redesigned nav moved them out of Tools. Left menu → **Goals → Conversions → Summary** → **+ New conversion action**. (If you don't see "Goals," widen the window or look under the **Tools → Measurement** group — Google is mid-rollout and shows one or the other.)
+> **Where conversions live now:** the redesigned nav moved them out of Tools. Left menu → **Goals → Conversions → Summary** → **+ New conversion action**. Both actions below use the **Website** source (`syllary.com`), so no CSV uploads and no hunting for the Import option.
 
-### A. `purchase` — PRIMARY (offline import)
-⚠️ **Pick the Import source, NOT "Website."** Purchases happen server-side (Stripe webhook) and upload via our weekly CSV — a Website/event-snippet action would never receive data and the CSV import can't attach to it.
+Both fire client-side from our own pages (the code is built): `sign_up` on account creation, `purchase` on the Stripe success page (`/account?checkout=success`, which returns to our domain so gtag attributes it to the ad click). gclid is still stored server-side as a silent backup, but these website tags are the live signal.
 
-Goals → Conversions → **+ New conversion action** → **Import** → **Other data sources or CRM** → "Track conversions from clicks".
-- **Conversion action name:** `purchase` ← must be exactly this. Our CSV's "Conversion Name" column is hardcoded to `purchase`; any other name and the import silently drops every row.
+### A. `purchase` — PRIMARY
+**+ New conversion action** → **Website** → source `syllary.com`.
+- Name: `purchase`
 - Category: **Purchase**
-- Value: **Use the value from the file** (our CSV sends real cents per plan)
+- Value: **Use different values for each conversion** (our code passes the real plan price + USD per checkout). Default value $14, USD.
 - Count: **One**
-- Mark as **Primary**.
-- Feeding it: weekly, download `https://api.syllary.com/admin/conversions/export.csv?source=google` (admin-only) and upload it under Conversions → Uploads. Rows auto-mark exported so each pull is only new conversions. *(I can wire a one-click admin button later; CSV is fine at this volume.)*
+- Mark as **Primary** (drives bidding).
+- Setup method: **Google tag**. Turn **Enhanced conversions ON**.
+- After saving, copy the **conversion label** (`AW-…/IjKlMnOp`). **Send it to me** → `VITE_GTAG_PURCHASE_LABEL`.
 
-### B. `sign_up` — SECONDARY (website tag)
-Goals → Conversions → **+ New conversion action** → **Website**.
+### B. `sign_up` — SECONDARY
+**+ New conversion action** → **Website** → source `syllary.com`.
 - Name: `sign_up`
 - Category: **Sign-up**
-- Value: **Don't use a value** (or a small proxy like $2)
+- Value: **Don't use a value**
 - Count: **One**
-- Mark as **Secondary** (so it never drives bidding — purchase does).
-- Setup method: **Google tag**. Turn **Enhanced conversions ON** → method "Google tag" (our code already sends `allow_enhanced_conversions: true` with the hashed email).
-- After saving it shows a **Conversion ID** (`AW-XXXXXXXXX`) and a **conversion label** (`AbCdEf…`). **Send me both** → they become `VITE_GTAG_ID` and `VITE_GTAG_SIGNUP_LABEL`, I add them to Render, redeploy web, and the tag goes live. (Until then the site simply doesn't fire the tag — no errors.)
+- Mark as **Secondary** (never drives bidding).
+- Setup method: **Google tag**. **Enhanced conversions ON** (our code sends `allow_enhanced_conversions: true` with the hashed email).
+- Copy its **conversion label** (`AW-…/AbCdEf`) too.
+
+> The offline-CSV path (`/admin/conversions/export.csv`) still exists as a dormant backup — ignore it unless we ever decide we need server-truth cross-device tracking.
 
 ---
 
@@ -261,4 +264,9 @@ Also add: **Callout extensions** (e.g. "Every format", "Word-by-word sync", "Fre
 5. Day 1–7: check the Search terms report daily; pause any keyword with ≥$25 spend and 0 "song uploaded" events (visible in PostHog).
 
 ## What to send me after
-- `AW-XXXXXXXXX` (Conversion ID) and the `sign_up` conversion **label** → I set `VITE_GTAG_ID` + `VITE_GTAG_SIGNUP_LABEL` in Render, redeploy web, and confirm both tags fire on the live site.
+Three values from the conversion setup:
+- `AW-XXXXXXXXX` — the **Conversion ID** (same for both actions) → `VITE_GTAG_ID`
+- the **`purchase`** label (`AW-…/…`) → `VITE_GTAG_PURCHASE_LABEL`
+- the **`sign_up`** label (`AW-…/…`) → `VITE_GTAG_SIGNUP_LABEL`
+
+I add them to Render, redeploy web, and confirm both tags fire on the live site (signup on account creation, purchase on the Stripe success page). Until then the site simply doesn't fire the tags — no errors.

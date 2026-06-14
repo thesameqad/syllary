@@ -5,7 +5,8 @@ import { Check, ExternalLink, Loader2 } from "lucide-react";
 import type { Account, BillingPeriod } from "@syllary/shared";
 import { ApiError, changePlan, getAccount, openBillingPortal, startCheckout } from "@/lib/api";
 import { authConfigured } from "@/lib/auth";
-import { LYRICS_TIERS, PLAN_LABEL, type PlanTier, VIDEO_TIERS } from "@/lib/plans";
+import { reportPurchaseConversion } from "@/lib/ad-tags";
+import { LYRICS_TIERS, planPriceUsd, PLAN_LABEL, type PlanTier, VIDEO_TIERS } from "@/lib/plans";
 import { LogoWordmark } from "@/components/logo";
 import { cn } from "@/lib/utils";
 
@@ -130,6 +131,28 @@ function AccountInner() {
       .then(setAccount)
       .catch((e) => setError(e instanceof ApiError ? e.message : "Could not load your account."));
   }, []);
+
+  // Fire the purchase conversion when Stripe returns the buyer here. Guarded by
+  // the Checkout session id so a refresh/bookmark can't double-count, then the
+  // query params are stripped from the URL.
+  useEffect(() => {
+    if (!account) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("checkout") !== "success") return;
+    const sessionId = params.get("session_id") ?? undefined;
+    const firedKey = `purchase_fired:${sessionId ?? "nosession"}`;
+    if (!sessionStorage.getItem(firedKey)) {
+      sessionStorage.setItem(firedKey, "1");
+      // Annual subscriptions renew ~a year out; use that to pick the right price.
+      const period: BillingPeriod =
+        account.currentPeriodEnd &&
+        new Date(account.currentPeriodEnd).getTime() - Date.now() > 180 * 24 * 60 * 60 * 1000
+          ? "annual"
+          : "monthly";
+      reportPurchaseConversion({ valueUsd: planPriceUsd(account.plan, period), transactionId: sessionId });
+    }
+    window.history.replaceState({}, "", "/account");
+  }, [account]);
 
   async function manage() {
     setBusy(true);

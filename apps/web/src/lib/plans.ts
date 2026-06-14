@@ -130,3 +130,12 @@ export const PLAN_TIERS: PlanTier[] = [
 export const LYRICS_TIERS = PLAN_TIERS.filter((t) => t.category === "lyrics");
 /** Music-video plans (large token grants for video-heavy users). */
 export const VIDEO_TIERS = PLAN_TIERS.filter((t) => t.category === "video");
+
+/** USD price for a plan at a billing period — used as the ad-conversion value.
+ *  Prices are fixed (no proration/coupons on a fresh subscription), so this
+ *  equals what Stripe charged. Returns null for free / unknown plans. */
+export function planPriceUsd(plan: Plan, period: "monthly" | "annual"): number | null {
+  const tier = PLAN_TIERS.find((t) => t.id === plan);
+  if (!tier) return null;
+  return period === "annual" ? tier.annual : tier.monthly;
+}

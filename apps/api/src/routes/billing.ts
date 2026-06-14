@@ -86,7 +86,9 @@ export async function billingRoutes(app: FastifyInstance) {
       mode: "subscription",
       customer,
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${env.APP_URL}/account?checkout=success`,
+      // session_id lets the success page fire a deduped purchase conversion
+      // (Stripe substitutes the real id into the template).
+      success_url: `${env.APP_URL}/account?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${env.APP_URL}/#pricing`,
       allow_promotion_codes: true,
     });
