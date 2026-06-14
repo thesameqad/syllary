@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
@@ -15,6 +15,20 @@ gsap.registerPlugin(ScrollTrigger);
 export function LandingPage() {
   const root = useRef<HTMLElement>(null);
   const reduced = usePrefersReducedMotion();
+
+  // On a fresh load with a hash (e.g. /#pricing from an ad sitelink, nav, or a
+  // direct link), the section doesn't exist yet when the browser does its native
+  // scroll — so it lands at the top. Scroll to it once the page has rendered.
+  useEffect(() => {
+    const id = window.location.hash.slice(1);
+    if (!id) return;
+    const t = setTimeout(() => {
+      document
+        .getElementById(id)
+        ?.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+    }, 350);
+    return () => clearTimeout(t);
+  }, [reduced]);
 
   useGSAP(
     () => {
