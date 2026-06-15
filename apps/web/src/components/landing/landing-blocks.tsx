@@ -139,9 +139,9 @@ function Block({ block }: { block: LandingBlock }) {
       );
     case "ctaCard":
       return (
-        <div className="mt-8 rounded-2xl border border-pulse/25 bg-pulse/[0.06] p-5 md:p-6">
+        <div className="mt-8 max-w-2xl rounded-2xl border border-pulse/25 bg-pulse/[0.06] p-5 md:p-6">
           <h2 className="text-[18px] font-medium tracking-tight text-white">{block.title}</h2>
-          <p className="mt-1.5 max-w-xl text-[14px] leading-relaxed text-white/65">{block.text}</p>
+          <p className="mt-1.5 text-[14px] leading-relaxed text-white/65">{block.text}</p>
           <Link
             to={block.href}
             className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-pulse px-4 py-2.5 text-[13px] font-medium text-white transition-colors hover:bg-pulse/90"
