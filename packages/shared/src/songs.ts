@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { COVER_MODELS, GENERATION_MODES } from "./constants.js";
 import { lyricsSchema } from "./lyrics.js";
-import { videoJobSchema, videoModelSchema } from "./video.js";
+import { videoJobSchema, videoJobStatusSchema, videoModelSchema } from "./video.js";
 
 /** A finished lyric video saved on a song, for one style. */
 export const songVideoSchema = z.object({
@@ -247,9 +247,11 @@ export const songSummarySchema = z.object({
   mode: generationModeSchema.nullable().default(null),
   /** Lyric-video styles that have finished for this song. */
   videoModels: z.array(videoModelSchema).default([]),
-  /** A lyric video still rendering (for the Music Videos card progress). */
+  /** A lyric video still rendering (for the Music Videos card progress + Cancel). */
   videoActive: z
     .object({
+      id: z.string().uuid(),
+      status: videoJobStatusSchema,
       model: videoModelSchema,
       completedSegments: z.number(),
       totalSegments: z.number(),

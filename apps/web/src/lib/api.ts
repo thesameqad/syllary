@@ -9,6 +9,11 @@ import {
   bandMemberSchema,
   type CreateBandMember,
   type UpdateBandMember,
+  type CreateElement,
+  type UpdateElement,
+  type SongElement,
+  songElementSchema,
+  songElementListSchema,
   type CatalogImportResult,
   catalogImportResultSchema,
   coverGenerateResponseSchema,
@@ -540,6 +545,88 @@ export async function removeMemberImage(id: string, key: string): Promise<BandMe
   return bandMemberSchema.parse(data);
 }
 
+// ---- Persisted elements (per-song reference subjects) ----------------------
+
+export async function listElements(songId: string): Promise<SongElement[]> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/elements`, {
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't load elements."), res.status);
+  return songElementListSchema.parse(data);
+}
+
+export async function createElement(songId: string, body: CreateElement): Promise<SongElement> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/elements`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(body),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't create the element."), res.status);
+  return songElementSchema.parse(data);
+}
+
+export async function updateElement(
+  songId: string,
+  elementId: string,
+  body: UpdateElement,
+): Promise<SongElement> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/elements/${elementId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(body),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't save the element."), res.status);
+  return songElementSchema.parse(data);
+}
+
+export async function deleteElement(songId: string, elementId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/elements/${elementId}`, {
+    method: "DELETE",
+    headers: { ...(await authHeaders()) },
+  });
+  if (!res.ok) {
+    const data: unknown = await res.json().catch(() => ({}));
+    throw new ApiError(errorMessage(data, "Couldn't delete the element."), res.status);
+  }
+}
+
+/** AI-generate an element reference image (uncommitted preview; same flow + price
+ *  as cover generation). Call saveElementImage(key) to attach it. */
+export async function generateElementImage(
+  songId: string,
+  elementId: string,
+  prompt: string,
+  model: CoverModel,
+): Promise<CoverGenerateResponse> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/elements/${elementId}/image/generate`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ prompt, model }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't generate the image."), res.status);
+  return coverGenerateResponseSchema.parse(data);
+}
+
+/** Commit a generated image as the element's reference photo; returns the element. */
+export async function saveElementImage(
+  songId: string,
+  elementId: string,
+  key: string,
+): Promise<SongElement> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/elements/${elementId}/image`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ key }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't save the image."), res.status);
+  return songElementSchema.parse(data);
+}
+
 /** Import an artist/album catalog from a Deezer link (metadata only). */
 export async function importCatalog(url: string): Promise<CatalogImportResult> {
   const res = await fetch(`${API_BASE}/api/catalog/import`, {
@@ -672,14 +759,55 @@ export async function regenerateSegment(
   jobId: string,
   index: number,
   direction?: string,
+  noCast?: boolean,
 ): Promise<ReviewSegment> {
   const res = await fetch(`${API_BASE}/api/video-jobs/${jobId}/segments/${index}/regenerate`, {
     method: "POST",
     headers: { "content-type": "application/json", ...(await authHeaders()) },
-    body: JSON.stringify(direction === undefined ? {} : { direction }),
+    body: JSON.stringify({
+      ...(direction === undefined ? {} : { direction }),
+      ...(noCast === undefined ? {} : { noCast }),
+    }),
   });
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not regenerate this scene."), res.status);
+  return reviewSegmentSchema.parse(data);
+}
+
+/** Motion editor: regenerate one scene's MOTION clip (optionally with an edited
+ *  motion direction). Returns the updated review card (with the new clip URL). */
+export async function regenerateClip(
+  jobId: string,
+  index: number,
+  motionDirection?: string,
+): Promise<ReviewSegment> {
+  const res = await fetch(
+    `${API_BASE}/api/video-jobs/${jobId}/segments/${index}/regenerate-clip`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(await authHeaders()) },
+      body: JSON.stringify(motionDirection === undefined ? {} : { motionDirection }),
+    },
+  );
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not regenerate this clip."), res.status);
+  return reviewSegmentSchema.parse(data);
+}
+
+/** Motion editor: save a scene's motion direction without regenerating (a later
+ *  re-render refreshes that clip). Returns the updated review card. */
+export async function updateSegment(
+  jobId: string,
+  index: number,
+  body: { motionDirection?: string | null },
+): Promise<ReviewSegment> {
+  const res = await fetch(`${API_BASE}/api/video-jobs/${jobId}/segments/${index}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify(body),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't save that change."), res.status);
   return reviewSegmentSchema.parse(data);
 }
 
@@ -747,14 +875,43 @@ export async function createVideoFromFrames(
   songId: string,
   targetModel: VideoModel,
   sourceModel: VideoModel,
+  mode: "autopilot" | "manual" = "autopilot",
 ): Promise<VideoJob> {
   const res = await fetch(
     `${API_BASE}/api/songs/${songId}/videos/${targetModel}/from/${sourceModel}`,
-    { method: "POST", headers: { ...(await authHeaders()) } },
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(await authHeaders()) },
+      body: JSON.stringify({ mode }),
+    },
   );
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not start the video."), res.status);
   return videoJobSchema.parse(data);
+}
+
+/** Re-open a finished full video for editing: clones its frames into a new manual
+ *  review job so the user can swap scenes and re-render. */
+export async function editVideo(songId: string, model: VideoModel): Promise<VideoJob> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/videos/${model}/edit`, {
+    method: "POST",
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not open the editor."), res.status);
+  return videoJobSchema.parse(data);
+}
+
+/** Discard a manual review without rendering (cancel an "Edit scenes" session). */
+export async function discardVideoEdit(jobId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/video-jobs/${jobId}`, {
+    method: "DELETE",
+    headers: { ...(await authHeaders()) },
+  });
+  if (!res.ok) {
+    const data: unknown = await res.json().catch(() => ({}));
+    throw new ApiError(errorMessage(data, "Couldn't discard the edits."), res.status);
+  }
 }
 
 /** Manual mode: assemble the final video from the approved per-line images. */
@@ -787,6 +944,18 @@ export async function getVideoJob(jobId: string): Promise<VideoJob> {
   });
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not load the video job."), res.status);
+  return videoJobSchema.parse(data);
+}
+
+/** Cancel a still-running generation (stuck or no longer wanted): the server marks it
+ *  failed and refunds the tokens. Returns the updated job. */
+export async function cancelVideoJob(jobId: string): Promise<VideoJob> {
+  const res = await fetch(`${API_BASE}/api/video-jobs/${jobId}/cancel`, {
+    method: "POST",
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't cancel the generation."), res.status);
   return videoJobSchema.parse(data);
 }
 

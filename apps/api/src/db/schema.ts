@@ -212,6 +212,12 @@ export const videoJobs = pgTable(
     // can reference "Emily"/"Justin"). Null = no characters. (Legacy jobs stored a
     // bare string[][] here; normalizeCharacterRefs() reads both shapes.)
     characterImageKeys: jsonb("character_image_keys").$type<CharacterReference[]>(),
+    // Legacy: per-song element ids once selected per-job. Elements are now
+    // mention-driven (resolved per-frame from the song catalog), so this is unused.
+    elementIds: jsonb("element_ids").$type<string[]>(),
+    // Manual mode: pre-generate every per-line image up front (true), or skip it and
+    // let the user generate each scene on demand (false). Ignored by autopilot.
+    prerenderImages: boolean("prerender_images").notNull().default(true),
     // One-time AI "art brief" (who/what the song depicts) injected into every
     // per-line image prompt so the model gets the subject/POV right.
     sceneBrief: text("scene_brief"),
@@ -251,6 +257,36 @@ export const songVideos = pgTable(
 );
 
 export type SongVideoRow = typeof songVideos.$inferSelect;
+
+// Per-song "persisted elements" — reusable AI-generated reference subjects (a dog,
+// headphones, a guitar) addressable like band members in prompts, but scoped to ONE
+// song (not shared across songs/bands). The generated image is fed to the image model
+// as a named reference; the name is @mentionable in the brief + per-scene directions.
+export const songElements = pgTable(
+  "song_elements",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    songId: uuid("song_id")
+      .notNull()
+      .references(() => songs.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    // The last description used to generate the image (prefilled when re-editing).
+    description: text("description"),
+    // R2 key of the generated reference image; null until generated + saved.
+    imageKey: text("image_key"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    uniqueSongName: unique("song_elements_song_name_unique").on(t.songId, t.name),
+    songIdx: index("song_elements_song_idx").on(t.songId),
+  }),
+);
+
+export type SongElementRow = typeof songElements.$inferSelect;
 
 export const users = pgTable("users", {
   id: uuid("id").defaultRandom().primaryKey(),

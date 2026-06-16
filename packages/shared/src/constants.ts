@@ -133,6 +133,9 @@ export const PREVIEW_SECONDS = 10;
 export const MEMBER_IMAGE_MAX = 6;
 /** Max characters selectable for one video. */
 export const MAX_VIDEO_CHARACTERS = 4;
+/** Max per-song "persisted elements" selectable for one video (they share the
+ *  CHARACTER_REFS_PER_FRAME reference budget with band members). */
+export const MAX_VIDEO_ELEMENTS = 4;
 /** Max reference images sent to the image model per frame (cost + identity-blend
  *  bound). Distributed across the selected characters via `referenceCountFor`. */
 export const CHARACTER_REFS_PER_FRAME = 4;

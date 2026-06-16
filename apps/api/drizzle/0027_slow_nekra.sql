@@ -1,0 +1,1 @@
+ALTER TABLE "video_jobs" ADD COLUMN "prerender_images" boolean DEFAULT true NOT NULL;

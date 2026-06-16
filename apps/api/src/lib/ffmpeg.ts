@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
 import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,11 +10,24 @@ import { env } from "../env.js";
 const require = createRequire(import.meta.url);
 
 /** The Syllary watermark PNG (transparent), baked into downloads on demand.
- *  Resolves from the module dir → apps/api/assets (works in dev src/ + dist/). */
-export const WATERMARK_PATH = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../assets/watermark.png",
-);
+ *  This module sits at different depths in dev (apps/api/src/lib/ffmpeg.ts) vs the
+ *  bundled prod build (tsup flattens everything into apps/api/dist/index.js), so a
+ *  single fixed relative path can't reach apps/api/assets in both — the old
+ *  `../../assets` pointed at apps/assets in prod, so ffmpeg failed and watermarked
+ *  downloads hung forever. Probe the known candidates (+ cwd) and take the first
+ *  that exists. */
+function resolveWatermarkPath(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(here, "../../assets/watermark.png"), // dev: apps/api/src/lib → apps/api/assets
+    path.resolve(here, "../assets/watermark.png"), // prod bundle: apps/api/dist → apps/api/assets
+    path.resolve(process.cwd(), "assets/watermark.png"), // process cwd = apps/api
+    path.resolve(process.cwd(), "apps/api/assets/watermark.png"), // cwd = repo root
+  ];
+  return candidates.find((p) => existsSync(p)) ?? candidates[0]!;
+}
+
+export const WATERMARK_PATH = resolveWatermarkPath();
 
 /** Resolve the ffmpeg binary: explicit override, else the bundled static build
  *  (a precompiled binary in node_modules — no Docker/apt needed on Render). */

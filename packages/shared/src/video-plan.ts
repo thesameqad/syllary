@@ -1,7 +1,7 @@
 import type { CoverModel, ImageQuality, ImageSize, VideoModel } from "./constants.js";
 import { PREVIEW_SECONDS, VIDEO_MODEL_INFO } from "./constants.js";
 import type { Lyrics } from "./lyrics.js";
-import type { VideoSegment } from "./video.js";
+import type { VideoClipStatus, VideoSegment } from "./video.js";
 
 // ===========================================================================
 // Segment planning — shared between the server pipeline (apps/api) and the
@@ -56,6 +56,10 @@ export function buildSegments(lyrics: Lyrics, durationSeconds: number | null): V
       prompt: null,
       direction: null,
       status: "pending",
+      motionDirection: null,
+      clipKey: null,
+      clipStatus: "none",
+      noCast: false,
     });
     lastEnd = end;
   };
@@ -197,6 +201,32 @@ export const REF_IMAGE_INPUT_USD: Record<ImageQuality, number> = {
 export function singleImageTokens(quality: ImageQuality, imageSize: ImageSize): number {
   const usd = IMAGE_COST_USD[quality][imageSize] * VIDEO_COST_MARKUP;
   return Math.max(10, Math.ceil(usd / USD_PER_TOKEN / 10) * 10);
+}
+
+/** Token cost to (re)generate a SINGLE motion clip — the motion-editor Regenerate
+ *  price. One clip's billable seconds (after the model's min/max clamp) at the 3×
+ *  markup, rounded up to the nearest 10. Zero for Slideshow (no AI motion). */
+export function singleClipTokens(model: VideoModel, clipDurationSeconds: number): number {
+  if (model === "fast") return 0;
+  const usd =
+    clipGenSeconds(model, clipDurationSeconds) * CLIP_COST_USD_PER_SEC[model] * VIDEO_COST_MARKUP;
+  return Math.max(10, Math.ceil(usd / USD_PER_TOKEN / 10) * 10);
+}
+
+/** Token cost to re-render an edited video, REUSING the clips already generated.
+ *  Slideshow is just a cheap re-stitch (MIN_VIDEO_TOKENS). For the AI-motion styles
+ *  it's the sum over clips that still need (re)generating — stale (their image
+ *  changed) or never generated — so re-rendering with everything fresh is free.
+ *  The finalize route and the client re-render button both call this, so the shown
+ *  price always equals the charge. */
+export function reRenderTokens(
+  model: VideoModel,
+  segments: { clipStatus: VideoClipStatus; clipStart: number; clipEnd: number }[],
+): number {
+  if (model === "fast") return MIN_VIDEO_TOKENS;
+  return segments
+    .filter((s) => s.clipStatus !== "ready")
+    .reduce((n, s) => n + singleClipTokens(model, s.clipEnd - s.clipStart), 0);
 }
 
 /** Raw cost of one AI album cover (USD), by model. `flux` (fal.ai FLUX schnell)

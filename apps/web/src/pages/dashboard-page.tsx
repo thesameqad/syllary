@@ -76,7 +76,7 @@ export function DashboardPage() {
           <h2 className="mb-4 text-[15px] font-medium text-white">Your music videos</h2>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
             {videos.slice(0, 8).map((song) => (
-              <MusicVideoCard key={song.id} song={song} />
+              <MusicVideoCard key={song.id} song={song} onChanged={loadMine} />
             ))}
           </div>
         </section>

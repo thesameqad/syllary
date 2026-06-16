@@ -54,6 +54,7 @@ import { summarizeSong } from "../lib/openrouter.js";
 import { generateCoverImage } from "../lib/cover-image.js";
 import { matchStreamingLinks } from "../lib/music-links.js";
 import { probeDurationSeconds, transcodeForDownload } from "../lib/ffmpeg.js";
+import { reapStaleVideoJob, toReviewSegment } from "../lib/video-pipeline.js";
 import { resolveArtistAlbum } from "../lib/catalog.js";
 import { estimateGenerationCost, firstTouchLandingSlug, recordEvent } from "../lib/analytics.js";
 import { sendOnce, songReadyEmail, tokenLowEmail, userForEmail } from "../lib/email.js";
@@ -119,7 +120,7 @@ async function videosFor(songId: string): Promise<SongVideo[]> {
 /** The latest still-rendering lyric-video job for a song (so the result page
  *  can resume its in-progress tab after a reload), or null. */
 async function activeVideoJobFor(songId: string): Promise<VideoJob | null> {
-  const [row] = await db
+  let [row] = await db
     .select()
     .from(videoJobs)
     .where(
@@ -135,17 +136,15 @@ async function activeVideoJobFor(songId: string): Promise<VideoJob | null> {
     .orderBy(desc(videoJobs.createdAt))
     .limit(1);
   if (!row) return null;
+  // Self-heal: a job whose in-process pipeline died on a restart would otherwise show
+  // "Generating…" forever and block edits. Reap it (mark failed + refund) if stale —
+  // then there's no active job to surface.
+  row = await reapStaleVideoJob(row);
+  if (row.status !== "pending" && row.status !== "processing" && row.status !== "review") {
+    return null;
+  }
   // Per-line cards so a manual job in "review" can resume after a reload.
-  const segments = await Promise.all(
-    (row.segments ?? []).map(async (s) => ({
-      index: s.index,
-      text: s.text,
-      prompt: s.prompt,
-      direction: s.direction ?? null,
-      status: s.status,
-      imageUrl: s.imageKey ? await presignGet(s.imageKey) : null,
-    })),
-  );
+  const segments = await Promise.all((row.segments ?? []).map(toReviewSegment));
   return {
     id: row.id,
     songId: row.songId,
@@ -158,6 +157,7 @@ async function activeVideoJobFor(songId: string): Promise<VideoJob | null> {
     imageSize: row.imageSize as ImageSize,
     imageQuality: row.imageQuality as ImageQuality,
     isPreview: row.isPreview,
+    isEdit: row.reuseFrames && row.mode === "manual",
     totalSegments: row.totalSegments,
     completedSegments: row.completedSegments,
     segments,
@@ -245,6 +245,8 @@ async function toSongSummary(row: SongRow): Promise<SongSummary> {
     videoModels: vids.map((v) => v.model),
     videoActive: active
       ? {
+          id: active.id,
+          status: active.status,
           model: active.model,
           completedSegments: active.completedSegments,
           totalSegments: active.totalSegments,

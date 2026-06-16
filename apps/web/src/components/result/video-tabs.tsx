@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
-import { AlertCircle, Check, Clapperboard, Download, Globe, Loader2, Lock, Maximize2, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { AlertCircle, Check, ChevronDown, Clapperboard, Download, Globe, Loader2, Lock, Maximize2, Pencil, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import {
   canRemoveWatermark,
   estimateVideoCost,
+  reRenderTokens,
   type ReviewSegment,
   VIDEO_DOWNLOAD_RESOLUTIONS,
   type VideoDownloadResolution,
@@ -17,6 +18,8 @@ import {
   ApiError,
   createVideoFromFrames,
   deleteSongVideo,
+  discardVideoEdit,
+  editVideo,
   generateFullVideo,
   getVideoJob,
   requestVideoDownload,
@@ -34,6 +37,134 @@ import { cn } from "@/lib/utils";
  *  worth offering a retry on the more permissive motion model. */
 function isModerationError(raw: string | null | undefined): boolean {
   return !!raw && /real person|sensitive content|privacy|moderation/i.test(raw);
+}
+
+/** A "Make {style}" reuse action as one split-dropdown button: the trigger opens a
+ *  menu to pick Automatic (render the whole thing now) or Manual (open the frames in
+ *  the editor first). Opens UPWARD — it sits at the bottom of an overflow-hidden card,
+ *  so a downward menu would be clipped. */
+function ReuseSplitButton({
+  model,
+  tokens,
+  disabled,
+  onPick,
+}: {
+  model: VideoModel;
+  tokens: number;
+  disabled: boolean;
+  onPick: (mode: "autopilot" | "manual") => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const label = VIDEO_MODEL_INFO[model].label;
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  function pick(mode: "autopilot" | "manual") {
+    setOpen(false);
+    onPick(mode);
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+        className={cn(
+          "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-[12.5px] font-medium transition-all disabled:opacity-50",
+          open
+            ? "border-pulse/70 bg-pulse/[0.14] text-white shadow-[0_6px_28px_-8px_rgba(255,45,45,0.6)]"
+            : "border-white/12 bg-white/[0.04] text-white/85 hover:border-pulse/50 hover:bg-white/[0.06] hover:text-white",
+        )}
+      >
+        <Clapperboard className="h-4 w-4 text-pulse" />
+        Make {label}
+        <ChevronDown
+          className={cn(
+            "h-3.5 w-3.5 text-white/50 transition-transform duration-200",
+            open && "rotate-180 text-pulse",
+          )}
+        />
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: 8, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.96 }}
+            transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+            className="absolute bottom-[calc(100%+8px)] left-0 z-40 w-[268px] origin-bottom overflow-hidden rounded-[14px] border border-white/12 bg-[#161616]/95 p-1.5 shadow-[0_24px_70px_-12px_rgba(0,0,0,0.85)] backdrop-blur-xl"
+          >
+            <ReuseOption
+              icon={<Sparkles className="h-4 w-4" />}
+              title={`Make ${label} in Automatic Mode`}
+              desc="Render the whole video in one go"
+              badge={`${tokens} tokens`}
+              onClick={() => pick("autopilot")}
+            />
+            <div className="my-1 h-px bg-white/[0.06]" />
+            <ReuseOption
+              icon={<Pencil className="h-4 w-4" />}
+              title={`Make ${label} in Manual Mode`}
+              desc="Open the frames in the editor first"
+              badge="pay when you render"
+              onClick={() => pick("manual")}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/** One option row inside a ReuseSplitButton menu. */
+function ReuseOption({
+  icon,
+  title,
+  desc,
+  badge,
+  onClick,
+}: {
+  icon: ReactNode;
+  title: string;
+  desc: string;
+  badge: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group flex w-full items-start gap-2.5 rounded-[10px] px-2.5 py-2 text-left transition-colors hover:bg-pulse/[0.14]"
+    >
+      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-pulse/15 text-pulse transition-transform group-hover:scale-110">
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[12.5px] font-medium leading-snug text-white">{title}</span>
+        <span className="mt-0.5 block text-[11px] leading-snug text-white/45">{desc}</span>
+        <span className="mt-1.5 inline-block rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-white/55">
+          {badge}
+        </span>
+      </span>
+    </button>
+  );
 }
 
 /** Turn a raw pipeline/provider error into something a user can read. */
@@ -83,6 +214,7 @@ export function VideoTabs({
   );
   const [busy, setBusy] = useState(false);
   const [promoting, setPromoting] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   // When a new job starts, focus its tab and start tracking it.
   useEffect(() => {
@@ -187,15 +319,49 @@ export function VideoTabs({
       reuseImages: true,
     }).tokens;
 
-  async function createFromFrames(target: VideoModel) {
+  async function createFromFrames(target: VideoModel, mode: "autopilot" | "manual" = "autopilot") {
     setPromoting(true);
     try {
-      const job = await createVideoFromFrames(song.id, target, selected);
+      const job = await createVideoFromFrames(song.id, target, selected, mode);
       setSelected(target); // focus the new style's tab so its progress shows
       setLiveJob(job);
     } catch (e) {
       setPromoting(false);
       toast(e instanceof ApiError ? e.message : "Couldn't start the video.", "error");
+    }
+  }
+
+  // Re-open the finished video for this style into the manual-review carousel
+  // (a fresh edit job seeded with its frames). The existing showReview path then
+  // renders ManualReview.
+  async function startEdit() {
+    setEditing(true);
+    try {
+      const job = await editVideo(song.id, selected);
+      setLiveJob(job);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't open the editor.", "error");
+    } finally {
+      setEditing(false);
+    }
+  }
+
+  // Throw away the in-progress edit (delete the edit job) and drop back to the
+  // still-live finished video. onJobComplete clears any seeded active job + refetches.
+  // Abandon a review job (edit OR first-time manual): the server deletes the job +
+  // its own frames/clips and refunds the up-front charge. For an edit the source
+  // video survives; for a first-time manual job the whole in-progress video goes.
+  async function discardReview() {
+    if (!liveJob) return;
+    setEditing(true);
+    try {
+      await discardVideoEdit(liveJob.id);
+      setLiveJob(null);
+      onJobComplete();
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't delete this video.", "error");
+    } finally {
+      setEditing(false);
     }
   }
 
@@ -320,9 +486,12 @@ export function VideoTabs({
       {showReview && liveJob ? (
         <ManualReview
           job={liveJob}
+          audioUrl={song.audioUrl}
           onSegmentUpdated={applySegment}
           onJobUpdated={(updated) => setLiveJob(updated)}
           onFinalized={(updated) => setLiveJob(updated)}
+          onCancel={() => void discardReview()}
+          finalizeCost={liveJob.isEdit ? reRenderTokens(liveJob.model, liveJob.segments) : undefined}
         />
       ) : showProgress ? (
         <ProgressPanel
@@ -392,6 +561,19 @@ export function VideoTabs({
                 </button>
                 <button
                   type="button"
+                  onClick={() => void startEdit()}
+                  disabled={editing || liveBusy}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white disabled:opacity-60"
+                >
+                  {editing ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-pulse" />
+                  ) : (
+                    <Pencil className="h-3.5 w-3.5 text-pulse" />
+                  )}
+                  Edit scenes
+                </button>
+                <button
+                  type="button"
                   onClick={() => setTheaterOpen(true)}
                   className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
                 >
@@ -432,21 +614,20 @@ export function VideoTabs({
                 <p className="mb-2 text-[11px] uppercase tracking-[0.5px] text-white/40">
                   Reuse these frames
                 </p>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2.5">
                   {reuseTargets.map((m) => (
-                    <Button3D
+                    <ReuseSplitButton
                       key={m}
-                      variant="secondary"
+                      model={m}
+                      tokens={reuseTokens(m)}
                       disabled={promoting || liveBusy}
-                      onClick={() => void createFromFrames(m)}
-                    >
-                      <Clapperboard className="h-4 w-4" />
-                      Make {VIDEO_MODEL_INFO[m].label} · {reuseTokens(m)} tokens
-                    </Button3D>
+                      onPick={(mode) => void createFromFrames(m, mode)}
+                    />
                   ))}
                 </div>
                 <p className="mt-1.5 text-[11px] text-white/35">
-                  Reuses these images — only the motion is generated, so it costs far less.
+                  Reuses these images — only the motion is generated, so it costs far less.{" "}
+                  <span className="text-white/45">“Manual” opens the frames in the editor first.</span>
                 </p>
               </div>
             )}

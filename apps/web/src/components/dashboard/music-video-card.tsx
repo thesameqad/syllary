@@ -1,16 +1,43 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Clapperboard, Loader2, Music, Play } from "lucide-react";
+import { Clapperboard, Loader2, Music, Play, X } from "lucide-react";
 import { VIDEO_MODEL_INFO, type SongSummary } from "@syllary/shared";
+import { ApiError, cancelVideoJob } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 
 /** A library/dashboard card for a song's lyric video(s): shows live generation
- *  progress, or the finished styles. Links to the result page to watch. */
-export function MusicVideoCard({ song }: { song: SongSummary }) {
+ *  progress (with a Cancel for a stuck/unwanted job), or the finished styles. Links
+ *  to the result page to watch. */
+export function MusicVideoCard({
+  song,
+  onChanged,
+}: {
+  song: SongSummary;
+  /** Called after a successful cancel so the list can refresh. */
+  onChanged?: () => void;
+}) {
+  const toast = useToast();
   const active = song.videoActive;
+  const [cancelling, setCancelling] = useState(false);
   const pct =
     active && active.totalSegments > 0
       ? Math.round((active.completedSegments / active.totalSegments) * 100)
       : 0;
   const count = song.videoModels.length;
+  // Only a genuinely running job can be cancelled (a "review" job is a manual edit).
+  const canCancel = !!active && (active.status === "pending" || active.status === "processing");
+
+  async function cancel() {
+    if (!active || cancelling) return;
+    setCancelling(true);
+    try {
+      await cancelVideoJob(active.id);
+      onChanged?.();
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "Couldn't cancel the generation.", "error");
+      setCancelling(false);
+    }
+  }
 
   return (
     <Link
@@ -38,6 +65,21 @@ export function MusicVideoCard({ song }: { song: SongSummary }) {
                 style={{ width: `${Math.max(pct, 5)}%` }}
               />
             </div>
+            {canCancel && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void cancel();
+                }}
+                disabled={cancelling}
+                className="mt-1 inline-flex items-center gap-1 rounded-full border border-white/20 bg-white/10 px-2.5 py-1 text-[11px] text-white/80 transition-colors hover:border-pulse hover:bg-pulse/20 hover:text-white disabled:opacity-50"
+              >
+                {cancelling ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+                {cancelling ? "Cancelling…" : "Cancel"}
+              </button>
+            )}
           </div>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100">

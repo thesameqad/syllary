@@ -396,7 +396,7 @@ export function LibraryPage() {
       return (
         <div className={VIDEO_GRID}>
           {videos.map((song) => (
-            <MusicVideoCard key={song.id} song={song} />
+            <MusicVideoCard key={song.id} song={song} onChanged={load} />
           ))}
         </div>
       );

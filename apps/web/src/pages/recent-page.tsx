@@ -74,7 +74,7 @@ export function RecentPage() {
               <h2 className="mb-4 text-[15px] font-medium text-white">Music videos</h2>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {videos.map((song) => (
-                  <MusicVideoCard key={song.id} song={song} />
+                  <MusicVideoCard key={song.id} song={song} onChanged={load} />
                 ))}
               </div>
             </section>

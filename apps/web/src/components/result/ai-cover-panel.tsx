@@ -22,11 +22,20 @@ export function AiCoverPanel({
   onGenerate,
   onCommit,
   onCancel,
+  describeLabel = "Describe your cover",
+  placeholder = "e.g. a lone figure on a neon-lit rooftop at night, moody and cinematic",
+  saveLabel = "Save cover",
+  savedToast = "Cover updated.",
 }: {
   defaultPrompt: string;
   onGenerate: (prompt: string, model: CoverModel) => Promise<{ key: string; url: string }>;
   onCommit: (key: string) => Promise<void>;
   onCancel: () => void;
+  /** Copy overrides so the panel can drive element images, not just covers. */
+  describeLabel?: string;
+  placeholder?: string;
+  saveLabel?: string;
+  savedToast?: string;
 }) {
   const toast = useToast();
   const [prompt, setPrompt] = useState(defaultPrompt);
@@ -58,7 +67,7 @@ export function AiCoverPanel({
     setSaving(true);
     try {
       await onCommit(preview.key);
-      toast("Cover updated.");
+      toast(savedToast);
     } catch (e) {
       setSaving(false);
       toast(e instanceof ApiError ? e.message : "Couldn't save the image.", "error");
@@ -91,14 +100,14 @@ export function AiCoverPanel({
         {/* Prompt */}
         <div className="min-w-0 flex-1">
           <span className="text-[11px] uppercase tracking-[0.5px] text-white/40">
-            Describe your cover
+            {describeLabel}
           </span>
           <textarea
             value={prompt}
             disabled={working}
             onChange={(e) => setPrompt(e.target.value)}
             rows={5}
-            placeholder="e.g. a lone figure on a neon-lit rooftop at night, moody and cinematic"
+            placeholder={placeholder}
             className="mt-1.5 w-full resize-none rounded-[10px] border border-white/10 bg-black/30 px-3 py-2 text-[13px] leading-relaxed text-white/90 outline-none transition-colors placeholder:text-white/30 focus:border-pulse/50 disabled:opacity-60"
           />
         </div>
@@ -172,7 +181,7 @@ export function AiCoverPanel({
               className="inline-flex items-center gap-2 rounded-full bg-pulse px-6 py-2.5 text-[14px] font-medium text-white transition-transform hover:scale-[1.03] disabled:opacity-60"
             >
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
-              {saving ? "Saving…" : "Save cover"}
+              {saving ? "Saving…" : saveLabel}
             </button>
           </>
         ) : (
