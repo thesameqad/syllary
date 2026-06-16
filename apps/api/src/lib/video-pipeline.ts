@@ -598,6 +598,7 @@ async function runSlideshow(
   audioStartSeconds = 0,
 ): Promise<void> {
   const stitch: StitchSegment[] = new Array(segments.length);
+  const tMat = Date.now();
   await mapPool(segments, IMAGE_CONCURRENCY, async (seg) => {
     const { imageFile } = await materializeFrame(job, seg, aspectRatio, workDir, elementCatalog);
     seg.status = "done";
@@ -609,11 +610,21 @@ async function runSlideshow(
     };
     await bumpProgress(job.id, segments);
   });
+  const materializeMs = Date.now() - tMat;
 
   const audioFile = await downloadAudio(audioR2Key, workDir);
   const outFile = path.join(workDir, "lyrics.mp4");
+  const tStitch = Date.now();
   await stitchLyricsVideo({ workDir, segments: stitch, audioFile, aspectRatio, outFile, audioStartSeconds });
+  const stitchMs = Date.now() - tStitch;
+  // Phase breakdown so a slow finalize is traceable: materialize = downloading the
+  // approved frames from R2, stitch = the ffmpeg work, finalize = uploading the MP4.
+  const tFin = Date.now();
   await finalize(job, outFile);
+  console.log(
+    `[slideshow] job=${job.id} scenes=${segments.length} materializeMs=${materializeMs}` +
+      ` stitchMs=${stitchMs} finalizeMs=${Date.now() - tFin}`,
+  );
 }
 
 // ---------------------------------------------------------------------------

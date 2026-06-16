@@ -153,12 +153,14 @@ export async function transcodeForDownload(opts: {
   return path.join(opts.workDir, opts.outName);
 }
 
-/** Slideshow frames are shown STATICALLY for now — the gentle Ken-Burns zoom was
- *  removed (it read as not-quite-smooth and the `zoompan` filter was by far the
- *  slowest part of the stitch). Just scale + center-crop the image to fill the
- *  canvas, no motion. The previous zoom lives in git history to restore later. */
-function stillFrame(w: number, h: number): string {
-  return `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},format=yuv420p`;
+/** Scale + center-crop an image to fill the canvas. Slideshow frames are shown
+ *  STATICALLY for now — the gentle Ken-Burns zoom was removed (not-quite-smooth, and
+ *  `zoompan` was by far the slowest part of the stitch; the zoom lives in git history
+ *  to restore later). This runs ONCE per frame (the clip is then a static loop of the
+ *  pre-scaled still), NOT on every output frame — re-scaling a 2K/4K source on all
+ *  ~dur×FPS frames was the bulk of the stitch time. */
+function fillCanvas(w: number, h: number): string {
+  return `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h}`;
 }
 
 /**
@@ -182,42 +184,56 @@ export async function stitchLyricsVideo(opts: {
   const { w, h } = DIMENSIONS[aspectRatio];
   const sorted = [...segments].sort((a, b) => a.clipStart - b.clipStart);
 
-  // 1. Per-frame Ken-Burns clips, rendered with bounded parallelism. Each encode is
-  //    single-threaded + zoompan-bound, so a few at once saturate the box instead of
-  //    leaving cores idle. clipNames is filled BY INDEX so concat keeps timeline order.
+  // 1. One still clip per frame, with bounded parallelism. Each encode is
+  //    single-threaded, so a few at once saturate the box. clipNames is filled BY
+  //    INDEX so concat keeps timeline order; clipMs records per-clip time for tracing.
   const clipNames: string[] = new Array(sorted.length);
+  const clipMs: number[] = new Array(sorted.length).fill(0);
+  const tStitch = Date.now();
   let cursor = 0;
   const renderWorker = async (): Promise<void> => {
     for (;;) {
-      const i = cursor++; // synchronous grab — no await between read + increment, so unique per worker
+      const i = cursor++; // synchronous grab — no await before the increment, so unique per worker
       const seg = sorted[i];
       if (!seg) return;
+      const t = Date.now();
       const dur = Math.max(0.4, seg.clipEnd - seg.clipStart);
       const clipName = `clip_${seg.index}.mp4`;
+      // Scale to the canvas ONCE (here) — not on every output frame. Looping the
+      // pre-scaled 1080p still and encoding identical frames is near-free; re-scaling
+      // the 2K/4K source on all ~dur×FPS frames was the bulk of the old stitch time.
+      const scaledName = `scaled_${seg.index}.png`;
+      await runFfmpeg(
+        ["-y", "-i", path.basename(seg.imageFile), "-vf", fillCanvas(w, h), "-frames:v", "1", scaledName],
+        workDir,
+      );
       await runFfmpeg(
         [
           "-y",
           "-loop", "1",
-          "-i", path.basename(seg.imageFile),
+          "-i", scaledName,
           "-t", dur.toFixed(3),
-          "-vf", stillFrame(w, h),
           "-r", String(FPS),
           "-threads", "1",
           "-c:v", "libx264",
           "-preset", "superfast",
           "-crf", "20",
+          "-pix_fmt", "yuv420p",
           clipName,
         ],
         workDir,
       );
       clipNames[i] = clipName;
-      // The source frame is encoded — free it now (keeps /tmp bounded on long songs).
+      clipMs[i] = Date.now() - t;
+      // Source frame + prescaled temp are encoded now — free them (bounds /tmp).
+      await rm(path.join(workDir, scaledName), { force: true });
       await rm(seg.imageFile, { force: true });
     }
   };
   await Promise.all(
     Array.from({ length: Math.min(sorted.length, STITCH_CONCURRENCY) }, () => renderWorker()),
   );
+  const clipsMs = Date.now() - tStitch;
 
   // 2. Concat the clips (identical encode params → stream copy is safe).
   const listName = "clips.txt";
@@ -227,15 +243,18 @@ export async function stitchLyricsVideo(opts: {
     "utf8",
   );
   const concatName = "concat.mp4";
+  const tConcat = Date.now();
   await runFfmpeg(
     ["-y", "-f", "concat", "-safe", "0", "-i", listName, "-c", "copy", concatName],
     workDir,
   );
+  const concatMs = Date.now() - tConcat;
   // Per-clip files are now baked into concat — drop them before the audio mux.
   await Promise.all(clipNames.map((c) => rm(path.join(workDir, c), { force: true })));
 
   // 3. Mux the real song audio onto the stitched video.
   const outName = path.basename(outFile);
+  const tMux = Date.now();
   await runFfmpeg(
     [
       "-y",
@@ -253,7 +272,15 @@ export async function stitchLyricsVideo(opts: {
     ],
     workDir,
   );
+  const muxMs = Date.now() - tMux;
   await rm(path.join(workDir, concatName), { force: true });
+
+  // Trace where the stitch time actually went (Render stdout).
+  const avgMs = clipMs.length ? Math.round(clipMs.reduce((a, b) => a + b, 0) / clipMs.length) : 0;
+  console.log(
+    `[stitch] clips=${sorted.length} clipsMs=${clipsMs} (avg ${avgMs}ms max ${Math.max(0, ...clipMs)}ms)` +
+      ` concatMs=${concatMs} muxMs=${muxMs} totalMs=${Date.now() - tStitch}`,
+  );
 
   return path.join(workDir, outName);
 }
