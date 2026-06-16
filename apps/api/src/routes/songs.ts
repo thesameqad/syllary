@@ -77,11 +77,29 @@ async function produceDownloadVariant(
   const workDir = path.join(os.tmpdir(), `syllary-dl-${randomUUID()}`);
   await mkdir(workDir, { recursive: true });
   try {
+    // Phase timing → Render stdout, so a slow download is traceable: fetch = pull the
+    // master from R2, transcode = the ffmpeg re-encode (the expensive part for any
+    // watermarked/resized variant), upload = push the cached variant back to R2.
+    const tFetch = Date.now();
     const res = await fetch(await presignGet(videoKey));
     if (!res.ok) throw new Error(`fetch master HTTP ${res.status}`);
-    await writeFile(path.join(workDir, "master.mp4"), Buffer.from(await res.arrayBuffer()));
+    const master = Buffer.from(await res.arrayBuffer());
+    await writeFile(path.join(workDir, "master.mp4"), master);
+    const fetchMs = Date.now() - tFetch;
+
+    const tEnc = Date.now();
     await transcodeForDownload({ workDir, inName: "master.mp4", outName: "out.mp4", height, watermark });
-    await putObject(cacheKey, await readFile(path.join(workDir, "out.mp4")), "video/mp4");
+    const transcodeMs = Date.now() - tEnc;
+
+    const tUp = Date.now();
+    const out = await readFile(path.join(workDir, "out.mp4"));
+    await putObject(cacheKey, out, "video/mp4");
+    const uploadMs = Date.now() - tUp;
+
+    console.log(
+      `[download] ${height}p ${watermark ? "wm" : "clean"} masterMB=${(master.length / 1e6).toFixed(1)}` +
+        ` outMB=${(out.length / 1e6).toFixed(1)} fetchMs=${fetchMs} transcodeMs=${transcodeMs} uploadMs=${uploadMs}`,
+    );
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
