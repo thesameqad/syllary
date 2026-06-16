@@ -40,6 +40,12 @@ function ffmpegPath(): string {
 
 const FPS = 25;
 
+/** How many per-scene clips to encode in parallel during the slideshow stitch.
+ *  Each ffmpeg is single-threaded (-threads 1), so running a few at once saturates
+ *  a multi-core box — one-at-a-time left every core but one idle. 4 is safe on the
+ *  Pro instance (2 vCPU / 4 GB) and bounds peak memory on long songs. */
+const STITCH_CONCURRENCY = 4;
+
 const DIMENSIONS: Record<AspectRatio, { w: number; h: number }> = {
   "16:9": { w: 1920, h: 1080 },
   "9:16": { w: 1080, h: 1920 },
@@ -116,7 +122,10 @@ export async function transcodeForDownload(opts: {
   // Escaped comma so min()'s arg list isn't read as a filter separator. Never
   // upscale: cap the output height at the source height.
   const scale = `scale=-2:min(ih\\,${h})`;
-  const enc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "copy", "-movflags", "+faststart"];
+  // Downloads are disposable derivatives and the FIRST request blocks on this
+  // transcode, so encode for speed: ultrafast (~2x faster than veryfast on a small
+  // CPU) + crf 23 keeps a still-shareable 1080p file at a sane size. Audio copied.
+  const enc = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "copy", "-movflags", "+faststart"];
   let args: string[];
   if (opts.watermark) {
     // ~9% of frame height: the watermark doubles as the ad on shared/YouTube
@@ -144,28 +153,12 @@ export async function transcodeForDownload(opts: {
   return path.join(opts.workDir, opts.outName);
 }
 
-/** Gentle, centered Ken-Burns zoom. Because the lyric text is baked into the
- *  image, motion is kept subtle and strictly centered (no pan) and the zoom
- *  range is small so the text never drifts out of frame or gets cropped.
- *  Even frames ease in (1.0→1.06), odd frames ease out (1.06→1.0) for variety. */
-function kenBurns(index: number, w: number, h: number, frames: number): string {
-  // Pre-scale only ~1.15× the output (the zoom maxes at 1.06, so 2× was pure
-  // waste). zoompan buffers this whole frame in memory, so 4K (w*2) was the main
-  // driver of OOM on small instances — ~1.15× keeps the zoom crisp at a fraction
-  // of the memory.
-  const sw = Math.round((w * 1.15) / 2) * 2;
-  const sh = Math.round((h * 1.15) / 2) * 2;
-  const zIn = `min(zoom+0.0004,1.06)`;
-  const zOut = `if(eq(on,0),1.06,max(zoom-0.0004,1.0))`;
-  const z = index % 2 === 0 ? zIn : zOut;
-  const cx = `iw/2-(iw/zoom/2)`;
-  const cy = `ih/2-(ih/zoom/2)`;
-  return [
-    `scale=${sw}:${sh}:force_original_aspect_ratio=increase`,
-    `crop=${sw}:${sh}`,
-    `zoompan=z='${z}':x='${cx}':y='${cy}':d=${frames}:s=${w}x${h}:fps=${FPS}`,
-    `format=yuv420p`,
-  ].join(",");
+/** Slideshow frames are shown STATICALLY for now — the gentle Ken-Burns zoom was
+ *  removed (it read as not-quite-smooth and the `zoompan` filter was by far the
+ *  slowest part of the stitch). Just scale + center-crop the image to fill the
+ *  canvas, no motion. The previous zoom lives in git history to restore later. */
+function stillFrame(w: number, h: number): string {
+  return `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},format=yuv420p`;
 }
 
 /**
@@ -189,33 +182,42 @@ export async function stitchLyricsVideo(opts: {
   const { w, h } = DIMENSIONS[aspectRatio];
   const sorted = [...segments].sort((a, b) => a.clipStart - b.clipStart);
 
-  // 1. Per-frame Ken-Burns clips.
-  const clipNames: string[] = [];
-  for (const seg of sorted) {
-    const dur = Math.max(0.4, seg.clipEnd - seg.clipStart);
-    const frames = Math.max(1, Math.round(dur * FPS));
-    const clipName = `clip_${seg.index}.mp4`;
-    await runFfmpeg(
-      [
-        "-y",
-        "-loop", "1",
-        "-i", path.basename(seg.imageFile),
-        "-filter_complex", `[0:v]${kenBurns(seg.index, w, h, frames)}[v]`,
-        "-map", "[v]",
-        "-t", dur.toFixed(3),
-        "-r", String(FPS),
-        "-threads", "1",
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "20",
-        clipName,
-      ],
-      workDir,
-    );
-    clipNames.push(clipName);
-    // The source frame is encoded — free it now (keeps /tmp bounded on long songs).
-    await rm(seg.imageFile, { force: true });
-  }
+  // 1. Per-frame Ken-Burns clips, rendered with bounded parallelism. Each encode is
+  //    single-threaded + zoompan-bound, so a few at once saturate the box instead of
+  //    leaving cores idle. clipNames is filled BY INDEX so concat keeps timeline order.
+  const clipNames: string[] = new Array(sorted.length);
+  let cursor = 0;
+  const renderWorker = async (): Promise<void> => {
+    for (;;) {
+      const i = cursor++; // synchronous grab — no await between read + increment, so unique per worker
+      const seg = sorted[i];
+      if (!seg) return;
+      const dur = Math.max(0.4, seg.clipEnd - seg.clipStart);
+      const clipName = `clip_${seg.index}.mp4`;
+      await runFfmpeg(
+        [
+          "-y",
+          "-loop", "1",
+          "-i", path.basename(seg.imageFile),
+          "-t", dur.toFixed(3),
+          "-vf", stillFrame(w, h),
+          "-r", String(FPS),
+          "-threads", "1",
+          "-c:v", "libx264",
+          "-preset", "superfast",
+          "-crf", "20",
+          clipName,
+        ],
+        workDir,
+      );
+      clipNames[i] = clipName;
+      // The source frame is encoded — free it now (keeps /tmp bounded on long songs).
+      await rm(seg.imageFile, { force: true });
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(sorted.length, STITCH_CONCURRENCY) }, () => renderWorker()),
+  );
 
   // 2. Concat the clips (identical encode params → stream copy is safe).
   const listName = "clips.txt";

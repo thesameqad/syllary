@@ -14,7 +14,10 @@ services:
   - type: web
     name: syllary-api
     runtime: node
-    plan: starter
+    # Pro = 2 vCPU / 4 GB — ffmpeg (Ken-Burns stitch + download transcodes) is
+    # CPU-bound, so the extra core + RAM matter. Keep this in sync with the live
+    # service so a blueprint re-sync can't silently downgrade it.
+    plan: pro
     region: oregon
     rootDir: .
     # Render pre-installs pnpm, so use it directly. (Do NOT run `corepack enable`
