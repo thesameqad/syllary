@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AspectRatio } from "@syllary/shared";
@@ -61,15 +62,16 @@ export type StitchSegment = {
   clipEnd: number;
 };
 
-/** Measure a media file's duration by letting ffmpeg read the container header
- *  (no decode, no output file — works directly on a presigned R2 URL). This is
- *  the AUTHORITATIVE duration for token pricing: the client-supplied value at
- *  presign time is a hint only and must never price a job. Returns seconds, or
- *  null when the input can't be read or reports no duration. */
-export function probeDurationSeconds(input: string, timeoutMs = 30_000): Promise<number | null> {
+/** The outcome of a duration probe: `seconds` when read, else null with a `detail`
+ *  string explaining exactly what failed (spawn error, ffmpeg stderr, HTTP status) —
+ *  so callers can surface a real reason to logs/Sentry instead of a silent null. */
+export type ProbeResult = { seconds: number | null; detail: string };
+
+/** Spawn ffmpeg on one input (local path OR url) and parse its "Duration:" line.
+ *  `ffmpeg -i <input>` with no output exits non-zero by design; we only want the
+ *  "Duration: HH:MM:SS.cc" line it prints while inspecting the input. */
+function probeOnce(input: string, timeoutMs: number): Promise<ProbeResult> {
   return new Promise((resolve) => {
-    // `ffmpeg -i <input>` with no output exits non-zero by design; we only
-    // want the "Duration: HH:MM:SS.cc" line it prints while inspecting input.
     const proc = spawn(ffmpegPath(), ["-hide_banner", "-i", input], { stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     const timer = setTimeout(() => proc.kill("SIGKILL"), timeoutMs);
@@ -77,18 +79,57 @@ export function probeDurationSeconds(input: string, timeoutMs = 30_000): Promise
       stderr += d.toString();
       if (stderr.length > 16_000) stderr = stderr.slice(-16_000);
     });
-    proc.on("error", () => {
+    proc.on("error", (err) => {
       clearTimeout(timer);
-      resolve(null);
+      // ENOENT here means the ffmpeg binary itself is missing / not executable.
+      resolve({ seconds: null, detail: `spawn failed (${(err as NodeJS.ErrnoException).code ?? "?"}): ${err.message}` });
     });
-    proc.on("close", () => {
+    proc.on("close", (code) => {
       clearTimeout(timer);
       const m = /Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)/.exec(stderr);
-      if (!m) return resolve(null);
+      if (!m) {
+        return resolve({ seconds: null, detail: `ffmpeg exit ${code}, no Duration line. stderr: ${stderr.trim().slice(-600) || "(empty)"}` });
+      }
       const seconds = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
-      resolve(Number.isFinite(seconds) && seconds > 0 ? seconds : null);
+      if (!(Number.isFinite(seconds) && seconds > 0)) {
+        return resolve({ seconds: null, detail: `non-positive duration parsed from "${m[0]}"` });
+      }
+      resolve({ seconds, detail: "ok" });
     });
   });
+}
+
+/** Measure a media file's duration — the AUTHORITATIVE value for token pricing (the
+ *  client-supplied value at presign time is a hint only and must never price a job).
+ *
+ *  Tries ffmpeg on the input directly first (works for local paths and, on most
+ *  hosts, remote URLs). If that fails for a remote URL, falls back to downloading the
+ *  bytes with Node and probing the local copy: some container runtimes don't let the
+ *  ffmpeg process egress over HTTPS even when Node can (separate CA store / DNS), and
+ *  Node-download-then-ffmpeg-local-file is the same path the rest of the pipeline
+ *  already uses for every R2 object — so duration pricing keeps working regardless of
+ *  ffmpeg's own network stack. Returns the seconds and a `detail` describing any
+ *  failure (covering BOTH attempts) for the caller to log/report. */
+export async function probeDurationSeconds(input: string, timeoutMs = 30_000): Promise<ProbeResult> {
+  const direct = await probeOnce(input, timeoutMs);
+  if (direct.seconds !== null) return direct;
+  if (!/^https?:\/\//i.test(input)) return direct;
+
+  const tmp = path.join(os.tmpdir(), `syllary-probe-${process.pid}-${Date.now()}.bin`);
+  try {
+    const res = await fetch(input, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) {
+      return { seconds: null, detail: `direct[${direct.detail}] | fallback download HTTP ${res.status}` };
+    }
+    await writeFile(tmp, Buffer.from(await res.arrayBuffer()));
+    const local = await probeOnce(tmp, timeoutMs);
+    if (local.seconds !== null) return local;
+    return { seconds: null, detail: `direct[${direct.detail}] | fallback-local[${local.detail}]` };
+  } catch (e) {
+    return { seconds: null, detail: `direct[${direct.detail}] | fallback fetch errored: ${(e as Error).message}` };
+  } finally {
+    await rm(tmp, { force: true }).catch(() => undefined);
+  }
 }
 
 function runFfmpeg(args: string[], cwd: string): Promise<void> {

@@ -54,6 +54,7 @@ import { summarizeSong } from "../lib/openrouter.js";
 import { generateCoverImage } from "../lib/cover-image.js";
 import { matchStreamingLinks } from "../lib/music-links.js";
 import { probeDurationSeconds, transcodeForDownload } from "../lib/ffmpeg.js";
+import { Sentry } from "../instrument.js";
 import { reapStaleVideoJob, toReviewSegment } from "../lib/video-pipeline.js";
 import { resolveArtistAlbum } from "../lib/catalog.js";
 import { estimateGenerationCost, firstTouchLandingSlug, recordEvent } from "../lib/analytics.js";
@@ -507,6 +508,19 @@ async function finalizeIfDone(row: SongRow): Promise<SongRow> {
   return (await markFailed(row.id, "In-flight job from a previous engine; please retry the upload.")) ?? row;
 }
 
+/** Surface an upload/processing failure as a detailed Sentry issue (these are
+ *  deliberate 4xx responses, so the global Fastify→Sentry handler never sees them).
+ *  Stable per-`stage` title so Sentry groups cleanly; the specific reason (ffmpeg
+ *  stderr, HTTP status, etc.) and request context ride along as `extra`. */
+function reportUploadFailure(stage: string, detail: string, ctx: Record<string, unknown>): void {
+  console.error(`[upload-failure] ${stage}: ${detail}`, ctx);
+  Sentry.captureException(new Error(`Audio upload failed: ${stage}`), {
+    level: "error",
+    tags: { feature: "audio_upload", stage },
+    extra: { detail, ...ctx },
+  });
+}
+
 export async function songsRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>("/songs/:id/process", async (req, reply) => {
     const row = await getSongRow(req.params.id);
@@ -515,6 +529,10 @@ export async function songsRoutes(app: FastifyInstance) {
 
     const size = await objectSize(row.r2Key);
     if (size === null) {
+      reportUploadFailure("process:object-missing", "R2 HEAD returned no object for the uploaded key", {
+        songId: row.id,
+        r2Key: row.r2Key,
+      });
       return reply.code(400).send({ error: "Upload not found. Please try again." });
     }
 
@@ -528,8 +546,14 @@ export async function songsRoutes(app: FastifyInstance) {
     // (the presign-time value comes from the client and could be forged or
     // omitted — `?? 60` would make omission the cheapest attack).
     const audioUrl = await presignGet(row.r2Key);
-    const measured = await probeDurationSeconds(audioUrl);
+    const { seconds: measured, detail } = await probeDurationSeconds(audioUrl);
     if (measured === null) {
+      reportUploadFailure("process:probe", detail, {
+        songId: row.id,
+        r2Key: row.r2Key,
+        sizeBytes: size,
+        mode,
+      });
       return reply.code(400).send({ error: "We couldn't read that audio file. Please re-upload it." });
     }
     const durationSeconds = Math.round(measured);
@@ -670,14 +694,24 @@ export async function songsRoutes(app: FastifyInstance) {
 
     const size = await objectSize(row.r2Key);
     if (size === null) {
+      reportUploadFailure("regenerate:object-missing", "R2 HEAD returned no object for the stored key", {
+        songId: row.id,
+        r2Key: row.r2Key,
+      });
       return reply.code(400).send({ error: "Original upload no longer available." });
     }
 
     // Same trust rule as /process: price from the measured duration, never the
     // stored value (older rows may still carry a client-supplied number).
     const audioUrl = await presignGet(row.r2Key);
-    const measured = await probeDurationSeconds(audioUrl);
+    const { seconds: measured, detail } = await probeDurationSeconds(audioUrl);
     if (measured === null) {
+      reportUploadFailure("regenerate:probe", detail, {
+        songId: row.id,
+        r2Key: row.r2Key,
+        sizeBytes: size,
+        mode,
+      });
       return reply.code(400).send({ error: "Original upload could not be read. Please re-upload." });
     }
     const durationSeconds = Math.round(measured);
