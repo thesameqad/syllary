@@ -107,8 +107,59 @@ function runFfmpeg(args: string[], cwd: string): Promise<void> {
   });
 }
 
+/** Run ffmpeg with the input piped to stdin and the output captured from stdout —
+ *  an in-memory image transform with no temp files in the hot generation path. */
+function runFfmpegPipe(args: string[], input: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ffmpegPath(), ["-hide_banner", "-loglevel", "error", ...args]);
+    const out: Buffer[] = [];
+    let stderr = "";
+    proc.stdout.on("data", (d) => out.push(d as Buffer));
+    proc.stderr.on("data", (d) => {
+      stderr += d.toString();
+      if (stderr.length > 8000) stderr = stderr.slice(-8000);
+    });
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      if (code === 0) resolve(Buffer.concat(out));
+      else reject(new Error(`ffmpeg exited ${code}: ${stderr.trim().slice(-1000)}`));
+    });
+    // ffmpeg may close stdin before we finish writing (e.g. on a tiny image); swallow
+    // the resulting EPIPE so it surfaces as the real exit-code error instead.
+    proc.stdin.on("error", () => {});
+    proc.stdin.write(input);
+    proc.stdin.end();
+  });
+}
+
+/** Normalize a generated frame to ONE uniform baseline JPEG before it's stored.
+ *  The image model hands back whatever it likes per call — sometimes PNG, sometimes
+ *  JPEG, with varying sample-aspect/pixel-format metadata. The slideshow stitch
+ *  concatenates these stills in a single ffmpeg pass, and any such variation either
+ *  can't be decoded (the concat demuxer locks to the first frame's codec, so a later
+ *  JPEG under a PNG decoder is dropped) or forces a mid-stream filtergraph reinit
+ *  that drops a frame. Standardizing on ingest — square SAR + fixed pixel format,
+ *  re-encoded as JPEG — makes every frame identical in "shape" (and small on R2), so
+ *  the fast single-pass stitch keeps every image. Native resolution is preserved;
+ *  the stitch scales/crops to the canvas. */
+export async function normalizeFrameToJpeg(input: Buffer): Promise<Buffer> {
+  return runFfmpegPipe(
+    [
+      "-y",
+      "-i", "pipe:0",
+      "-frames:v", "1",
+      "-vf", "setsar=1,format=yuvj420p",
+      "-c:v", "mjpeg",
+      "-q:v", "3",
+      "-f", "image2pipe",
+      "pipe:1",
+    ],
+    input,
+  );
+}
+
 /** Produce a download variant from a finished master mp4: scale to `height`
- *  (never upscaling) and optionally bake the Syllary logo bottom-right. Re-encodes
+ *  (never upscaling) and optionally bake the Syllary logo top-right. Re-encodes
  *  the video; copies the audio stream untouched. Returns the output path. */
 export async function transcodeForDownload(opts: {
   workDir: string;
@@ -132,10 +183,14 @@ export async function transcodeForDownload(opts: {
     // videos, so "syllary.com" must survive mobile sizes after compression.
     const logoH = Math.round(h * 0.09);
     const margin = Math.round(h * 0.03);
+    // Top-right, NOT bottom-right: the bottom-right corner is buried under the player
+    // control bar (scrubber/fullscreen) and YouTube's end-screen cards, so the logo
+    // got covered in every player. The top edge stays clear during playback; we keep
+    // right-alignment so it doesn't fight the title YouTube shows top-left on hover.
     const fc =
       `[0:v]${scale}[bg];` +
       `[1:v]scale=-1:${logoH}[wm];` +
-      `[bg][wm]overlay=W-w-${margin}:H-h-${margin}[v]`;
+      `[bg][wm]overlay=W-w-${margin}:${margin}[v]`;
     args = [
       "-y",
       "-i", opts.inName,
@@ -185,10 +240,10 @@ export async function stitchLyricsVideo(opts: {
   const lines: string[] = [];
   for (const seg of sorted) {
     const dur = Math.max(0.4, seg.clipEnd - seg.clipStart);
-    lines.push(`file 'img_${seg.index}.png'`, `duration ${dur.toFixed(3)}`);
+    lines.push(`file '${path.basename(seg.imageFile)}'`, `duration ${dur.toFixed(3)}`);
   }
   const last = sorted[sorted.length - 1];
-  if (last) lines.push(`file 'img_${last.index}.png'`);
+  if (last) lines.push(`file '${path.basename(last.imageFile)}'`);
   await writeFile(path.join(workDir, "images.txt"), lines.join("\n"), "utf8");
 
   const outName = path.basename(outFile);
@@ -201,7 +256,18 @@ export async function stitchLyricsVideo(opts: {
       "-map", "0:v",
       "-map", "1:a",
       "-vf",
-      `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},fps=${SLIDESHOW_FPS},format=yuv420p`,
+      `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},format=yuv420p`,
+      // Resample to a constant fps at the OUTPUT stage, NOT with an in-graph `fps`
+      // filter. The per-line PNGs from the image model are NOT all the same pixel
+      // size, and any size change makes ffmpeg REINITIALIZE the filtergraph. An
+      // in-graph `fps` filter drops the single frame it has buffered on every
+      // reinit, so one image per size-change silently vanished from the video
+      // (~30% of frames went missing in practice). scale/crop/format are stateless
+      // 1-in-1-out filters that survive reinit cleanly; doing CFR here (via the
+      // encoder's vsync, which tracks output PTS continuously) duplicates stills to
+      // ${SLIDESHOW_FPS}fps without dropping any.
+      "-r", String(SLIDESHOW_FPS),
+      "-fps_mode", "cfr",
       // Cap threads to the container's cores — ffmpeg otherwise spawns one per HOST
       // core (many on Render's shared host) and thrashes the ~2-core cgroup.
       "-threads", "2",
@@ -218,7 +284,7 @@ export async function stitchLyricsVideo(opts: {
   );
 
   // The per-line frames are baked in now — free them (keeps /tmp bounded).
-  await Promise.all(sorted.map((s) => rm(path.join(workDir, `img_${s.index}.png`), { force: true })));
+  await Promise.all(sorted.map((s) => rm(path.join(workDir, path.basename(s.imageFile)), { force: true })));
   console.log(`[stitch] DONE single-pass ms=${Date.now() - t0}`);
 
   return path.join(workDir, outName);

@@ -37,6 +37,7 @@ import {
   concatClips,
   fitClipToDuration,
   muxAudio,
+  normalizeFrameToJpeg,
   speedFitClip,
   stitchLyricsVideo,
   type StitchSegment,
@@ -232,7 +233,7 @@ async function makeFrame(
     characterReferences,
   });
   seg.prompt = prompt;
-  const buf = await generateBackdrop({
+  const raw = await generateBackdrop({
     style: job.styleDescription,
     lineText: seg.text,
     aspectRatio,
@@ -242,9 +243,13 @@ async function makeFrame(
     promptOverride: prompt,
     characterReferences: characterReferences.length > 0 ? characterReferences : undefined,
   });
-  const imageFile = path.join(workDir, `img_${seg.index}.png`);
+  // Standardize every frame to one baseline JPEG before it touches disk/R2 — the
+  // model returns a mix of PNG/JPEG with varying metadata, which makes the slideshow
+  // stitch drop frames. See normalizeFrameToJpeg.
+  const buf = await normalizeFrameToJpeg(raw);
+  const imageFile = path.join(workDir, `img_${seg.index}.jpg`);
   await writeFile(imageFile, buf);
-  const imageKey = `video/${job.songId}/${job.id}/img_${seg.index}.png`;
+  const imageKey = `video/${job.songId}/${job.id}/img_${seg.index}.jpg`;
   await uploadImageReliably(imageKey, buf);
   seg.imageKey = imageKey;
   return { imageFile, imageUrl: await presignGet(imageKey) };
@@ -253,11 +258,15 @@ async function makeFrame(
 /** Upload a frame to R2 with retries. Not best-effort: the AI-video styles feed
  *  the resulting presigned URL to the model, so a silently-failed upload would
  *  yield a dead URL ("Image URL could not be fetched"). */
-async function uploadImageReliably(imageKey: string, buf: Buffer): Promise<void> {
+async function uploadImageReliably(
+  imageKey: string,
+  buf: Buffer,
+  contentType = "image/jpeg",
+): Promise<void> {
   let uploadErr: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      await putObject(imageKey, buf, "image/png");
+      await putObject(imageKey, buf, contentType);
       return;
     } catch (e) {
       uploadErr = e;
@@ -300,7 +309,7 @@ export async function regenerateSegmentImage(
   });
   seg.prompt = prompt;
 
-  const buf = await generateBackdrop({
+  const raw = await generateBackdrop({
     style: job.styleDescription,
     lineText: seg.text,
     aspectRatio,
@@ -310,12 +319,15 @@ export async function regenerateSegmentImage(
     promptOverride: prompt,
     characterReferences: characterReferences.length > 0 ? characterReferences : undefined,
   });
+  // Standardize to one baseline JPEG (see normalizeFrameToJpeg) so a regenerated
+  // scene matches the rest and the slideshow stitch never drops it.
+  const buf = await normalizeFrameToJpeg(raw);
   // Always write to THIS job's own key (never reuse seg.imageKey blindly): for an
   // edit job (reopened video) the segment still points at the SOURCE job's frame,
   // and overwriting that would corrupt the original video's images. Writing to our
   // own namespace is copy-on-write — the source is untouched, unedited segments
   // keep pointing at it, and materializeFrame downloads whichever key each holds.
-  const imageKey = `video/${job.songId}/${job.id}/img_${seg.index}.png`;
+  const imageKey = `video/${job.songId}/${job.id}/img_${seg.index}.jpg`;
   await uploadImageReliably(imageKey, buf);
   seg.imageKey = imageKey;
   seg.status = "done";
@@ -353,7 +365,10 @@ async function materializeFrame(
     const res = await fetch(imageUrl);
     if (!res.ok) throw new Error(`Could not fetch frame ${seg.index} (HTTP ${res.status}).`);
     const buf = Buffer.from(await res.arrayBuffer());
-    const imageFile = path.join(workDir, `img_${seg.index}.png`);
+    // Local name is extension-agnostic (the stitch references it by basename and
+    // ffmpeg probes the real format); new frames are normalized JPEG, older ones
+    // may be PNG — either decodes fine.
+    const imageFile = path.join(workDir, `img_${seg.index}.jpg`);
     await writeFile(imageFile, buf);
     console.log(`[materialize] seg=${seg.index} download ms=${Date.now() - t} bytes=${buf.length}`);
     return { imageFile, imageUrl };
