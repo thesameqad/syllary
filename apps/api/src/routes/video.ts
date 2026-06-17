@@ -52,7 +52,11 @@ async function toVideoJobDto(row: VideoJobRow): Promise<VideoJob> {
     row.status === "ready" && row.videoKey ? await presignGet(row.videoKey) : null;
   // Per-line review cards (manual mode); empty for a fresh job. Presigns the frame
   // + motion clip for each scene (single source of truth in the pipeline).
-  const segments = await Promise.all((row.segments ?? []).map(toReviewSegment));
+  // Per-scene cards are only rendered in manual review. Presigning every frame on
+  // every status poll (a long render is polled every ~2s) is pure wasted CPU that
+  // steals cores from the ffmpeg stitch — so only do it when the job is in review.
+  const segments =
+    row.status === "review" ? await Promise.all((row.segments ?? []).map(toReviewSegment)) : [];
   return {
     id: row.id,
     songId: row.songId,

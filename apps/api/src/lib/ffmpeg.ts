@@ -46,6 +46,12 @@ const FPS = 25;
  *  Pro instance (2 vCPU / 4 GB) and bounds peak memory on long songs. */
 const STITCH_CONCURRENCY = 4;
 
+/** Output framerate for the Slideshow stitch. The frames are STATIC (no motion
+ *  since the Ken-Burns zoom was removed), so a low fps is visually identical but
+ *  encodes far fewer frames — the encode is the whole bottleneck on a 2-core box.
+ *  12 keeps scene-cut timing tight (~83ms) while cutting frame count >2x vs 25. */
+const SLIDESHOW_FPS = 12;
+
 const DIMENSIONS: Record<AspectRatio, { w: number; h: number }> = {
   "16:9": { w: 1920, h: 1080 },
   "9:16": { w: 1080, h: 1920 },
@@ -216,10 +222,12 @@ export async function stitchLyricsVideo(opts: {
           "-loop", "1",
           "-i", scaledName,
           "-t", dur.toFixed(3),
-          "-r", String(FPS),
+          "-r", String(SLIDESHOW_FPS),
           "-threads", "1",
           "-c:v", "libx264",
-          "-preset", "superfast",
+          // ultrafast (not superfast): a held still makes near-empty P-frames, so the
+          // motion-estimation superfast still runs is wasted work — ultrafast skips it.
+          "-preset", "ultrafast",
           "-crf", "20",
           "-pix_fmt", "yuv420p",
           clipName,
