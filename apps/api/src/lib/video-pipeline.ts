@@ -347,15 +347,23 @@ async function materializeFrame(
   workDir: string,
   elementCatalog: ElementRef[],
 ): Promise<{ imageFile: string; imageUrl: string }> {
+  const t = Date.now();
   if (seg.imageKey) {
     const imageUrl = await presignGet(seg.imageKey);
     const res = await fetch(imageUrl);
     if (!res.ok) throw new Error(`Could not fetch frame ${seg.index} (HTTP ${res.status}).`);
+    const buf = Buffer.from(await res.arrayBuffer());
     const imageFile = path.join(workDir, `img_${seg.index}.png`);
-    await writeFile(imageFile, Buffer.from(await res.arrayBuffer()));
+    await writeFile(imageFile, buf);
+    console.log(`[materialize] seg=${seg.index} download ms=${Date.now() - t} bytes=${buf.length}`);
     return { imageFile, imageUrl };
   }
-  return makeFrame(job, seg, aspectRatio, workDir, elementCatalog);
+  // No stored frame → we GENERATE one here (a Nano Banana call). Logged loudly
+  // because at finalize this is unexpected + slow — it means a scene was never
+  // generated during review.
+  const made = await makeFrame(job, seg, aspectRatio, workDir, elementCatalog);
+  console.log(`[materialize] seg=${seg.index} GENERATED (no imageKey) ms=${Date.now() - t}`);
+  return made;
 }
 
 /** Build the per-segment client view (manual review): presign the frame + clip.
@@ -544,19 +552,24 @@ export async function regenerateSegmentClip(
 }
 
 async function downloadAudio(r2Key: string, workDir: string): Promise<string> {
+  const t = Date.now();
   const audioUrl = await presignGet(r2Key);
   const res = await fetch(audioUrl);
   if (!res.ok) throw new Error(`Could not fetch source audio (HTTP ${res.status}).`);
   const ext = path.extname(r2Key) || ".mp3";
   const audioFile = path.join(workDir, `audio${ext}`);
-  await writeFile(audioFile, Buffer.from(await res.arrayBuffer()));
+  const buf = Buffer.from(await res.arrayBuffer());
+  await writeFile(audioFile, buf);
+  console.log(`[audio] download ms=${Date.now() - t} bytes=${buf.length}`);
   return audioFile;
 }
 
 async function finalize(job: VideoJobRow, outFile: string): Promise<void> {
   const mp4 = await readFile(outFile);
   const videoKey = `video/${job.songId}/${job.id}/lyrics.mp4`;
+  const tUp = Date.now();
   await putObject(videoKey, mp4, "video/mp4");
+  console.log(`[finalize] upload ms=${Date.now() - tUp} mp4MB=${(mp4.length / 1e6).toFixed(1)}`);
   await db
     .update(videoJobs)
     .set({ status: "ready", videoKey, updatedAt: new Date() })
@@ -597,7 +610,12 @@ async function runSlideshow(
   elementCatalog: ElementRef[],
   audioStartSeconds = 0,
 ): Promise<void> {
+  console.log(
+    `[slideshow] START job=${job.id} scenes=${segments.length} imageSize=${job.imageSize}` +
+      ` quality=${job.imageQuality} reuse=${job.reuseFrames}`,
+  );
   const stitch: StitchSegment[] = new Array(segments.length);
+  console.log(`[slideshow] materialize START — ${segments.length} frames @ concurrency ${IMAGE_CONCURRENCY}`);
   const tMat = Date.now();
   await mapPool(segments, IMAGE_CONCURRENCY, async (seg) => {
     const { imageFile } = await materializeFrame(job, seg, aspectRatio, workDir, elementCatalog);
@@ -611,19 +629,24 @@ async function runSlideshow(
     await bumpProgress(job.id, segments);
   });
   const materializeMs = Date.now() - tMat;
+  console.log(`[slideshow] materialize DONE ms=${materializeMs}`);
 
   const audioFile = await downloadAudio(audioR2Key, workDir);
   const outFile = path.join(workDir, "lyrics.mp4");
+  console.log(`[slideshow] stitch START`);
   const tStitch = Date.now();
   await stitchLyricsVideo({ workDir, segments: stitch, audioFile, aspectRatio, outFile, audioStartSeconds });
   const stitchMs = Date.now() - tStitch;
-  // Phase breakdown so a slow finalize is traceable: materialize = downloading the
-  // approved frames from R2, stitch = the ffmpeg work, finalize = uploading the MP4.
+
+  // Phase breakdown: materialize = pulling the approved frames from R2,
+  // stitch = the ffmpeg work, finalize = uploading the MP4 back to R2.
+  console.log(`[slideshow] finalize/upload START`);
   const tFin = Date.now();
   await finalize(job, outFile);
+  const finalizeMs = Date.now() - tFin;
   console.log(
-    `[slideshow] job=${job.id} scenes=${segments.length} materializeMs=${materializeMs}` +
-      ` stitchMs=${stitchMs} finalizeMs=${Date.now() - tFin}`,
+    `[slideshow] DONE job=${job.id} scenes=${segments.length} materializeMs=${materializeMs}` +
+      ` stitchMs=${stitchMs} finalizeMs=${finalizeMs} totalMs=${materializeMs + stitchMs + finalizeMs}`,
   );
 }
 

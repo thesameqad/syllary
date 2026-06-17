@@ -183,6 +183,7 @@ export async function stitchLyricsVideo(opts: {
   const { workDir, segments, audioFile, aspectRatio, outFile } = opts;
   const { w, h } = DIMENSIONS[aspectRatio];
   const sorted = [...segments].sort((a, b) => a.clipStart - b.clipStart);
+  console.log(`[stitch] START clips=${sorted.length} @ ${w}x${h} concurrency=${STITCH_CONCURRENCY}`);
 
   // 1. One still clip per frame, with bounded parallelism. Each encode is
   //    single-threaded, so a few at once saturate the box. clipNames is filled BY
@@ -196,17 +197,19 @@ export async function stitchLyricsVideo(opts: {
       const i = cursor++; // synchronous grab — no await before the increment, so unique per worker
       const seg = sorted[i];
       if (!seg) return;
-      const t = Date.now();
       const dur = Math.max(0.4, seg.clipEnd - seg.clipStart);
       const clipName = `clip_${seg.index}.mp4`;
       // Scale to the canvas ONCE (here) — not on every output frame. Looping the
       // pre-scaled 1080p still and encoding identical frames is near-free; re-scaling
       // the 2K/4K source on all ~dur×FPS frames was the bulk of the old stitch time.
       const scaledName = `scaled_${seg.index}.png`;
+      const tp = Date.now();
       await runFfmpeg(
         ["-y", "-i", path.basename(seg.imageFile), "-vf", fillCanvas(w, h), "-frames:v", "1", scaledName],
         workDir,
       );
+      const prescaleMs = Date.now() - tp;
+      const te = Date.now();
       await runFfmpeg(
         [
           "-y",
@@ -223,8 +226,10 @@ export async function stitchLyricsVideo(opts: {
         ],
         workDir,
       );
+      const encodeMs = Date.now() - te;
       clipNames[i] = clipName;
-      clipMs[i] = Date.now() - t;
+      clipMs[i] = prescaleMs + encodeMs;
+      console.log(`[clip] ${seg.index} dur=${dur.toFixed(1)}s prescaleMs=${prescaleMs} encodeMs=${encodeMs}`);
       // Source frame + prescaled temp are encoded now — free them (bounds /tmp).
       await rm(path.join(workDir, scaledName), { force: true });
       await rm(seg.imageFile, { force: true });
@@ -243,6 +248,7 @@ export async function stitchLyricsVideo(opts: {
     "utf8",
   );
   const concatName = "concat.mp4";
+  console.log(`[stitch] clips DONE — concat START`);
   const tConcat = Date.now();
   await runFfmpeg(
     ["-y", "-f", "concat", "-safe", "0", "-i", listName, "-c", "copy", concatName],
@@ -254,6 +260,7 @@ export async function stitchLyricsVideo(opts: {
 
   // 3. Mux the real song audio onto the stitched video.
   const outName = path.basename(outFile);
+  console.log(`[stitch] mux START`);
   const tMux = Date.now();
   await runFfmpeg(
     [
