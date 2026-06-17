@@ -217,7 +217,14 @@ export async function transcodeForDownload(opts: {
   // Downloads are disposable derivatives and the FIRST request blocks on this
   // transcode, so encode for speed: ultrafast (~2x faster than veryfast on a small
   // CPU) + crf 23 keeps a still-shareable 1080p file at a sane size. Audio copied.
-  const enc = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "copy", "-movflags", "+faststart"];
+  // Cap threads to the container's cores, exactly like the slideshow stitch: ffmpeg
+  // otherwise spawns one thread per HOST core on Render's shared host and thrashes
+  // the small cgroup, making this re-encode several times slower than the work itself.
+  const enc = [
+    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+    "-threads", "2",
+    "-c:a", "copy", "-movflags", "+faststart",
+  ];
   let args: string[];
   if (opts.watermark) {
     // ~9% of frame height: the watermark doubles as the ad on shared/YouTube
