@@ -1,5 +1,6 @@
 export * from "./account.js";
 export * from "./constants.js";
+export * from "./demo-video.js";
 export * from "./elements.js";
 export * from "./landing.js";
 export * from "./lyrics.js";

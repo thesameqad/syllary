@@ -361,7 +361,17 @@ async function markFailed(id: string, error: string): Promise<SongRow | undefine
     .where(and(eq(songs.id, id), eq(songs.status, "processing")))
     .returning();
   // Guarded update fires once, so this can't double-count.
-  if (row) captureServer(row.ownerHash, "processing_failed", { song_id: row.id, error });
+  if (row) {
+    captureServer(row.ownerHash, "processing_failed", { song_id: row.id, error });
+    // Page on hard pipeline failures (vocal isolation, transcription, timeout):
+    // the pipeline runs in a background poll, so the global Fastify→Sentry
+    // handler never sees these the way it sees a thrown request handler.
+    Sentry.captureException(new Error(`Song processing failed: ${error}`), {
+      level: "error",
+      tags: { feature: "song_pipeline", stage: row.stage ?? "unknown" },
+      extra: { songId: row.id, mode: row.mode, durationSeconds: row.durationSeconds, error },
+    });
+  }
   return row;
 }
 

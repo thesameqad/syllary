@@ -1,5 +1,22 @@
 import type { SongInsights } from "@syllary/shared";
 import { env } from "../env.js";
+import { Sentry } from "../instrument.js";
+
+/** Report an OpenRouter outage to Sentry. Every function here degrades
+ *  gracefully (raw lyrics / fallbacks) and never throws to the user, so without
+ *  this a sustained OpenRouter failure silently turns off lyric cleanup with no
+ *  alert. Warning level — the song still completes, just degraded. */
+function reportOpenRouterFailure(fn: string, detail: string): void {
+  try {
+    Sentry.captureException(new Error(`OpenRouter call failed: ${fn}`), {
+      level: "warning",
+      tags: { feature: "openrouter", fn },
+      extra: { detail: detail.slice(0, 500) },
+    });
+  } catch {
+    // telemetry must never break the pipeline
+  }
+}
 
 const SYSTEM_PROMPT = `You are given a rough auto-transcription of a song as an ordered array of text fragments.
 Reformat it into clean, natural lyric lines and label the song's sections.
@@ -118,6 +135,10 @@ export async function structureLyrics(rawLines: string[]): Promise<StructuredLyr
       await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
     }
   }
+  reportOpenRouterFailure(
+    "structureLyrics",
+    "all 3 attempts failed — OpenRouter unreachable or returned an unusable response",
+  );
   return null;
 }
 
@@ -211,7 +232,8 @@ export async function reconcileLyrics(
       }
     }
     return { lines, sections };
-  } catch {
+  } catch (e) {
+    reportOpenRouterFailure("reconcileLyrics", (e as Error).message);
     return null;
   }
 }

@@ -107,6 +107,14 @@ export const TOOL_REGISTRY: Record<string, ToolDef> = {
     blurb: "Label a song's sections and highlight the chorus.",
     component: lazyTool(() => import("./find-the-chorus").then((m) => ({ default: m.FindTheChorus }))),
   },
+  "demo-lyric-video": {
+    key: "demo-lyric-video",
+    name: "Instant lyric video demo",
+    blurb: "Make a 10-second sample lyric video — pick a style, no upload needed.",
+    component: lazyTool(() =>
+      import("./demo-lyric-video").then((m) => ({ default: m.DemoLyricVideo })),
+    ),
+  },
 };
 
 export const TOOL_LIST: ToolDef[] = Object.values(TOOL_REGISTRY);

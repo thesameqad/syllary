@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { lyricsToText, MODE_INFO, type Song, type VideoJob } from "@syllary/shared";
 import { ApiError, getSong, updateSong, updateSongLyrics } from "@/lib/api";
+import { captureClient } from "@/lib/analytics";
 import { useToast } from "@/components/ui/toast";
 import { Modal } from "@/components/ui/modal";
 import { Button3D } from "@/components/ui/button-3d";
@@ -168,6 +169,17 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
     };
   }, [songId, status]);
 
+  // Client funnel: mark when lyrics finish (the "generated free lyrics" step),
+  // once per song. The server fires processing_completed under the ownerHash,
+  // which doesn't stitch to this browser's person pre-signup — this does.
+  const lyricsReadyReported = useRef<string | null>(null);
+  useEffect(() => {
+    if (song?.status === "ready" && song.id && lyricsReadyReported.current !== song.id) {
+      lyricsReadyReported.current = song.id;
+      captureClient("lyrics_ready", { song_id: song.id, mode: song.mode ?? null, own: song.canEdit });
+    }
+  }, [song?.status, song?.id, song?.mode, song?.canEdit]);
+
   // Lyric-video generation: the modal kicks off the job, then hands it here so
   // progress shows inside the video player while the user is free to roam.
   const handleVideoStarted = useCallback((job: VideoJob) => {
@@ -182,6 +194,7 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
 
   const handleVideoDone = useCallback(() => {
     setActiveVideoJob(null);
+    captureClient("video_ready", { song_id: songId ?? null });
     if (songId) {
       void getSong(songId)
         .then((s) => setSong((prev) => ({ ...s, audioUrl: prev?.audioUrl ?? s.audioUrl })))

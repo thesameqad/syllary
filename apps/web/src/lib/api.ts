@@ -20,6 +20,9 @@ import {
   coverPresignResponseSchema,
   type CoverGenerateResponse,
   type CoverModel,
+  type DemoVideoRequest,
+  type DemoVideoResult,
+  demoVideoResultSchema,
   type CreateVideoRequest,
   type LinkMatch,
   linkMatchSchema,
@@ -183,6 +186,20 @@ export async function processSong(id: string, mode?: GenerationMode): Promise<So
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not process track."), res.status);
   return songSchema.parse(data);
+}
+
+/** One-shot demo lyric video from the fixed sample clip — anonymous, no upload.
+ *  The backend renders a ~10s Slideshow in the chosen style and returns a
+ *  playable URL. Capped to one render per visitor (429 after that). */
+export async function generateDemoVideo(req: DemoVideoRequest): Promise<DemoVideoResult> {
+  const res = await fetch(`${API_BASE}/api/tools/demo-video`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't generate the demo video."), res.status);
+  return demoVideoResultSchema.parse(data);
 }
 
 /** Re-run the pipeline for an already-uploaded song with a different mode.

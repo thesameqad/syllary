@@ -4,6 +4,10 @@ import { ownerHash } from "../lib/hash.js";
 import { matchStreamingLinks } from "../lib/music-links.js";
 import { structureLyrics, summarizeSong } from "../lib/openrouter.js";
 import { rateLimit, runMeteredTool } from "../lib/tool-metering.js";
+import { demoVideoRequestSchema, resolveDemoStyle } from "@syllary/shared";
+import { renderDemoSlideshow } from "../lib/demo-video.js";
+import { presignGet } from "../lib/r2.js";
+import { Sentry } from "../instrument.js";
 
 const SUMMARY_COST = 10;
 const SECTIONS_COST = 10;
@@ -82,5 +86,44 @@ export async function toolsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "Enter a song name, artist, or a streaming link." });
     }
     return reply.send(await matchStreamingLinks({ title, artist, url }));
+  });
+
+  // One-shot demo lyric video — POST /api/tools/demo-video
+  // Free + anonymous: renders the fixed sample clip as a Slideshow in the chosen
+  // style + scene description. Hard-capped to 1 render per owner hash (each
+  // render costs real image generation). The top-of-funnel "try a lyric video
+  // without uploading or signing up" tool.
+  app.post("/tools/demo-video", async (req, reply) => {
+    const parsed = demoVideoRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "Pick a style first." });
+    }
+    const style = resolveDemoStyle(parsed.data);
+    if (!style) return reply.code(400).send({ error: "Pick a style or describe your own." });
+
+    const hash = ownerHash(req.ip, req.headers["user-agent"] ?? "");
+    // Per-visitor cap removed for now — keep only a loose backstop so a script
+    // can't burn render spend in a tight loop.
+    if (!rateLimit(`tool-demo-video:${hash}`, 30, 60 * 60 * 1000)) {
+      return reply.code(429).send({ error: "Whoa — too many renders right now. Give it a minute." });
+    }
+
+    try {
+      const key = await renderDemoSlideshow({
+        style,
+        description: parsed.data.description,
+        ownerHash: hash,
+      });
+      return reply.send({ videoUrl: await presignGet(key) });
+    } catch (err) {
+      if ((err as Error).message === "DEMO_NOT_BUILT") {
+        return reply.code(503).send({ error: "The demo sample isn't ready yet. Try again soon." });
+      }
+      req.log.error({ err }, "demo video render failed");
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+        tags: { feature: "demo_video" },
+      });
+      return reply.code(502).send({ error: "Couldn't generate the demo video. Please try again." });
+    }
   });
 }

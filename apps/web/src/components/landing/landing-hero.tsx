@@ -1,11 +1,14 @@
 import { Check, Download, FileAudio, Film, Share2, Wand2 } from "lucide-react";
 import { LANDING_CATEGORIES, type LandingPage } from "@syllary/shared";
 import { UploadCard } from "./upload-card";
+import { ToolHost } from "@/tools/registry";
+import { ToolFunnelCta } from "@/tools/tool-kit";
 
 /** Conversion hero for SEO/ad landing pages. A first-time visitor (especially
- *  from a paid click) sees the value prop, a 3-step "how it works", the real
- *  upload box, and — on video-intent pages — the same example clips as the home
- *  page. The original guide content still renders below for SEO depth. */
+ *  from a paid click) sees the value prop and a 3-step "how it works". Video
+ *  pages then get a full-width "try it now" demo (make a lyric video from a fixed
+ *  sample, no upload) + the example style clips; file/public pages get the real
+ *  upload box. The original guide content still renders below for SEO depth. */
 
 type Track = "video" | "public" | "files";
 
@@ -58,6 +61,45 @@ export function LandingHero({ page }: { page: LandingPage }) {
   const track = trackOf(page);
   const steps = STEPS[track];
 
+  // Shared across both layouts (2-col upload hero vs. video demo hero).
+  const valueProp = (
+    <>
+      <h1 className="text-[34px] font-medium leading-[1.08] tracking-[-1px] text-white md:text-[44px]">
+        {page.title}
+      </h1>
+      <p className="mt-4 max-w-[600px] text-[17px] leading-[1.6] text-white/60">{SUBHEAD[track]}</p>
+
+      <div className="mt-8 space-y-3">
+        {steps.map((s, i) => (
+          <div key={i} className="flex items-start gap-3.5">
+            <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border-[0.5px] border-white/10 bg-stage">
+              <s.icon className="h-4 w-4 text-pulse" />
+            </span>
+            <div>
+              <div className="text-[15px] font-medium text-white">
+                <span className="mr-1.5 text-white/35">{i + 1}.</span>
+                {s.title}
+              </div>
+              <div className="mt-0.5 text-[14px] leading-relaxed text-white/55">{s.text}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-7 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[13px] text-white/45">
+        <span className="flex items-center gap-1.5">
+          <Check className="h-3.5 w-3.5 text-success" /> Free to try
+        </span>
+        <span className="flex items-center gap-1.5">
+          <Check className="h-3.5 w-3.5 text-success" /> No sign-up
+        </span>
+        <span className="flex items-center gap-1.5">
+          <Check className="h-3.5 w-3.5 text-success" /> Ready in about a minute
+        </span>
+      </div>
+    </>
+  );
+
   return (
     <section className="relative overflow-hidden border-b border-white/[0.06] bg-void">
       {/* ambient red glow */}
@@ -70,81 +112,68 @@ export function LandingHero({ page }: { page: LandingPage }) {
           {categoryLabel(page.category)}
         </p>
 
-        <div className="grid items-start gap-10 md:grid-cols-[1.05fr_0.95fr] md:gap-12">
-          {/* Left: value prop + how-it-works */}
-          <div>
-            <h1 className="text-[34px] font-medium leading-[1.08] tracking-[-1px] text-white md:text-[44px]">
-              {page.title}
-            </h1>
-            <p className="mt-4 max-w-[540px] text-[17px] leading-[1.6] text-white/60">
-              {SUBHEAD[track]}
-            </p>
+        {track === "video" ? (
+          <>
+            {/* Top: value prop + the "finished files" upsell, side by side. */}
+            <div className="grid items-start gap-10 md:grid-cols-[1.05fr_0.95fr] md:gap-12">
+              <div>{valueProp}</div>
+              <div className="[&>div]:!mt-0">
+                <ToolFunnelCta />
+              </div>
+            </div>
 
-            <div className="mt-8 space-y-3">
-              {steps.map((s, i) => (
-                <div key={i} className="flex items-start gap-3.5">
-                  <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border-[0.5px] border-white/10 bg-stage">
-                    <s.icon className="h-4 w-4 text-pulse" />
-                  </span>
-                  <div>
-                    <div className="text-[15px] font-medium text-white">
-                      <span className="mr-1.5 text-white/35">{i + 1}.</span>
-                      {s.title}
+            {/* The "try it now" demo below — make a lyric video from a fixed
+                sample, no upload or sign-up. #start so the nav CTA scrolls here. */}
+            <div id="start" className="mt-14 scroll-mt-20 md:mt-16">
+              <h2 className="text-center text-[30px] font-medium tracking-[-1.2px] text-white md:text-[40px]">
+                Try it now for free
+              </h2>
+              <p className="mx-auto mt-2.5 max-w-[560px] text-center text-[15px] leading-relaxed text-white/55">
+                No upload, no sign-up — pick a style and we&apos;ll turn a sample track into a synced
+                lyric video, right here.
+              </p>
+              <div className="mt-7">
+                <ToolHost toolKey="demo-lyric-video" />
+              </div>
+            </div>
+
+            {/* The example style clips. */}
+            <div className="mt-16">
+              <p className="mb-5 text-center text-[14px] text-white/55">
+                Three styles, built from your lyrics. Here&apos;s what they look like:
+              </p>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                {VIDEO_STYLES.map((s) => (
+                  <div
+                    key={s.model}
+                    className="overflow-hidden rounded-[14px] border-[0.5px] border-white/10 bg-stage"
+                  >
+                    <div className="aspect-video w-full bg-black">
+                      <video
+                        src={`/format-previews/${s.model}.mp4`}
+                        autoPlay
+                        muted
+                        loop
+                        playsInline
+                        preload="metadata"
+                        className="h-full w-full object-cover"
+                      />
                     </div>
-                    <div className="mt-0.5 text-[14px] leading-relaxed text-white/55">{s.text}</div>
+                    <div className="px-4 py-3">
+                      <div className="text-[14px] font-medium text-white">{s.label}</div>
+                      <div className="text-[12px] text-pulse/80">{s.tagline}</div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-
-            <div className="mt-7 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[13px] text-white/45">
-              <span className="flex items-center gap-1.5">
-                <Check className="h-3.5 w-3.5 text-success" /> Free to try
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Check className="h-3.5 w-3.5 text-success" /> No sign-up
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Check className="h-3.5 w-3.5 text-success" /> Ready in about a minute
-              </span>
-            </div>
-          </div>
-
-          {/* Right: the real upload box */}
-          <div id="start" className="scroll-mt-20">
-            <UploadCard />
-          </div>
-        </div>
-
-        {/* Video-intent pages: the same example clips as the home page */}
-        {track === "video" && (
-          <div className="mt-14">
-            <p className="mb-5 text-center text-[14px] text-white/55">
-              Three styles, built from your lyrics. Here&apos;s what they look like:
-            </p>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              {VIDEO_STYLES.map((s) => (
-                <div
-                  key={s.model}
-                  className="overflow-hidden rounded-[14px] border-[0.5px] border-white/10 bg-stage"
-                >
-                  <div className="aspect-video w-full bg-black">
-                    <video
-                      src={`/format-previews/${s.model}.mp4`}
-                      autoPlay
-                      muted
-                      loop
-                      playsInline
-                      preload="metadata"
-                      className="h-full w-full object-cover"
-                    />
-                  </div>
-                  <div className="px-4 py-3">
-                    <div className="text-[14px] font-medium text-white">{s.label}</div>
-                    <div className="text-[12px] text-pulse/80">{s.tagline}</div>
-                  </div>
-                </div>
-              ))}
+          </>
+        ) : (
+          // File & public pages: value prop + the real upload box, side by side.
+          <div className="grid items-start gap-10 md:grid-cols-[1.05fr_0.95fr] md:gap-12">
+            <div>{valueProp}</div>
+            <div id="start" className="scroll-mt-20">
+              <UploadCard />
             </div>
           </div>
         )}

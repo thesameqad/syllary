@@ -19,6 +19,7 @@ import {
   MAX_FILE_BYTES,
 } from "@syllary/shared";
 import { ApiError, getMetaSuggestions, uploadAndProcess } from "@/lib/api";
+import { captureClient } from "@/lib/analytics";
 import { extractMetadata, type AudioMeta } from "@/lib/metadata";
 import { ModeSelector } from "@/components/landing/mode-selector";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
@@ -180,6 +181,15 @@ export function UploadCard({
 
   async function startProcessing() {
     if (!file || !meta) return;
+    // Client funnel: upload→lyrics→signup→video is otherwise only captured
+    // server-side (keyed by ownerHash), which doesn't stitch to this browser's
+    // anonymous person until signup. Firing here keeps the funnel traceable end
+    // to end on one PostHog person.
+    captureClient("upload_started", {
+      mode: genMode,
+      anonymous: !isCredits,
+      duration_seconds: meta.durationSeconds ?? null,
+    });
     setPhase("uploading");
     setProgress(0);
     setStatusLabel("Uploading…");

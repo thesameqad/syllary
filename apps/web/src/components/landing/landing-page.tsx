@@ -9,6 +9,7 @@ import { LivePreview } from "./live-preview";
 import { LyricVideoShowcase } from "./lyric-video-showcase";
 import { Nav } from "./nav";
 import { Pricing } from "./pricing";
+import { ConversionTestPanel } from "@/components/dev/conversion-test";
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -102,6 +103,7 @@ export function LandingPage() {
       <LyricVideoShowcase />
       <Pricing />
       <Footer />
+      <ConversionTestPanel />
     </main>
   );
 }
