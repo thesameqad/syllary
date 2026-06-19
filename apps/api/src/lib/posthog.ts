@@ -32,6 +32,20 @@ export function captureServer(
   }
 }
 
+/** Set person properties (e.g. a verified email) on a PostHog person, server-side.
+ *  Sends an $identify under the same `clerk:{id}` identity as captureServer. This
+ *  is the AUTHORITATIVE way to attach an email: it always has Clerk's verified
+ *  address and, unlike posthog-js, can't be blocked by an ad blocker (most of our
+ *  paid Google traffic runs one) — so logged-in persons get an email even when
+ *  the browser never identified them. */
+export function identifyServer(distinctId: string, properties: Record<string, unknown>): void {
+  try {
+    client?.identify({ distinctId, properties });
+  } catch {
+    // analytics must never break a request
+  }
+}
+
 /** Merge an anonymous device identity into the signed-in person (call once a
  *  request carries both). Mirrors the client-side posthog.identify(). */
 export function aliasServer(distinctId: string, aliasId: string): void {

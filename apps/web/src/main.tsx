@@ -36,15 +36,23 @@ function TokenBridge() {
  *  "fresh" = account created in the last few minutes). */
 function AnalyticsBridge() {
   const { user } = useUser();
+  // primaryEmailAddress can be null on the first render (or for some accounts);
+  // fall back to the first address and keep `email` in the deps so we re-identify
+  // once it resolves. The server sets the email too (authoritative) — this is the
+  // best-effort client side, which an ad blocker may have stopped entirely.
+  const email = user?.primaryEmailAddress?.emailAddress ?? user?.emailAddresses?.[0]?.emailAddress;
   useEffect(() => {
     if (!user) return;
-    identifyUser(user.id, { email: user.primaryEmailAddress?.emailAddress });
+    identifyUser(user.id, {
+      ...(email ? { email } : {}),
+      ...(user.fullName ? { name: user.fullName } : {}),
+    });
     const created = user.createdAt ? Date.now() - user.createdAt.getTime() : Infinity;
     if (created < 5 * 60 * 1000 && !sessionStorage.getItem("syl_signup_reported")) {
       sessionStorage.setItem("syl_signup_reported", "1");
       reportSignupConversion();
     }
-  }, [user]);
+  }, [user, email]);
   return null;
 }
 
