@@ -34,8 +34,14 @@ export function initAdTags(): void {
     s.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(GTAG_ID)}`;
     document.head.appendChild(s);
     window.dataLayer = window.dataLayer ?? [];
-    window.gtag = (...args: unknown[]) => {
-      window.dataLayer!.push(args);
+    // gtag.js only executes commands pushed to dataLayer as the `arguments`
+    // object (Google's canonical `function gtag(){dataLayer.push(arguments)}`).
+    // A real array — e.g. from rest params — is left unprocessed, so `config`
+    // and `conversion` never fire even though the script itself loads. Push
+    // `arguments` verbatim.
+    window.gtag = function () {
+      // eslint-disable-next-line prefer-rest-params
+      window.dataLayer!.push(arguments);
     };
     window.gtag("js", new Date());
     // Ads measurement only — no GA4 property. URL passthrough keeps the gclid

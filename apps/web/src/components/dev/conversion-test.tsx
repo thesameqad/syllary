@@ -16,7 +16,13 @@ export function ConversionTestPanel() {
   const [log, setLog] = useState<string[]>([]);
   if (!enabled) return null;
 
-  const hasGtag = typeof window !== "undefined" && typeof window.gtag === "function";
+  // `window.gtag` is always a function (our shim queues into dataLayer); the real
+  // signal that Google's gtag.js loaded AND is processing commands is the
+  // `google_tag_manager` global it creates. Checking only `gtag` gives a false
+  // "loaded" even when commands are silently dropped.
+  const hasGtag =
+    typeof window !== "undefined" &&
+    typeof (window as unknown as { google_tag_manager?: unknown }).google_tag_manager === "object";
   const note = (msg: string) =>
     setLog((l) => [`${new Date().toLocaleTimeString()} — ${msg}`, ...l].slice(0, 6));
 
