@@ -1,6 +1,6 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { users, type UserRow } from "../db/schema.js";
+import { conversionExports, users, type UserRow } from "../db/schema.js";
 import { getClerkProfile } from "./clerk.js";
 import { type ClickAttribution, recordEvent } from "./analytics.js";
 import { sendOnce, welcomeEmail } from "./email.js";
@@ -21,17 +21,34 @@ export async function stampAcquisition(userId: string, slug: string): Promise<vo
 
 /** Stamp the account's first-touch ad click (gclid/msclkid) + UTMs, once. The
  *  Stripe webhook reads these to export purchase conversions back to the ad
- *  platforms. Best-effort: never throws. */
+ *  platforms. The first time we attribute a click we also queue an offline
+ *  `sign_up` conversion — server-side, so it survives ad blockers that drop the
+ *  client-side gtag pixel. Best-effort: never throws. */
 export async function stampClickAttribution(userId: string, click: ClickAttribution): Promise<void> {
   try {
-    await db
+    const stamped = await db
       .update(users)
       .set({
         acquisitionClickId: click.clickId,
         acquisitionClickSource: click.source,
         ...(click.utm ? { acquisitionUtm: click.utm } : {}),
       })
-      .where(and(eq(users.id, userId), isNull(users.acquisitionClickId)));
+      .where(and(eq(users.id, userId), isNull(users.acquisitionClickId)))
+      .returning({ id: users.id });
+    // The IS NULL guard means this sets at most once per account — when an ad
+    // click is first attributed to it, i.e. the ad-driven sign-up. Mirror
+    // queueAdConversion (webhooks.ts) so the signup lands in conversion_exports
+    // and /admin/conversions/export.csv reports it to the ad network (valueCents
+    // and currency fall back to the column defaults: 0 / "usd").
+    if (stamped.length > 0) {
+      await db.insert(conversionExports).values({
+        userId,
+        source: click.source,
+        clickId: click.clickId,
+        conversionName: "sign_up",
+        conversionAt: new Date(),
+      });
+    }
   } catch {
     // attribution is best-effort
   }
