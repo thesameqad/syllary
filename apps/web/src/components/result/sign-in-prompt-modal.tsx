@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Download, Pencil, Sparkles, X } from "lucide-react";
+import { Check, Download, Film, Pencil, Sparkles, X } from "lucide-react";
 
 export type SignInPromptReason =
   | "download"
@@ -9,7 +9,8 @@ export type SignInPromptReason =
   | "edit-details"
   | "inline-edit"
   | "regenerate"
-  | "sync-timing";
+  | "sync-timing"
+  | "demo-limit";
 
 const COPY: Record<SignInPromptReason, { title: string; body: string }> = {
   download: {
@@ -36,22 +37,39 @@ const COPY: Record<SignInPromptReason, { title: string; body: string }> = {
     title: "Sign up free to fine-tune timing",
     body: "Drag every word into place on a full-song timeline. Free accounts get the full editor.",
   },
+  "demo-limit": {
+    title: "You've used your free demo",
+    body: "Sign up free and we'll drop tokens in your account — enough to turn your own song into a full synced lyric video. No credit card.",
+  },
 };
 
-const PERKS: { icon: typeof Download; label: string }[] = [
+type Perk = { icon: typeof Download; label: string };
+
+const PERKS: Perk[] = [
   { icon: Download, label: "Download every format" },
   { icon: Pencil, label: "Edit lyrics & details" },
   { icon: Sparkles, label: "Regenerate in higher modes" },
+];
+
+/** The demo-limit prompt sells the video product, not the result-page editor. */
+const DEMO_LIMIT_PERKS: Perk[] = [
+  { icon: Sparkles, label: "Free tokens to start" },
+  { icon: Film, label: "Make a lyric video from your own song" },
+  { icon: Download, label: "Every synced lyric file, ready to ship" },
 ];
 
 export function SignInPromptModal({
   open,
   reason,
   onClose,
+  onCtaClick,
 }: {
   open: boolean;
   reason: SignInPromptReason;
   onClose: () => void;
+  /** Fired when a CTA is clicked, before navigation — lets callers track intent
+   *  (e.g. the lyric-video demo funnel's `demo_signup_clicked`). */
+  onCtaClick?: (target: "sign-up" | "sign-in") => void;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -63,6 +81,7 @@ export function SignInPromptModal({
   }, [open, onClose]);
 
   const copy = COPY[reason];
+  const perks = reason === "demo-limit" ? DEMO_LIMIT_PERKS : PERKS;
 
   return (
     <AnimatePresence>
@@ -117,7 +136,7 @@ export function SignInPromptModal({
               </p>
 
               <ul className="mt-6 space-y-2.5 rounded-[14px] border border-white/[0.06] bg-white/[0.02] p-4">
-                {PERKS.map(({ icon: Icon, label }) => (
+                {perks.map(({ icon: Icon, label }) => (
                   <li
                     key={label}
                     className="flex items-center gap-3 text-[13px] text-white/80"
@@ -134,7 +153,10 @@ export function SignInPromptModal({
               <div className="mt-6 flex flex-col gap-2.5">
                 <Link
                   to="/sign-up"
-                  onClick={onClose}
+                  onClick={() => {
+                    onCtaClick?.("sign-up");
+                    onClose();
+                  }}
                   className="inline-flex items-center justify-center gap-2 rounded-full bg-pulse px-6 py-3 text-[14px] font-medium text-white shadow-[0_8px_28px_rgba(255,45,45,0.45)] transition-transform hover:scale-[1.02]"
                 >
                   <Sparkles className="h-4 w-4" />
@@ -142,7 +164,10 @@ export function SignInPromptModal({
                 </Link>
                 <Link
                   to="/sign-in"
-                  onClick={onClose}
+                  onClick={() => {
+                    onCtaClick?.("sign-in");
+                    onClose();
+                  }}
                   className="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-6 py-2.5 text-[13px] text-white/75 transition-colors hover:border-white/20 hover:text-white"
                 >
                   I already have an account

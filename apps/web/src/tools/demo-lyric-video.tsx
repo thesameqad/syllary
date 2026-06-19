@@ -5,6 +5,7 @@ import { VIDEO_STYLE_PRESETS } from "@syllary/shared";
 import { ApiError, generateDemoVideo } from "@/lib/api";
 import { captureClient } from "@/lib/analytics";
 import { ToolButton, ToolCard, ToolLabel } from "./tool-kit";
+import { SignInPromptModal } from "@/components/result/sign-in-prompt-modal";
 
 /** R3F is heavy — only ship the 3D loader once a render actually starts. */
 const DemoVideoLoader = lazy(() => import("./demo-video-loader"));
@@ -34,6 +35,10 @@ export function DemoLyricVideo() {
   const [error, setError] = useState<string | null>(null);
   const [capped, setCapped] = useState(false);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  // Lyric-video conversion funnel: when the one-shot demo is used up we open the
+  // sign-up modal (instead of dead-ending on an error) and track it separately.
+  const [showLimitModal, setShowLimitModal] = useState(false);
+  const [limitCtx, setLimitCtx] = useState<{ style: string; source?: string } | null>(null);
 
   const isCustom = styleId === CUSTOM;
 
@@ -45,7 +50,13 @@ export function DemoLyricVideo() {
     setBusy(true);
     setError(null);
     setVideoUrl(null);
-    captureClient("demo_video_started", { style: isCustom ? "custom" : styleId });
+    const style = isCustom ? "custom" : styleId;
+    // Which landing/guide page the demo was tried from, so demo trials are
+    // attributable per page (e.g. "guides/lyric-video-for-your-suno-track").
+    // This is the "tried the demo" signal — distinct from a real `song_uploaded`.
+    const source =
+      typeof window !== "undefined" ? window.location.pathname.replace(/^\/+/, "") || "home" : undefined;
+    captureClient("demo_video_started", { style, source });
     try {
       const res = await generateDemoVideo({
         styleId: isCustom ? undefined : styleId,
@@ -53,11 +64,15 @@ export function DemoLyricVideo() {
         description: description.trim(),
       });
       setVideoUrl(res.videoUrl);
-      captureClient("demo_video_ready", { style: isCustom ? "custom" : styleId });
+      captureClient("demo_video_ready", { style, source });
     } catch (err) {
       if (err instanceof ApiError && err.status === 429) {
+        // Demo cap hit — convert instead of dead-ending: record the funnel step
+        // and open the sign-up modal (the same one the result page uses).
         setCapped(true);
-        setError("You've used your free demo render — make one from your own song above.");
+        setLimitCtx({ style, source });
+        setShowLimitModal(true);
+        captureClient("demo_limit_reached", { style, source });
       } else {
         setError(err instanceof Error ? err.message : "Couldn't generate the video. Please try again.");
       }
@@ -121,9 +136,9 @@ export function DemoLyricVideo() {
           {error && <p className="mt-3 text-[12px] text-pulse">{error}</p>}
 
           <div className="mt-4">
-            <ToolButton onClick={generate} disabled={busy || capped}>
+            <ToolButton onClick={capped ? () => setShowLimitModal(true) : generate} disabled={busy}>
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />}
-              {busy ? "Generating…" : "Generate lyric video"}
+              {busy ? "Generating…" : capped ? "Free demo used — sign up" : "Generate lyric video"}
             </ToolButton>
           </div>
         </div>
@@ -200,6 +215,15 @@ export function DemoLyricVideo() {
           </div>
         </div>
       </div>
+
+      <SignInPromptModal
+        open={showLimitModal}
+        reason="demo-limit"
+        onClose={() => setShowLimitModal(false)}
+        onCtaClick={(target) =>
+          captureClient("demo_signup_clicked", { ...(limitCtx ?? {}), target })
+        }
+      />
     </ToolCard>
   );
 }
