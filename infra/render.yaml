@@ -58,6 +58,11 @@ services:
       # dashboard (admin API + UI). Empty = locked down.
       - key: ADMIN_CLERK_IDS
         sync: false
+      # Secret token for the public conversions export URL. Google Ads / Microsoft
+      # "scheduled uploads" fetch the CSV and can't do Clerk admin auth; this
+      # token gates that endpoint. Unset = the token endpoint is disabled (404).
+      - key: CONVERSIONS_EXPORT_TOKEN
+        sync: false
       # Stable salt for anonymous IP+UA hashing — must NOT change after launch.
       - key: IP_HASH_SALT
         generateValue: true

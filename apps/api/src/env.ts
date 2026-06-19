@@ -63,6 +63,10 @@ const envSchema = z.object({
   // Comma-separated Clerk user ids allowed into the landing-page management
   // dashboard (admin API + UI). Empty = no admins (landing admin locked down).
   ADMIN_CLERK_IDS: z.string().default(""),
+  // Secret bearer token for the public conversions export URL — Google Ads /
+  // Microsoft "scheduled uploads" fetch the CSV and can't do Clerk admin auth.
+  // Unset = the token export endpoint is disabled (404). Use a long random value.
+  CONVERSIONS_EXPORT_TOKEN: z.string().optional(),
   // Email (Resend). Optional: without a key, the contact form logs instead of
   // sending — nothing breaks while credentials are pending.
   RESEND_API_KEY: z.string().optional(),
