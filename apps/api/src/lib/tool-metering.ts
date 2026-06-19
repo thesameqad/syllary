@@ -57,3 +57,27 @@ export function rateLimit(key: string, max: number, windowMs: number): boolean {
   bucket.count += 1;
   return true;
 }
+
+// One free demo render per owner hash. Kept separate from rateLimit so a *failed*
+// render doesn't burn the visitor's single free try: rateLimit counts every
+// attempt, whereas this is consumed only on success (markDemoRenderUsed). The map
+// is in-memory and per-process — it resets on deploy and isn't shared across
+// instances, which is fine for a conversion nudge (it is NOT a security control).
+const demoUsed = new Map<string, number>();
+
+/** True if this owner-hash key has already used its free demo render this window. */
+export function demoRenderUsed(key: string): boolean {
+  const expiresAt = demoUsed.get(key);
+  if (expiresAt === undefined) return false;
+  if (Date.now() >= expiresAt) {
+    demoUsed.delete(key);
+    return false;
+  }
+  return true;
+}
+
+/** Mark a free demo render as used. Call only after a successful render. Default
+ *  window is one day, matching the anonymous "one free try" tier. */
+export function markDemoRenderUsed(key: string, windowMs = 24 * 60 * 60 * 1000): void {
+  demoUsed.set(key, Date.now() + windowMs);
+}

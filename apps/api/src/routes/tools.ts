@@ -3,7 +3,7 @@ import { z } from "zod";
 import { ownerHash } from "../lib/hash.js";
 import { matchStreamingLinks } from "../lib/music-links.js";
 import { structureLyrics, summarizeSong } from "../lib/openrouter.js";
-import { rateLimit, runMeteredTool } from "../lib/tool-metering.js";
+import { demoRenderUsed, markDemoRenderUsed, rateLimit, runMeteredTool } from "../lib/tool-metering.js";
 import { demoVideoRequestSchema, resolveDemoStyle } from "@syllary/shared";
 import { renderDemoSlideshow } from "../lib/demo-video.js";
 import { presignGet } from "../lib/r2.js";
@@ -102,9 +102,16 @@ export async function toolsRoutes(app: FastifyInstance) {
     if (!style) return reply.code(400).send({ error: "Pick a style or describe your own." });
 
     const hash = ownerHash(req.ip, req.headers["user-agent"] ?? "");
-    // Per-visitor cap removed for now — keep only a loose backstop so a script
-    // can't burn render spend in a tight loop.
-    if (!rateLimit(`tool-demo-video:${hash}`, 30, 60 * 60 * 1000)) {
+    const usedKey = `tool-demo-video:${hash}`;
+    // One free demo render per visitor (IP+UA), then a 429 → the web app shows
+    // the sign-up modal. The "used" flag is consumed only on a successful render
+    // (below), so a failed render doesn't burn the free try. The burst limiter is
+    // a loose backstop so a script can't fire many expensive renders before the
+    // first one is marked used.
+    if (demoRenderUsed(usedKey)) {
+      return reply.code(429).send({ error: "You've used your free demo render." });
+    }
+    if (!rateLimit(`tool-demo-video-burst:${hash}`, 3, 10 * 60 * 1000)) {
       return reply.code(429).send({ error: "Whoa — too many renders right now. Give it a minute." });
     }
 
@@ -114,6 +121,7 @@ export async function toolsRoutes(app: FastifyInstance) {
         description: parsed.data.description,
         ownerHash: hash,
       });
+      markDemoRenderUsed(usedKey);
       return reply.send({ videoUrl: await presignGet(key) });
     } catch (err) {
       if ((err as Error).message === "DEMO_NOT_BUILT") {
