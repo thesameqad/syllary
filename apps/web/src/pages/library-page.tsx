@@ -338,8 +338,9 @@ export function LibraryPage() {
       <div className="space-y-4">
         <div className="flex items-center justify-between gap-2">
           <p className="text-[12px] text-white/45">
-            Reusable characters for your lyric videos — upload a few photos and pick them when
-            generating.
+            Cast members are people you feature in your lyric videos — yourself, a bandmate, or an
+            AI-generated character. Add a few reference photos and the AI paints their likeness into
+            the scenes.
           </p>
           <button
             type="button"
@@ -347,12 +348,12 @@ export function LibraryPage() {
             className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-pulse px-4 py-1.5 text-[13px] font-medium text-white transition-transform hover:scale-[1.03]"
           >
             <Plus className="h-3.5 w-3.5" />
-            Add member
+            Add cast member
           </button>
         </div>
         {sorted.length === 0 ? (
           <p className="text-[14px] text-white/40">
-            No band members yet — add one and upload a few photos.
+            No cast members yet — add one and upload a few photos.
           </p>
         ) : (
           <div className={TILE_GRID}>
@@ -360,7 +361,7 @@ export function LibraryPage() {
               <MemberCard
                 key={m.id}
                 name={m.name}
-                band={artistById.get(m.artistId)?.name ?? "Unknown band"}
+                band={artistById.get(m.artistId)?.name ?? "Unknown artist"}
                 cover={m.images[0]?.url ?? null}
                 imageCount={m.images.length}
                 onEdit={() => setMemberModal({ member: m })}

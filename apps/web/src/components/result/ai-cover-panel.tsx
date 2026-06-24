@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { Image as ImageIcon, Loader2, RefreshCw, Sparkles } from "lucide-react";
 import {
   COVER_MODELS,
@@ -32,7 +32,7 @@ export function AiCoverPanel({
   onCommit: (key: string) => Promise<void>;
   onCancel: () => void;
   /** Copy overrides so the panel can drive element images, not just covers. */
-  describeLabel?: string;
+  describeLabel?: ReactNode;
   placeholder?: string;
   saveLabel?: string;
   savedToast?: string;

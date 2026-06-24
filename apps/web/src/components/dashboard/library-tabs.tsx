@@ -6,7 +6,7 @@ export type LibraryTab = (typeof LIBRARY_TABS)[number];
 const LABEL: Record<LibraryTab, string> = {
   artists: "Artists",
   albums: "Albums",
-  members: "Members",
+  members: "Cast",
   songs: "Songs",
   videos: "Music Videos",
 };

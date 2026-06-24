@@ -15,8 +15,8 @@ import { CoverCropper } from "@/components/result/cover-cropper";
 const FIELD =
   "w-full rounded-[10px] border border-white/10 bg-black/30 px-3 py-2 text-[13px] text-white/90 outline-none transition-colors focus:border-pulse/50 disabled:opacity-60";
 
-/** Create or edit a band member: name, which band (artist) it belongs to, and a
- *  gallery of reference photos (portrait crop). Photos can only be added once the
+/** Create or edit a cast member: name, which artist it belongs to, and a gallery
+ *  of reference photos (portrait crop). Photos can only be added once the cast
  *  member exists, so creating first persists it, then the gallery unlocks. */
 export function MemberEditModal({
   member: initial,
@@ -81,8 +81,8 @@ export function MemberEditModal({
 
   async function save() {
     const n = name.trim();
-    if (!n) return toast("Give the member a name.", "error");
-    if (!artistId) return toast("Pick a band.", "error");
+    if (!n) return toast("Give the cast member a name.", "error");
+    if (!artistId) return toast("Pick an artist.", "error");
     setBusy(true);
     try {
       if (member) {
@@ -96,10 +96,10 @@ export function MemberEditModal({
         const created = await createMember({ name: n, artistId });
         setMember(created);
         onSaved();
-        toast("Member created — now add some photos.");
+        toast("Cast member created — now add some photos.");
       }
     } catch (e) {
-      toast(e instanceof ApiError ? e.message : "Couldn't save the member.", "error");
+      toast(e instanceof ApiError ? e.message : "Couldn't save the cast member.", "error");
     } finally {
       setBusy(false);
     }
@@ -109,7 +109,7 @@ export function MemberEditModal({
     <Modal
       open
       onClose={() => !busy && onClose()}
-      title={cropSrc ? "Crop photo" : member ? "Edit member" : "New band member"}
+      title={cropSrc ? "Crop photo" : member ? "Edit cast member" : "New cast member"}
       widthClass="max-w-[520px]"
     >
       {cropSrc ? (
@@ -123,23 +123,33 @@ export function MemberEditModal({
         />
       ) : artists.length === 0 ? (
         <p className="text-[13px] leading-relaxed text-white/60">
-          You need a band first. Create an artist in the Library, then add its members here.
+          You&apos;ll need an artist first — upload a song or import from Deezer to create one, then
+          come back here to add cast members.
         </p>
       ) : (
         <>
+          <p className="mb-3 text-[12px] leading-relaxed text-white/50">
+            A cast member is a person — real or AI-generated — the AI can paint into your
+            lyric-video scenes. Add a few reference photos so it captures their likeness, then pick
+            them when you generate a video.
+          </p>
           <label className="flex flex-col gap-1">
-            <span className="text-[11px] uppercase tracking-[0.5px] text-white/40">Name</span>
+            <span className="text-[11px] uppercase tracking-[0.5px] text-white/40">
+              Name <span className="text-pulse">*</span>
+            </span>
             <input
               value={name}
               disabled={busy}
               onChange={(e) => setName(e.target.value)}
               className={FIELD}
-              placeholder="e.g. Lead singer, or their name"
+              placeholder="e.g. you, the lead singer, or a guest"
             />
           </label>
 
           <label className="mt-2.5 flex flex-col gap-1">
-            <span className="text-[11px] uppercase tracking-[0.5px] text-white/40">Band</span>
+            <span className="text-[11px] uppercase tracking-[0.5px] text-white/40">
+              Artist <span className="text-pulse">*</span>
+            </span>
             <select
               value={artistId}
               disabled={busy}
@@ -158,6 +168,9 @@ export function MemberEditModal({
           <div className="mt-4">
             <span className="text-[11px] uppercase tracking-[0.5px] text-white/40">
               Reference photos
+              <span className="ml-1.5 font-normal normal-case tracking-normal text-white/30">
+                · up to {MEMBER_IMAGE_MAX} per cast member
+              </span>
             </span>
             {member ? (
               <div className="mt-2 grid grid-cols-3 gap-2.5 sm:grid-cols-4">
@@ -193,13 +206,13 @@ export function MemberEditModal({
             ) : (
               <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-white/40">
                 <ImageIcon className="h-3.5 w-3.5" />
-                Save the member first, then add up to {MEMBER_IMAGE_MAX} photos.
+                Save the cast member first, then add up to {MEMBER_IMAGE_MAX} photos of them.
               </p>
             )}
             {member && (
               <p className="mt-1.5 text-[11px] text-white/40">
-                {images.length}/{MEMBER_IMAGE_MAX} photos. A few clear shots from different angles
-                give the best likeness.
+                {images.length}/{MEMBER_IMAGE_MAX} photos for this cast member. A few clear shots
+                from different angles give the best likeness.
               </p>
             )}
             <input ref={fileRef} type="file" accept="image/*" onChange={onPickFile} className="hidden" />

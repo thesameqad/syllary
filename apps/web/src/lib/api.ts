@@ -490,7 +490,7 @@ export async function saveEntityCover(
 export async function listMembers(): Promise<BandMember[]> {
   const res = await fetch(`${API_BASE}/api/members`, { headers: { ...(await authHeaders()) } });
   const data: unknown = await res.json();
-  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't load members."), res.status);
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't load cast members."), res.status);
   return bandMemberListSchema.parse(data);
 }
 
@@ -501,7 +501,7 @@ export async function createMember(body: CreateBandMember): Promise<BandMember> 
     body: JSON.stringify(body),
   });
   const data: unknown = await res.json();
-  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't create the member."), res.status);
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't create the cast member."), res.status);
   return bandMemberSchema.parse(data);
 }
 
@@ -512,7 +512,7 @@ export async function updateMember(id: string, body: UpdateBandMember): Promise<
     body: JSON.stringify(body),
   });
   const data: unknown = await res.json();
-  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't save the member."), res.status);
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't save the cast member."), res.status);
   return bandMemberSchema.parse(data);
 }
 
@@ -523,7 +523,7 @@ export async function deleteMember(id: string): Promise<void> {
   });
   if (!res.ok) {
     const data: unknown = await res.json().catch(() => ({}));
-    throw new ApiError(errorMessage(data, "Couldn't delete the member."), res.status);
+    throw new ApiError(errorMessage(data, "Couldn't delete the cast member."), res.status);
   }
 }
 

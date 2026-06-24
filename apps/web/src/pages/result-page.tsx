@@ -361,27 +361,29 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
         onInterceptEdit={!signedIn ? interceptFor("inline-edit") : undefined}
         onInterceptDownload={!signedIn ? interceptFor("download") : undefined}
         badge={
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2 max-sm:gap-1.5">
             {song.mode && (
               <span
                 title={MODE_INFO[song.mode].description}
-                className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-[5px] text-[11px] font-medium text-white/80"
+                className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-[5px] text-[11px] font-medium text-white/80 max-sm:gap-1 max-sm:border-transparent max-sm:bg-white/[0.02] max-sm:px-2 max-sm:py-0.5 max-sm:text-[10px]"
               >
                 {song.mode === "fast" && <Zap className="h-3 w-3 text-pulse" />}
                 {song.mode === "normal" && <Wand2 className="h-3 w-3 text-pulse" />}
                 {song.mode === "pro" && <Sparkles className="h-3 w-3 text-pulse" />}
-                {MODE_INFO[song.mode].label} mode
+                <span className="sm:hidden">{MODE_INFO[song.mode].label}</span>
+                <span className="hidden sm:inline">{MODE_INFO[song.mode].label} mode</span>
               </span>
             )}
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-success/[0.12] px-3 py-[5px] text-[11px] font-medium text-success">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-success/[0.12] px-3 py-[5px] text-[11px] font-medium text-success max-sm:gap-1 max-sm:px-2 max-sm:py-0.5 max-sm:text-[10px]">
               <span className="h-[5px] w-[5px] rounded-full bg-success" />
-              Platform-ready
+              <span className="sm:hidden">Ready</span>
+              <span className="hidden sm:inline">Platform-ready</span>
             </span>
           </div>
         }
         toolbarLeft={
           showOwnerUi || song.isPublic ? (
-            <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-1.5">
               {song.canEdit && (
                 <motion.button
                   type="button"
@@ -390,60 +392,64 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
                   whileHover={{ y: -2, rotateX: -7, scale: 1.04 }}
                   whileTap={{ scale: 0.96 }}
                   transition={{ type: "spring", stiffness: 420, damping: 22 }}
-                  className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-gradient-to-b from-[#ff5151] to-[#d81818] px-3.5 py-1.5 text-[12px] font-medium text-white shadow-[0_8px_20px_-8px_rgba(255,45,45,0.7),inset_0_1px_0_rgba(255,255,255,0.35)]"
+                  className="inline-flex w-full shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full bg-gradient-to-b from-[#ff5151] to-[#d81818] px-3.5 py-1.5 text-[12px] font-medium text-white shadow-[0_8px_20px_-8px_rgba(255,45,45,0.7),inset_0_1px_0_rgba(255,255,255,0.35)] sm:w-auto sm:justify-start"
                 >
                   <Clapperboard className="h-3.5 w-3.5" />
                   Generate video
                 </motion.button>
               )}
-              {showOwnerUi && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    song.canEdit ? setEditorOpen(true) : promptSignIn("edit-lyrics")
-                  }
-                  className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
-                >
-                  <Pencil className="h-3.5 w-3.5 text-pulse" />
-                  Edit lyrics
-                </button>
-              )}
-              {showOwnerUi && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    song.canEdit ? setDetailsOpen(true) : promptSignIn("edit-details")
-                  }
-                  className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
-                >
-                  <SlidersHorizontal className="h-3.5 w-3.5 text-pulse" />
-                  Public details
-                </button>
-              )}
-              {showOwnerUi && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    song.canEdit ? setSyncOpen(true) : promptSignIn("sync-timing")
-                  }
-                  title="Drag each word into place on a full-song timeline"
-                  className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
-                >
-                  <Wand2 className="h-3.5 w-3.5 text-pulse" />
-                  Timing
-                </button>
-              )}
-              {song.isPublic && (
-                <a
-                  href={`/p/${song.id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
-                >
-                  <ExternalLink className="h-3.5 w-3.5 text-pulse" />
-                  Public view
-                </a>
-              )}
+              {/* Secondary actions: even 2-col grid on mobile; on sm+ the wrapper
+                  dissolves (sm:contents) so they flow inline as today. */}
+              <div className="grid grid-cols-2 gap-2 sm:contents [&>*:last-child:nth-child(odd)]:col-span-2">
+                {showOwnerUi && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      song.canEdit ? setEditorOpen(true) : promptSignIn("edit-lyrics")
+                    }
+                    className="inline-flex w-full shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white sm:w-auto sm:justify-start"
+                  >
+                    <Pencil className="h-3.5 w-3.5 text-pulse" />
+                    Edit lyrics
+                  </button>
+                )}
+                {showOwnerUi && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      song.canEdit ? setDetailsOpen(true) : promptSignIn("edit-details")
+                    }
+                    className="inline-flex w-full shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white sm:w-auto sm:justify-start"
+                  >
+                    <SlidersHorizontal className="h-3.5 w-3.5 text-pulse" />
+                    Public details
+                  </button>
+                )}
+                {showOwnerUi && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      song.canEdit ? setSyncOpen(true) : promptSignIn("sync-timing")
+                    }
+                    title="Drag each word into place on a full-song timeline"
+                    className="inline-flex w-full shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white sm:w-auto sm:justify-start"
+                  >
+                    <Wand2 className="h-3.5 w-3.5 text-pulse" />
+                    Timing
+                  </button>
+                )}
+                {song.isPublic && (
+                  <a
+                    href={`/p/${song.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex w-full shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white sm:w-auto sm:justify-start"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5 text-pulse" />
+                    Public view
+                  </a>
+                )}
+              </div>
             </div>
           ) : undefined
         }

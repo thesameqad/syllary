@@ -128,7 +128,7 @@ export const PREVIEW_SECONDS = 10;
 
 // ---- Band members / character references -----------------------------------
 
-/** Max photos a user may upload per band member (for choice; only the first few
+/** Max photos a user may upload per cast member (for choice; only the first few
  *  are sent as references per frame). */
 export const MEMBER_IMAGE_MAX = 6;
 /** Max characters selectable for one video. */
