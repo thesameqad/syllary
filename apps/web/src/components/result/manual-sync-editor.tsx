@@ -378,8 +378,8 @@ export function ManualSyncEditor({
           transition={{ duration: 0.18 }}
         >
           {/* Header */}
-          <header className="flex items-center justify-between border-b border-white/[0.06] px-5 py-3.5">
-            <div className="flex items-center gap-3">
+          <header className="flex items-center justify-between border-b border-white/[0.06] px-3 py-3 sm:px-5 sm:py-3.5">
+            <div className="flex min-w-0 items-center gap-2 sm:gap-3">
               <button
                 type="button"
                 onClick={handleClose}
@@ -392,7 +392,7 @@ export function ManualSyncEditor({
               <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-pulse/15 text-pulse">
                 <Wand2 className="h-3.5 w-3.5" />
               </span>
-              <h2 className="text-[15px] font-medium tracking-[-0.2px]">
+              <h2 className="whitespace-nowrap text-[15px] font-medium tracking-[-0.2px]">
                 Fine-tune timing
               </h2>
               <span className="hidden text-[12px] text-white/40 sm:inline">
@@ -410,7 +410,7 @@ export function ManualSyncEditor({
                 >
                   <ZoomOut className="h-3.5 w-3.5" />
                 </button>
-                <span className="px-1 font-mono text-[11px] text-white/55">
+                <span className="hidden px-1 font-mono text-[11px] text-white/55 sm:inline">
                   {Math.round(pxPerSec)}px/s
                 </span>
                 <button
@@ -433,14 +433,14 @@ export function ManualSyncEditor({
                 ) : (
                   <Save className="h-3.5 w-3.5" />
                 )}
-                {saving ? "Saving…" : "Save timing"}
+                {saving ? "Saving…" : <>Save<span className="hidden sm:inline"> timing</span></>}
               </button>
             </div>
           </header>
 
           {/* Timeline — fills the entire width of the screen. */}
           <main className="flex flex-1 flex-col overflow-hidden bg-stage/60">
-            <div className="flex flex-1 flex-col px-5 py-5">
+            <div className="flex flex-1 flex-col px-4 py-4 sm:px-5 sm:py-5">
               <div className="mb-3 flex items-center gap-3">
                 <button
                   type="button"
@@ -464,7 +464,7 @@ export function ManualSyncEditor({
 
               <div
                 ref={trackScrollRef}
-                className="relative flex-1 overflow-x-auto overflow-y-hidden rounded-[12px] border border-white/[0.06] bg-black/30"
+                className="relative overflow-x-auto overflow-y-hidden rounded-[12px] border border-white/[0.06] bg-black/30 sm:flex-1"
               >
                 <div className="relative" style={{ width: `${trackWidthPx}px`, minWidth: "100%" }}>
                   {/* Time ruler — also a click-to-seek surface. */}
@@ -584,7 +584,7 @@ export function ManualSyncEditor({
                               }}
                               aria-label={`Delete word "${word.text}"`}
                               title={`Delete "${word.text}"`}
-                              className="absolute -right-2 -top-2 z-10 flex h-5 w-5 items-center justify-center rounded-full border border-white/15 bg-stage text-white/70 opacity-0 shadow-[0_4px_10px_rgba(0,0,0,0.5)] transition-all hover:scale-110 hover:border-pulse hover:bg-pulse hover:text-white focus-visible:opacity-100 group-hover:opacity-100"
+                              className="absolute -right-2 -top-2 z-10 flex h-5 w-5 items-center justify-center rounded-full border border-white/15 bg-stage text-white/70 opacity-100 shadow-[0_4px_10px_rgba(0,0,0,0.5)] transition-all hover:scale-110 hover:border-pulse hover:bg-pulse hover:text-white focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
                             >
                               <X className="h-3 w-3" />
                             </button>
@@ -609,15 +609,24 @@ export function ManualSyncEditor({
               </div>
 
               <p className="mt-3 text-center text-[12px] text-white/40">
-                Drag to move · Drag the edges to trim · Hover and click{" "}
-                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-white/15 align-text-bottom text-[9px] text-white/70">
-                  ×
-                </span>{" "}
-                (or press{" "}
-                <kbd className="rounded border border-white/15 bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10.5px] text-white/70">Del</kbd>
-                ) to remove a word ·{" "}
-                <kbd className="rounded border border-white/15 bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10.5px] text-white/70">Space</kbd>{" "}
-                plays / pauses · Click waveform or ruler to scrub
+                <span className="sm:hidden">
+                  Drag a word to move it · drag the edges to trim · tap{" "}
+                  <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-white/15 align-text-bottom text-[9px] text-white/70">
+                    ×
+                  </span>{" "}
+                  to remove it · tap the waveform to scrub.
+                </span>
+                <span className="hidden sm:inline">
+                  Drag to move · Drag the edges to trim · Hover and click{" "}
+                  <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-white/15 align-text-bottom text-[9px] text-white/70">
+                    ×
+                  </span>{" "}
+                  (or press{" "}
+                  <kbd className="rounded border border-white/15 bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10.5px] text-white/70">Del</kbd>
+                  ) to remove a word ·{" "}
+                  <kbd className="rounded border border-white/15 bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10.5px] text-white/70">Space</kbd>{" "}
+                  plays / pauses · Click waveform or ruler to scrub
+                </span>
               </p>
             </div>
           </main>

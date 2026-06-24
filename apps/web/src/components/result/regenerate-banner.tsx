@@ -113,16 +113,19 @@ export function RegenerateBanner({
                   type="button"
                   disabled={disabled}
                   onClick={() => void run(mode)}
-                  className="group inline-flex items-center gap-2 rounded-full border border-pulse/30 bg-pulse/[0.08] px-3.5 py-1.5 text-[12px] font-medium text-white transition-colors hover:border-pulse hover:bg-pulse/[0.15] disabled:opacity-60 disabled:hover:border-pulse/30 disabled:hover:bg-pulse/[0.08]"
+                  className="group inline-flex items-center gap-2 rounded-full border border-pulse/30 bg-pulse/[0.08] px-3.5 py-1.5 text-[12px] font-medium text-white transition-colors hover:border-pulse hover:bg-pulse/[0.15] disabled:opacity-60 disabled:hover:border-pulse/30 disabled:hover:bg-pulse/[0.08] max-sm:w-full max-sm:justify-between"
                   title={MODE_INFO[mode].description}
                 >
-                  {isBusy ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-pulse" />
-                  ) : (
-                    <Icon className="h-3.5 w-3.5 text-pulse" />
-                  )}
-                  Regenerate with {MODE_INFO[mode].label}
-                  <span className="rounded-full bg-black/30 px-2 py-0.5 text-[10px] text-white/65">
+                  <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                    {isBusy ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-pulse" />
+                    ) : (
+                      <Icon className="h-3.5 w-3.5 text-pulse" />
+                    )}
+                    <span className="sm:hidden">{MODE_INFO[mode].label}</span>
+                    <span className="hidden sm:inline">Regenerate with {MODE_INFO[mode].label}</span>
+                  </span>
+                  <span className="shrink-0 whitespace-nowrap rounded-full bg-black/30 px-2 py-0.5 text-[10px] text-white/65">
                     {cost} tokens
                   </span>
                 </button>

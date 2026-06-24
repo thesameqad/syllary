@@ -86,7 +86,7 @@ function ReuseSplitButton({
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
         className={cn(
-          "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-[12.5px] font-medium transition-all disabled:opacity-50",
+          "inline-flex items-center gap-2 whitespace-nowrap rounded-full border px-4 py-2 text-[12.5px] font-medium transition-all disabled:opacity-50",
           open
             ? "border-pulse/70 bg-pulse/[0.14] text-white shadow-[0_6px_28px_-8px_rgba(255,45,45,0.6)]"
             : "border-white/12 bg-white/[0.04] text-white/85 hover:border-pulse/50 hover:bg-white/[0.06] hover:text-white",
@@ -466,7 +466,7 @@ export function VideoTabs({
               type="button"
               onClick={() => setSelected(m)}
               className={cn(
-                "inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[12px] font-medium transition-colors",
+                "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 py-1.5 text-[12px] font-medium transition-colors",
                 sel
                   ? "border-pulse/60 bg-pulse/[0.14] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.12)]"
                   : "border-white/10 bg-white/[0.03] text-white/65 hover:border-white/20 hover:text-white",
@@ -534,7 +534,7 @@ export function VideoTabs({
           {previewShown ? (
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
               <span className="text-[12px] text-white/45">A ~10s sample — love it?</span>
-              <Button3D disabled={promoting} onClick={() => void generateFull()}>
+              <Button3D disabled={promoting} onClick={() => void generateFull()} className="whitespace-nowrap">
                 {promoting ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
@@ -545,8 +545,8 @@ export function VideoTabs({
             </div>
           ) : (
             <>
-            <div className="mt-3 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
+            <div className="mt-3 flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
                 <button
                   type="button"
                   onClick={() => {
@@ -554,7 +554,7 @@ export function VideoTabs({
                     setDlWatermark(true);
                     setDownloadOpen(true);
                   }}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
+                  className="inline-flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white sm:w-auto sm:justify-start"
                 >
                   <Download className="h-3.5 w-3.5 text-pulse" />
                   Download
@@ -563,7 +563,7 @@ export function VideoTabs({
                   type="button"
                   onClick={() => void startEdit()}
                   disabled={editing || liveBusy}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white disabled:opacity-60"
+                  className="inline-flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white disabled:opacity-60 sm:w-auto sm:justify-start"
                 >
                   {editing ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-pulse" />
@@ -575,7 +575,7 @@ export function VideoTabs({
                 <button
                   type="button"
                   onClick={() => setTheaterOpen(true)}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white"
+                  className="inline-flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-pulse/50 hover:text-white sm:w-auto sm:justify-start"
                 >
                   <Maximize2 className="h-3.5 w-3.5 text-pulse" />
                   Theater
@@ -584,7 +584,7 @@ export function VideoTabs({
                   type="button"
                   onClick={() => setDeleteOpen(true)}
                   disabled={busy}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/60 transition-colors hover:border-pulse/50 hover:text-pulse disabled:opacity-60"
+                  className="inline-flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-white/60 transition-colors hover:border-pulse/50 hover:text-pulse disabled:opacity-60 sm:w-auto sm:justify-start"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                   Delete
@@ -592,8 +592,8 @@ export function VideoTabs({
               </div>
               {completed &&
                 (isPublic ? (
-                  <div className="flex items-center gap-2">
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-success/[0.12] px-3.5 py-1.5 text-[12px] font-medium text-success">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-success/[0.12] px-3.5 py-1.5 text-[12px] font-medium text-success">
                       <Check className="h-3.5 w-3.5" />
                       On your public page
                     </span>

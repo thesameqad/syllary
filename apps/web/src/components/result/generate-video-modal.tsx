@@ -93,7 +93,7 @@ export function GenerateVideoModal({
   const [sceneBrief, setSceneBrief] = useState("");
   const [briefLoading, setBriefLoading] = useState(false);
   const [briefLoaded, setBriefLoaded] = useState(false);
-  // Band members ("cast") the user can optionally depict as characters.
+  // Cast members the user can optionally depict as characters in scenes.
   const [members, setMembers] = useState<BandMember[]>([]);
   const [selectedCharacterIds, setSelectedCharacterIds] = useState<string[]>([]);
   // Per-song persisted elements — a catalog you create + @mention (mention-driven,
@@ -440,8 +440,8 @@ export function GenerateVideoModal({
               </div>
             </div>
 
-            <div className="mb-4 flex items-center justify-between rounded-[12px] border border-white/[0.08] bg-white/[0.02] px-4 py-3">
-              <div className="text-[12px] text-white/55">
+            <div className="mb-4 flex items-center justify-between gap-x-3 rounded-[12px] border border-white/[0.08] bg-white/[0.02] px-4 py-3">
+              <div className="min-w-0 text-[12px] text-white/55">
                 {noPrerender ? (
                   <>
                     <span className="font-medium text-white">Nothing now</span> — pay per scene as you
@@ -459,7 +459,7 @@ export function GenerateVideoModal({
                   </>
                 )}
               </div>
-              <div className={cn("text-[12px]", broke ? "text-pulse" : "text-white/45")}>
+              <div className={cn("text-[12px] shrink-0", broke ? "text-pulse" : "text-white/45")}>
                 {credits === null ? "—" : `You have ${credits} tokens`}
               </div>
             </div>
@@ -524,7 +524,7 @@ export function GenerateVideoModal({
                             : "border-white/[0.08] bg-white/[0.02] text-white/70 hover:border-white/20 hover:text-white",
                         )}
                       >
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className="text-[14px] font-medium text-white">{info.label}</span>
                           {q === "fast" && (
                             <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[10px] font-medium text-white/55">
@@ -635,18 +635,19 @@ export function GenerateVideoModal({
               <div>
                 <h3 className="text-[14px] font-medium text-white">Cast &amp; elements (optional)</h3>
                 <p className="mt-0.5 text-[12px] leading-snug text-white/50">
-                  Add recurring subjects the video should depict — band members and elements
-                  (a dog, headphones, props). Reference any of them by name in the brief or a scene.
+                  Cast members are people (real or AI-generated) the AI paints into scenes from your
+                  photos; elements are recurring objects (a dog, headphones, props). Add anyone or
+                  anything the video should feature, then reference them by name in the brief or a scene.
                 </p>
               </div>
             </div>
 
             <div className="max-h-[52vh] space-y-4 overflow-y-auto pr-1">
-              {/* Band members */}
+              {/* Cast members */}
               {usableMembers.length > 0 && (
                 <div>
                   <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.5px] text-white/45">
-                    <Users className="h-3.5 w-3.5" /> Band members
+                    <Users className="h-3.5 w-3.5" /> Cast members
                     <span className="font-normal normal-case tracking-normal text-white/30">
                       · up to {MAX_VIDEO_CHARACTERS}
                     </span>
@@ -737,8 +738,8 @@ export function GenerateVideoModal({
 
             <p className="mt-3 text-[11px] text-white/40">
               {selectedCharacterIds.length === 0
-                ? "No band members selected. You can still @mention any element by name next."
-                : `${selectedCharacterIds.length} member${selectedCharacterIds.length > 1 ? "s" : ""} selected · @mention elements by name in the next step.`}
+                ? "No cast members selected. You can still @mention any element by name next."
+                : `${selectedCharacterIds.length} cast member${selectedCharacterIds.length > 1 ? "s" : ""} selected · @mention elements by name in the next step.`}
             </p>
 
             <div className="mt-5 flex items-center justify-between gap-2 border-t border-white/[0.06] pt-4">
@@ -773,7 +774,7 @@ export function GenerateVideoModal({
             </div>
 
             {/* Song description: write your own / generate with AI / none */}
-            <div className="mb-3 inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] p-1">
+            <div className="mb-3 flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] p-1 max-sm:w-full max-sm:flex-wrap sm:inline-flex">
               {(
                 [
                   { key: "write", label: "Write my own" },
@@ -822,7 +823,7 @@ export function GenerateVideoModal({
               />
             )}
 
-            {/* Tap to @mention a band member or element in the description. */}
+            {/* Tap to @mention a cast member or element in the description. */}
             {briefMode !== "none" && !briefLoading && castNames.length > 0 && (
               <div className="mt-2.5">
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -846,7 +847,7 @@ export function GenerateVideoModal({
                   })}
                 </div>
                 <p className="mt-1.5 text-[11px] text-white/40">
-                  Tap to mention a band member or element by name.
+                  Tap to mention a cast member or element by name.
                 </p>
               </div>
             )}
@@ -859,8 +860,8 @@ export function GenerateVideoModal({
               </div>
             )}
 
-            <div className="mt-4 flex items-center justify-between rounded-[12px] border border-white/[0.08] bg-white/[0.02] px-4 py-3">
-              <div className="text-[12px] text-white/55">
+            <div className="mt-4 flex items-center justify-between gap-x-3 rounded-[12px] border border-white/[0.08] bg-white/[0.02] px-4 py-3">
+              <div className="min-w-0 text-[12px] text-white/55">
                 {noPrerender ? (
                   <>
                     <span className="font-medium text-white">Nothing now</span> — pay per scene as you
@@ -878,7 +879,7 @@ export function GenerateVideoModal({
                   </>
                 )}
               </div>
-              <div className={cn("text-[12px]", broke ? "text-pulse" : "text-white/45")}>
+              <div className={cn("text-[12px] shrink-0", broke ? "text-pulse" : "text-white/45")}>
                 {credits === null ? "—" : `You have ${credits} tokens`}
               </div>
             </div>
@@ -907,18 +908,20 @@ export function GenerateVideoModal({
                 </div>
               </div>
             ) : (
-              <div className="mt-5 flex items-center justify-between gap-2 border-t border-white/[0.06] pt-4">
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] pt-4">
                 <Button3D
                   variant="secondary"
+                  className="whitespace-nowrap"
                   onClick={() => setStep(usableMembers.length > 0 ? "cast" : "settings")}
                 >
                   <ArrowLeft className="h-4 w-4" />
                   Back
                 </Button3D>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {canPreview && (
                     <Button3D
                       variant="secondary"
+                      className="whitespace-nowrap"
                       disabled={previewing || submitting || brokePreview || briefLoading}
                       onClick={onPreviewClick}
                     >
@@ -927,6 +930,7 @@ export function GenerateVideoModal({
                     </Button3D>
                   )}
                   <Button3D
+                    className="whitespace-nowrap"
                     disabled={submitting || previewing || broke || briefLoading}
                     onClick={() => void generate(false)}
                   >
@@ -1007,7 +1011,7 @@ function ModeCard({
           </span>
         ) : null}
       </div>
-      <div className="mt-2.5 flex items-center gap-2">
+      <div className="mt-2.5 flex flex-wrap items-center gap-2">
         <span className="text-[13px] font-medium text-white">{label}</span>
         <span className="rounded-full bg-black/30 px-2 py-0.5 text-[10px] text-white/65">
           {tokens} tokens
@@ -1042,17 +1046,23 @@ function StyleCard({
           : "border-white/[0.08] bg-white/[0.02] hover:border-white/25 hover:bg-white/[0.04]",
       )}
     >
-      <div className="flex items-start gap-3.5">
-        <div className="w-[112px] shrink-0 sm:w-[140px]">
+      {/* Mobile: preview stacks full-width on top (big enough to read the motion);
+          desktop: preview sits to the left of the text, as before. */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-3.5">
+        <div className="w-full shrink-0 sm:w-[140px]">
           <VideoFormatPreview model={model} />
         </div>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 sm:flex-1">
           <div className="flex items-center gap-2">
             <Icon className={cn("h-4 w-4 shrink-0", selected ? "text-pulse" : "text-white/55")} />
-            <span className="text-[15px] font-medium text-white">{info.label}</span>
-            <span className="text-[12px] text-white/45">{info.tagline}</span>
+            {/* Label + tagline: inline on desktop, tagline drops to its own line on
+                mobile so neither the label nor the tagline wraps mid-word. */}
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-row sm:items-center sm:gap-2">
+              <span className="whitespace-nowrap text-[15px] font-medium text-white">{info.label}</span>
+              <span className="text-[12px] text-white/45">{info.tagline}</span>
+            </div>
             {selected && (
-              <span className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-pulse text-white">
+              <span className="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-pulse text-white">
                 <Check className="h-3 w-3" />
               </span>
             )}

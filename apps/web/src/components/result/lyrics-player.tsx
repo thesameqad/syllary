@@ -93,7 +93,7 @@ export function LyricsPlayer({
   return (
     <div className="overflow-hidden rounded-[20px] border-[0.5px] border-white/[0.08] bg-[linear-gradient(180deg,#161616_0%,#0d0d0d_100%)] shadow-[0_40px_80px_rgba(0,0,0,0.5),0_0_80px_rgba(255,45,45,0.06)]">
       <div className="p-6 sm:p-7">
-        <div className="mb-5 flex items-center justify-between gap-3">
+        <div className="mb-5 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
@@ -140,9 +140,9 @@ export function LyricsPlayer({
 
         {hasLyrics ? (
           <>
-            <div className="mb-4 flex items-center justify-between gap-2 border-b border-white/[0.05] pb-4">
-              {toolbarLeft ?? <span />}
-              <div className="flex items-center gap-2.5">
+            <div className="mb-4 flex flex-col items-stretch gap-3 border-b border-white/[0.05] pb-4 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+              {toolbarLeft ?? <span className="max-sm:hidden" />}
+              <div className="flex items-center gap-2.5 max-sm:w-full max-sm:justify-end">
                 {showViewLabel && (
                   <span className="text-[10px] uppercase tracking-[1.5px] text-white/40">View</span>
                 )}
@@ -166,7 +166,8 @@ export function LyricsPlayer({
             {canEdit && onSaveLine && (
               <p className="-mt-1 mb-3 inline-flex items-center gap-1.5 text-[11px] text-white/40">
                 <Pencil className="h-3 w-3 text-pulse" />
-                Hover any line to edit it in place.
+                <span className="sm:hidden">Tap a line&apos;s pencil to edit it.</span>
+                <span className="hidden sm:inline">Hover any line to edit it in place.</span>
               </p>
             )}
             {mode === "dynamic" ? (

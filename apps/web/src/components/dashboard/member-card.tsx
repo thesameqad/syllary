@@ -1,8 +1,8 @@
 import { User } from "lucide-react";
 import { EntityCardMenu, type EntityCardManage } from "@/components/dashboard/entity-card-menu";
 
-/** A band-member tile for the Library Members tab: first photo (or a fallback
- *  icon), the member's name, their band, and a 3-dots edit/delete menu. */
+/** A cast-member tile for the Library Cast tab: first photo (or a fallback
+ *  icon), the cast member's name, their artist, and a 3-dots edit/delete menu. */
 export function MemberCard({
   name,
   band,
@@ -45,15 +45,15 @@ export function MemberCard({
         </div>
       </button>
       <EntityCardMenu
-        label="Member actions"
+        label="Cast member actions"
         onEdit={onEdit}
         onDelete={manage.onDelete}
-        deleteTitle="Delete member"
+        deleteTitle="Delete cast member"
         deleteWarning={
           <>
-            Delete <span className="font-medium text-white">{name}</span>? This removes the member
-            and all their reference photos. Videos already generated with them are unaffected. This
-            can&apos;t be undone.
+            Delete <span className="font-medium text-white">{name}</span>? This removes the cast
+            member and all their reference photos. Videos already generated with them are
+            unaffected. This can&apos;t be undone.
           </>
         }
       />

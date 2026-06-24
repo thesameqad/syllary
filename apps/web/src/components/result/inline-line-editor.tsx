@@ -206,7 +206,9 @@ export function InlineLineEditor({
           onClick={startEdit}
           aria-label="Edit this line"
           title="Edit this line"
-          className="opacity-0 transition-opacity group-hover/edit:opacity-100 motion-safe:hover:scale-110 focus-visible:opacity-100"
+          // Touch devices can't hover, so the pencil is always shown on mobile
+          // (with a larger tap target); on sm+ it stays hover-revealed as before.
+          className="-m-1 p-1 opacity-100 transition-opacity motion-safe:hover:scale-110 focus-visible:opacity-100 sm:m-0 sm:p-0 sm:opacity-0 sm:group-hover/edit:opacity-100"
         >
           <Pencil className="h-3.5 w-3.5 text-white/55 hover:text-pulse" />
         </button>

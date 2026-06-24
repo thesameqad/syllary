@@ -64,7 +64,7 @@ export async function memberRoutes(app: FastifyInstance) {
     const parsed = createBandMemberSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid request." });
     if (!(await ownsArtist(parsed.data.artistId, user.id))) {
-      return reply.code(404).send({ error: "Band not found." });
+      return reply.code(404).send({ error: "Artist not found." });
     }
     try {
       const [row] = await db
@@ -73,7 +73,7 @@ export async function memberRoutes(app: FastifyInstance) {
         .returning();
       return reply.send(await toMemberDto(row!));
     } catch {
-      return reply.code(409).send({ error: "You already have a member with that name in this band." });
+      return reply.code(409).send({ error: "You already have a cast member with that name for this artist." });
     }
   });
 
@@ -87,7 +87,7 @@ export async function memberRoutes(app: FastifyInstance) {
     const row = await loadMember(req.params.id, user.id);
     if (!row) return reply.code(404).send({ error: "Not found." });
     if (parsed.data.artistId && !(await ownsArtist(parsed.data.artistId, user.id))) {
-      return reply.code(404).send({ error: "Band not found." });
+      return reply.code(404).send({ error: "Artist not found." });
     }
     const patch: Partial<{ name: string; artistId: string }> = {};
     if (parsed.data.name !== undefined) patch.name = parsed.data.name;
@@ -101,7 +101,7 @@ export async function memberRoutes(app: FastifyInstance) {
         .returning();
       return reply.send(await toMemberDto(updated!));
     } catch {
-      return reply.code(409).send({ error: "You already have a member with that name in this band." });
+      return reply.code(409).send({ error: "You already have a cast member with that name for this artist." });
     }
   });
 
@@ -127,7 +127,7 @@ export async function memberRoutes(app: FastifyInstance) {
     const row = await loadMember(req.params.id, user.id);
     if (!row) return reply.code(404).send({ error: "Not found." });
     if ((row.images ?? []).length >= MEMBER_IMAGE_MAX) {
-      return reply.code(400).send({ error: `A member can have at most ${MEMBER_IMAGE_MAX} photos.` });
+      return reply.code(400).send({ error: `Each cast member can have at most ${MEMBER_IMAGE_MAX} photos.` });
     }
     const key = `${IMAGE_PREFIX}/${row.id}-${randomUUID()}`;
     const uploadUrl = await presignPut(key, parsed.data.contentType);
@@ -149,7 +149,7 @@ export async function memberRoutes(app: FastifyInstance) {
     }
     const current = row.images ?? [];
     if (current.length >= MEMBER_IMAGE_MAX) {
-      return reply.code(400).send({ error: `A member can have at most ${MEMBER_IMAGE_MAX} photos.` });
+      return reply.code(400).send({ error: `Each cast member can have at most ${MEMBER_IMAGE_MAX} photos.` });
     }
     const size = await objectSize(key);
     if (size === null) return reply.code(400).send({ error: "Upload not found — please retry." });

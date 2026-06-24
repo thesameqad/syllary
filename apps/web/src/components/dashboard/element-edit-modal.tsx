@@ -74,7 +74,9 @@ export function ElementEditModal({
       widthClass="max-w-[560px]"
     >
       <label className="flex flex-col gap-1">
-        <span className="text-[11px] uppercase tracking-[0.5px] text-white/40">Name</span>
+        <span className="text-[11px] uppercase tracking-[0.5px] text-white/40">
+          Name <span className="text-pulse">*</span>
+        </span>
         <input
           value={name}
           disabled={busy}
@@ -105,7 +107,11 @@ export function ElementEditModal({
           )}
           <AiCoverPanel
             defaultPrompt={element.description ?? ""}
-            describeLabel="Describe this element"
+            describeLabel={
+              <>
+                Describe this element <span className="text-pulse">*</span>
+              </>
+            }
             placeholder="e.g. a scruffy brown terrier with a red collar, friendly expression"
             saveLabel="Save image"
             savedToast="Element image saved."

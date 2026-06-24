@@ -61,18 +61,18 @@ export function LyricsEditModal({
         className="h-[46vh] min-h-[300px] w-full resize-none rounded-[12px] border border-white/10 bg-black/30 p-4 font-mono text-[14px] leading-[1.7] text-white/90 outline-none transition-colors focus:border-pulse/50 disabled:opacity-60"
       />
 
-      <div className="mt-4 flex items-center justify-between gap-2">
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <button
           type="button"
           disabled={saving}
           onClick={() => setSyncOpen(true)}
           title="Hand-correct each word's start and end times on a timeline"
-          className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-[13px] text-white/75 transition-colors hover:border-pulse/40 hover:text-white disabled:opacity-50"
+          className="inline-flex w-full items-center justify-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-[13px] text-white/75 transition-colors hover:border-pulse/40 hover:text-white disabled:opacity-50 sm:w-auto sm:justify-start"
         >
           <Wand2 className="h-3.5 w-3.5 text-pulse" />
           Fine-tune timing
         </button>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-end gap-2">
           <button
             type="button"
             disabled={saving}

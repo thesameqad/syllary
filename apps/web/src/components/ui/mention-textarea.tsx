@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /** A textarea with an "@" name-autocomplete. When the caret sits in an `@token`
  *  (at the start or after whitespace), a dropdown of matching `names` appears;
@@ -33,6 +33,13 @@ export function MentionTextarea({
       : [];
   const open = matches.length > 0;
 
+  // Reset the highlight to the top only when the filter text actually changes —
+  // NOT on every key-up/click. detect() runs on key-up, so resetting `active`
+  // there snapped arrow-key navigation straight back to the first match.
+  useEffect(() => {
+    setActive(0);
+  }, [query?.q]);
+
   /** Detect an active "@token" ending at the caret (start-of-text or after space,
    *  no whitespace inside). */
   function detect() {
@@ -44,8 +51,9 @@ export function MentionTextarea({
     if (at < 0 || (at > 0 && !/\s/.test(before[at - 1]!))) return setQuery(null);
     const q = before.slice(at + 1);
     if (/\s/.test(q)) return setQuery(null);
-    setQuery({ at, q });
-    setActive(0);
+    // Keep the same object reference when nothing changed so caret-only events
+    // (key-up, click) don't churn state or disturb the highlighted option.
+    setQuery((prev) => (prev && prev.at === at && prev.q === q ? prev : { at, q }));
   }
 
   function pick(name: string) {
@@ -75,7 +83,13 @@ export function MentionTextarea({
           onChange(e.target.value);
           detect();
         }}
-        onKeyUp={detect}
+        onKeyUp={(e) => {
+          // The open dropdown owns these keys; re-detecting on their key-up would
+          // disturb the highlighted option (arrows) or reopen it (Escape).
+          if (e.key === "Escape") return;
+          if (open && (e.key === "ArrowUp" || e.key === "ArrowDown")) return;
+          detect();
+        }}
         onClick={detect}
         onKeyDown={(e) => {
           if (!open) return;

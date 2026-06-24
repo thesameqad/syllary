@@ -2,11 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertTriangle,
-  ArrowLeft,
-  ArrowRight,
   Ban,
   ChevronDown,
   Clapperboard,
+  Clock,
   Film,
   Image as ImageIcon,
   Loader2,
@@ -36,6 +35,7 @@ import {
   updateVideoJob,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
+import { Modal } from "@/components/ui/modal";
 import { Button3D } from "@/components/ui/button-3d";
 import { MentionTextarea } from "@/components/ui/mention-textarea";
 import { cn } from "@/lib/utils";
@@ -51,6 +51,12 @@ const FIELD =
 function motionSeed(seg: ReviewSegment | undefined): string {
   if (seg?.motionDirection) return seg.motionDirection;
   return seg?.direction?.trim() || seg?.text || "";
+}
+
+/** Seconds → "M:SS" for the per-scene timecode chips. */
+function fmtTime(s: number): string {
+  const total = Math.max(0, Math.round(s));
+  return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, "0")}`;
 }
 
 /** Manual-mode review: a card per scene. The art-direction STYLE and the song
@@ -85,7 +91,11 @@ export function ManualReview({
 }) {
   const toast = useToast();
   const segments = job.segments;
+  // Scrolls the active scene preview into view as you navigate the strip.
+  const activeThumbRef = useRef<HTMLButtonElement>(null);
   const [index, setIndex] = useState(0);
+  // Pending scene index awaiting a "leave without generating" confirmation.
+  const [leavingTo, setLeavingTo] = useState<number | null>(null);
   const [dir, setDir] = useState(1);
   const [direction, setDirection] = useState(segments[0]?.direction ?? "");
   const [sharedOpen, setSharedOpen] = useState(false);
@@ -114,12 +124,11 @@ export function ManualReview({
   const supportsMotion = job.model !== "fast";
   const cost = singleImageTokens(job.imageQuality, job.imageSize);
   const clipCost = singleClipTokens(job.model, (seg?.clipEnd ?? 0) - (seg?.clipStart ?? 0));
-  const isLast = index >= segments.length - 1;
   const hasImage = !!seg?.imageUrl;
   const hasClip = !!seg?.clipUrl;
-  // No-prerender scenes start blank — you can't advance past one until it has an
-  // image (the action button reads "Generate" rather than "Regenerate" for these).
-  const nextBlocked = !seg?.imageUrl;
+  // The whole-video render needs every scene to have an image first.
+  const allGenerated = segments.every((s) => !!s.imageUrl);
+  const ungeneratedCount = segments.filter((s) => !s.imageUrl).length;
 
   // Load the per-scene direction + motion direction for whichever card we land on.
   useEffect(() => {
@@ -127,6 +136,11 @@ export function ManualReview({
     setMotionDir(motionSeed(segments[index]));
     setNoCast(segments[index]?.noCast ?? false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [index]);
+
+  // Keep the active scene preview centered in the navigator strip.
+  useEffect(() => {
+    activeThumbRef.current?.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
   }, [index]);
 
   // @mentionable subjects: the job's band members + ALL the song's elements
@@ -239,12 +253,25 @@ export function ManualReview({
     }
   }
 
-  const go = (delta: number) => {
-    setDir(delta);
-    setIndex((i) => Math.min(segments.length - 1, Math.max(0, i + delta)));
-  };
+  // This scene has text edits that haven't been applied yet (its image/clip was
+  // generated from the OLD text) — used to warn before navigating away.
+  const sceneDirty =
+    direction.trim() !== (seg.direction ?? "").trim() ||
+    noCast !== !!seg.noCast ||
+    motionDir.trim() !== motionSeed(seg).trim();
 
   const busy = regenBusy || finalizing || clipBusy;
+
+  function navigateTo(i: number) {
+    setDir(i > index ? 1 : -1);
+    setIndex(i);
+  }
+  // Clicking another scene's preview — confirm first if this scene has unapplied edits.
+  function requestNavigate(i: number) {
+    if (i === index) return;
+    if (sceneDirty) return setLeavingTo(i);
+    navigateTo(i);
+  }
 
   return (
     <div className="mt-3">
@@ -375,23 +402,57 @@ export function ManualReview({
         </AnimatePresence>
       </div>
 
-      {/* Progress dots */}
-      <div className="mb-3 flex items-center justify-center gap-1.5">
-        {segments.map((s, i) => (
-          <button
-            key={s.index}
-            type="button"
-            aria-label={`Scene ${i + 1}`}
-            onClick={() => {
-              setDir(i > index ? 1 : -1);
-              setIndex(i);
-            }}
-            className={cn(
-              "h-1.5 rounded-full transition-all",
-              i === index ? "w-5 bg-pulse" : "w-1.5 bg-white/20 hover:bg-white/40",
-            )}
-          />
-        ))}
+      {/* Scene navigator — click a preview to jump straight to that scene. */}
+      <div className="mb-3 flex gap-2 overflow-x-auto pb-1.5">
+        {segments.map((s, i) => {
+          const activeThumb = i === index;
+          return (
+            <button
+              key={s.index}
+              ref={activeThumb ? activeThumbRef : undefined}
+              type="button"
+              aria-label={`Scene ${i + 1}`}
+              aria-current={activeThumb || undefined}
+              onClick={() => requestNavigate(i)}
+              className={cn(
+                "group relative aspect-video w-24 shrink-0 overflow-hidden rounded-[9px] border bg-black transition-all",
+                activeThumb
+                  ? "border-pulse ring-2 ring-pulse/60"
+                  : "border-white/10 opacity-70 hover:border-white/30 hover:opacity-100",
+              )}
+            >
+              {s.imageUrl ? (
+                <img src={s.imageUrl} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center border border-dashed border-white/15 bg-white/[0.02]">
+                  <ImageIcon className="h-4 w-4 text-white/25" />
+                </div>
+              )}
+              {/* bottom gradient + timecode */}
+              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent px-1.5 pb-1 pt-3">
+                <span className="block truncate text-[9px] font-medium tabular-nums text-white/85">
+                  {fmtTime(s.clipStart)}–{fmtTime(s.clipEnd)}
+                </span>
+              </div>
+              {/* scene index */}
+              <span
+                className={cn(
+                  "absolute left-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-semibold leading-none",
+                  activeThumb ? "bg-pulse text-white" : "bg-black/70 text-white/80",
+                )}
+              >
+                {i + 1}
+              </span>
+              {/* not-generated marker */}
+              {!s.imageUrl && (
+                <span
+                  title="Not generated yet"
+                  className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.85)]"
+                />
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Image ⇄ Motion editor switch — only the AI-motion styles have clips. */}
@@ -428,11 +489,6 @@ export function ManualReview({
           <span className="text-[11px] uppercase tracking-[1px] text-white/40">
             Scene {index + 1} of {segments.length}
           </span>
-          <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] font-medium text-white/55">
-            {mode === "motion"
-              ? `${hasClip ? "Regenerate clip" : "Generate clip"} · ${clipCost} tokens`
-              : `${hasImage ? "Regenerate" : "Generate"} · ${cost} tokens`}
-          </span>
         </div>
 
         <AnimatePresence mode="wait" custom={dir}>
@@ -444,8 +500,12 @@ export function ManualReview({
             exit={{ opacity: 0, x: dir * -40 }}
             transition={{ type: "spring", stiffness: 320, damping: 30 }}
           >
-            {/* Lyric line */}
-            <div className="mb-3 flex items-start gap-2">
+            {/* Lyric line + when this scene is on screen */}
+            <div className="mb-3 flex items-start gap-2.5">
+              <span className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full bg-white/[0.07] px-2 py-1 text-[10px] font-medium tabular-nums text-white/65">
+                <Clock className="h-3 w-3 text-pulse" />
+                {fmtTime(seg.clipStart)} – {fmtTime(seg.clipEnd)}
+              </span>
               {seg.text.trim() ? (
                 <p className="text-[18px] font-medium leading-snug tracking-[-0.4px] text-white">
                   “{seg.text}”
@@ -632,7 +692,7 @@ export function ManualReview({
                       <p className="mt-1.5 text-[11px] text-white/40">
                         {noCast
                           ? "No characters in this scene — scenery & objects only. Tap a name to add someone."
-                          : `Tap a name to feature them (e.g. “@${cast[0]} gives flowers to ${cast[1] ? `@${cast[1]}` : "someone"}”). Mention nobody = the whole band; tap “No one” for a scene with no people.`}
+                          : `Tap a name to feature them (e.g. “@${cast[0]} gives flowers to ${cast[1] ? `@${cast[1]}` : "someone"}”). Mention nobody = the whole cast; tap “No one” for a scene with no people.`}
                       </p>
                     </div>
                   )}
@@ -642,78 +702,84 @@ export function ManualReview({
           </motion.div>
         </AnimatePresence>
 
-        {/* Controls */}
-        <div className="mt-4 flex items-center justify-between gap-2 border-t border-white/[0.06] pt-4">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => go(-1)}
-              disabled={index === 0 || busy}
-              className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-white/25 hover:text-white disabled:opacity-40"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              Back
-            </button>
-            <button
-              type="button"
-              onClick={() => void (mode === "motion" ? regenerateClipNow() : regenerate())}
-              disabled={busy}
-              className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-1.5 text-[12px] text-white/80 transition-colors hover:border-pulse/50 hover:text-white disabled:opacity-50"
-            >
-              {(mode === "motion" ? clipBusy : regenBusy) ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-pulse" />
-              ) : (
-                <RefreshCw className="h-3.5 w-3.5 text-pulse" />
-              )}
-              {mode === "motion"
-                ? hasClip
-                  ? "Regenerate clip"
-                  : "Generate clip"
-                : hasImage
-                  ? "Regenerate"
-                  : "Generate"}
-            </button>
-          </div>
+        {/* Controls — the per-scene action is the primary; the whole-video render
+            is always available but only enabled once every scene has an image. */}
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] pt-4">
+          <Button3D
+            variant={allGenerated && !busy ? "primary" : "secondary"}
+            disabled={busy || !allGenerated}
+            onClick={() => void finalize()}
+          >
+            {finalizing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Clapperboard className="h-4 w-4" />
+            )}
+            Finish &amp; render video
+            <span className="opacity-80">
+              · {finalizeCost !== undefined ? `${finalizeCost} tokens` : "free"}
+            </span>
+          </Button3D>
 
-          {finalizeCost !== undefined ? (
-            // Edit mode: re-render is reachable from any scene (no need to walk
-            // every card just to swap one), with a small Next for convenience.
-            <div className="flex items-center gap-2">
-              {!isLast && (
-                <button
-                  type="button"
-                  onClick={() => go(1)}
-                  disabled={busy || nextBlocked}
-                  className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/70 transition-colors hover:border-white/25 hover:text-white disabled:opacity-40"
-                >
-                  Next
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </button>
-              )}
-              <Button3D disabled={busy} onClick={() => void finalize()}>
-                {finalizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />}
-                Regenerate video · {finalizeCost} tokens
-              </Button3D>
-            </div>
-          ) : isLast ? (
-            <Button3D disabled={busy} onClick={() => void finalize()}>
-              {finalizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />}
-              Generate Full Video
-            </Button3D>
-          ) : (
-            <Button3D disabled={busy || nextBlocked} onClick={() => go(1)}>
-              Next
-              <ArrowRight className="h-4 w-4" />
-            </Button3D>
-          )}
+          <Button3D
+            disabled={busy}
+            onClick={() => void (mode === "motion" ? regenerateClipNow() : regenerate())}
+            className="px-7 py-3 text-[15px]"
+          >
+            {(mode === "motion" ? clipBusy : regenBusy) ? (
+              <Loader2 className="h-[18px] w-[18px] animate-spin" />
+            ) : (
+              <RefreshCw className="h-[18px] w-[18px]" />
+            )}
+            {mode === "motion"
+              ? hasClip
+                ? "Regenerate this clip"
+                : "Generate this clip"
+              : hasImage
+                ? "Regenerate this scene"
+                : "Generate this scene"}
+            <span className="opacity-80">· {mode === "motion" ? clipCost : cost} tokens</span>
+          </Button3D>
         </div>
-        {!isLast && nextBlocked && !busy && (
-          <p className="mt-2.5 text-right text-[11px] text-white/45">
-            Generate the image first by clicking{" "}
-            <span className="text-white/70">Generate</span> to continue.
+        {!allGenerated && !busy && (
+          <p className="mt-2.5 text-[11px] text-white/45">
+            {ungeneratedCount} {ungeneratedCount === 1 ? "scene" : "scenes"} still need generating
+            before you can render the whole video.
           </p>
         )}
       </div>
+
+      {/* Unapplied-edit guard when jumping to another scene via its preview. */}
+      <Modal
+        open={leavingTo !== null}
+        onClose={() => setLeavingTo(null)}
+        title="Leave without generating?"
+      >
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-400/15 text-amber-300">
+            <AlertTriangle className="h-5 w-5" />
+          </span>
+          <p className="text-[13px] leading-relaxed text-white/70">
+            You changed this scene&apos;s text but haven&apos;t{" "}
+            {mode === "motion" ? "regenerated the clip" : "generated it"} from your new{" "}
+            {mode === "motion" ? "motion" : "direction"} yet. Leave without generating? Your edit
+            will be discarded and the current {mode === "motion" ? "clip" : "image"} stays.
+          </p>
+        </div>
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              if (leavingTo !== null) navigateTo(leavingTo);
+              setLeavingTo(null);
+            }}
+            className="rounded-full px-4 py-2 text-[13px] text-white/60 transition-colors hover:bg-white/[0.06] hover:text-white"
+          >
+            Leave without generating
+          </button>
+          <Button3D onClick={() => setLeavingTo(null)}>Stay &amp; keep editing</Button3D>
+        </div>
+      </Modal>
     </div>
   );
 }
