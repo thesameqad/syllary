@@ -1,5 +1,5 @@
 import type { CoverModel, ImageQuality, ImageSize, VideoModel } from "./constants.js";
-import { PREVIEW_SECONDS, VIDEO_MODEL_INFO } from "./constants.js";
+import { PREVIEW_MAX_SCENES, PREVIEW_SECONDS, VIDEO_MODEL_INFO } from "./constants.js";
 import type { Lyrics } from "./lyrics.js";
 import type { VideoClipStatus, VideoSegment } from "./video.js";
 
@@ -138,6 +138,8 @@ export function buildPreviewSegments(
       };
     })
     .filter((s) => s.clipEnd - s.clipStart >= MIN_CLIP_SECONDS / 2)
+    // Cap the preview to a fixed number of scenes so generation cost is bounded.
+    .slice(0, PREVIEW_MAX_SCENES)
     .map((s, i) => ({ ...s, index: i }));
 
   return { segments, audioStartSeconds: start };
@@ -170,6 +172,17 @@ export const USD_PER_TOKEN = 29 / 60_000; // ≈ $0.000483 (Pro: 60k tokens for 
 
 /** Floor so a very short clip never rounds down to ~0 tokens. */
 export const MIN_VIDEO_TOKENS = 20;
+
+/** Flat token price for a PREVIEW render, by model — a fixed "try before you buy"
+ *  so a free user gets a predictable number of tries (300/400/700 → 3/2/1 on the
+ *  1,000-credit free grant). The preview's work is also bounded (PREVIEW_MAX_SCENES
+ *  + forced fast/1K in estimateVideoCost), so our COGS stays well under these prices.
+ *  Full renders are NOT affected — they price from real per-song cost below. */
+export const PREVIEW_TOKENS: Record<VideoModel, number> = {
+  fast: 300,
+  normal: 400,
+  pro: 700,
+};
 
 /** Raw OpenRouter cost per backdrop image (USD), by quality × resolution.
  *  fast/1K is MEASURED from billing ($0.0682); the others are scaled estimates
@@ -277,7 +290,12 @@ export function estimateVideoCost(opts: {
    *  added to rawUsd before the markup). 0/undefined when no characters chosen. */
   referenceImages?: number;
 }): VideoCostEstimate {
-  const { model, quality, imageSize } = opts;
+  const { model } = opts;
+  // Previews are forced to the cheapest fast/1K image quality (and capped scenes in
+  // buildPreviewSegments) so the flat preview price always beats our COGS. Full
+  // renders use the user's chosen quality untouched.
+  const quality: ImageQuality = opts.preview ? "fast" : opts.quality;
+  const imageSize: ImageSize = opts.preview ? "1K" : opts.imageSize;
 
   let segs: VideoSegment[];
   if (opts.preview) {
@@ -306,8 +324,11 @@ export function estimateVideoCost(opts: {
 
   const rawUsd = imageUsd + clipUsd + refUsd;
   const chargeUsd = rawUsd * VIDEO_COST_MARKUP;
-  // Round up to a tidy multiple of 100 tokens (only ever helps the margin).
-  const tokens = Math.max(MIN_VIDEO_TOKENS, Math.ceil(chargeUsd / USD_PER_TOKEN / 100) * 100);
+  // Previews are a flat price by model; full renders round up to a tidy multiple of
+  // 100 tokens (only ever helps the margin).
+  const tokens = opts.preview
+    ? PREVIEW_TOKENS[model]
+    : Math.max(MIN_VIDEO_TOKENS, Math.ceil(chargeUsd / USD_PER_TOKEN / 100) * 100);
 
   return { segments: segs.length, images, clipSeconds, rawUsd, chargeUsd, tokens };
 }

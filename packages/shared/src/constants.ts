@@ -126,6 +126,11 @@ export const VIDEO_MODEL_INFO: Record<
  *  line, so users can try a style before committing to the full spend. */
 export const PREVIEW_SECONDS = 10;
 
+/** Max scenes (images, and motion clips for the AI styles) a preview renders. The
+ *  preview is capped to this so our generation COGS stays bounded regardless of how
+ *  lyric-dense the first PREVIEW_SECONDS are. Only affects previews, not full renders. */
+export const PREVIEW_MAX_SCENES = 3;
+
 // ---- Band members / character references -----------------------------------
 
 /** Max photos a user may upload per cast member (for choice; only the first few

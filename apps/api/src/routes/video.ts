@@ -246,8 +246,10 @@ async function startVideoJob(
       // "" → "" (the user chose "no context" — never overridden); text → as-is.
       sceneBrief: settings.sceneBrief === undefined ? null : settings.sceneBrief.trim(),
       aspectRatio: settings.aspectRatio,
-      imageSize: settings.imageSize,
-      imageQuality: settings.imageQuality,
+      // Previews are forced to the cheapest fast/1K image quality so the flat
+      // preview price stays above our COGS; full renders keep the user's choice.
+      imageSize: !reuse && settings.preview ? "1K" : settings.imageSize,
+      imageQuality: !reuse && settings.preview ? "fast" : settings.imageQuality,
       isPreview: reuse ? false : settings.preview,
       reuseFrames: !!reuse,
       segments: reuse?.segments ?? null,
