@@ -47,6 +47,7 @@ import { Button3D } from "@/components/ui/button-3d";
 import { VideoFormatPreview } from "@/components/result/video-format-preview";
 import { MentionTextarea } from "@/components/ui/mention-textarea";
 import { cn } from "@/lib/utils";
+import { captureClient } from "@/lib/analytics";
 
 const STYLE_ICON: Record<VideoModel, typeof Images> = {
   fast: Images,
@@ -187,6 +188,25 @@ export function GenerateVideoModal({
     }
   }, [open, song.id]);
 
+  // --- Funnel instrumentation: client view/intent events for the video flow, so
+  //     the "Video flow" funnels show exactly where users drop off in the modal.
+  useEffect(() => {
+    if (open) captureClient("video_modal_opened", { song_id: song.id });
+  }, [open, song.id]);
+  useEffect(() => {
+    if (open) captureClient("video_step_advanced", { step, model, song_id: song.id });
+  }, [open, step, model, song.id]);
+  useEffect(() => {
+    if (open && step === "direction" && canPreview && brokePreview) {
+      captureClient("video_preview_blocked_insufficient", {
+        song_id: song.id,
+        model,
+        preview_cost: previewCost,
+        credits,
+      });
+    }
+  }, [open, step, canPreview, brokePreview, model, previewCost, credits, song.id]);
+
   // Only members with at least one photo / elements with an image are usable refs.
   const usableMembers = members.filter((m) => m.images.length > 0);
   const usableElements = elements.filter((e) => e.imageUrl);
@@ -251,11 +271,15 @@ export function GenerateVideoModal({
 
   // Preview always runs on autopilot — if Manual is selected, confirm first.
   function onPreviewClick() {
+    captureClient("video_preview_clicked", { song_id: song.id, model, preview_cost: previewCost });
     if (mode === "manual") setConfirmPreview(true);
     else void generate(true);
   }
 
   async function generate(preview: boolean) {
+    if (!preview) {
+      captureClient("video_generate_clicked", { song_id: song.id, model, mode, cost: upfrontCost });
+    }
     const setBusy = preview ? setPreviewing : setSubmitting;
     setBusy(true);
     try {
