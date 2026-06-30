@@ -189,6 +189,30 @@ export function buildWinback(userId: string, lastSongTitle: string | null, songC
   };
 }
 
+/** One-off re-engagement (Jun 2026): we shipped a fix making video previews a
+ *  cheap flat price, so a free account can finally preview its song. Targets the
+ *  users who hit the old (broken) high preview price. Marketing → respects
+ *  emailOptOut + carries an unsubscribe link. */
+export function buildPreviewFixEmail(opts: {
+  userId: string;
+  firstName?: string | null;
+  ctaUrl?: string;
+}): { subject: string; html: string } {
+  const greeting = opts.firstName ? `Hi ${opts.firstName},` : "Hi there,";
+  const cta = opts.ctaUrl ?? `${env.APP_URL}/recent`;
+  return {
+    subject: "We messed up — your free video preview is unlocked",
+    html: layout(
+      p(greeting) +
+        p("When you signed up and uploaded your track, you should've been able to preview it as a lyric video on your free account. You couldn't — and that was on us.") +
+        p("A bug set the price of a video preview way too high, so your free credits didn't cover it. We just fixed it. A preview is now a small, flat price your free account easily covers — so you can watch your song come to life as a lyric video, on the house.") +
+        button(cta, "Generate my free preview →") +
+        p("Thanks for taking a chance on us early. We'd genuinely love to see what you make."),
+      { unsubscribeUrl: unsubscribeUrl(opts.userId) },
+    ),
+  };
+}
+
 /** Look up the freshest user row for email decisions. */
 export async function userForEmail(userId: string): Promise<UserRow | null> {
   const [u] = await db.select().from(users).where(eq(users.id, userId)).limit(1);

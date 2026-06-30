@@ -254,6 +254,9 @@ async function startVideoJob(
       reuseFrames: !!reuse,
       segments: reuse?.segments ?? null,
       characterImageKeys: characterImageKeys ?? null,
+      // Selected per-song elements (customized cast members + objects). The pipeline
+      // restricts the @mention-resolvable catalog to this set; null = whole catalog.
+      elementIds: settings.elementIds ?? null,
       prerenderImages: settings.prerenderImages,
       motionMode: motionModeOverride ?? (settings.model === "fast" ? "ffmpeg" : "ai"),
       tokensCharged: cost,
@@ -406,6 +409,7 @@ export async function videoRoutes(app: FastifyInstance) {
           imageQuality: prev.imageQuality as ImageQuality,
           preview: false,
           prerenderImages: true,
+          elementIds: prev.elementIds ?? undefined, // carry the selected elements
         },
         reuseSeed,
         prev.characterImageKeys, // carry the source's characters into the render
@@ -520,6 +524,7 @@ export async function videoRoutes(app: FastifyInstance) {
           imageQuality: source.imageQuality as ImageQuality,
           preview: false,
           prerenderImages: true,
+          elementIds: source.elementIds ?? undefined, // carry the selected elements
         },
         { segments },
         source.characterImageKeys, // carry the source's members so reuse stays editable

@@ -125,6 +125,21 @@
 }
 
 /* =============================================================================
+   iOS Safari auto-zooms (and won't zoom back out) whenever a focused form field
+   has a font-size under 16px. Many of our inputs use 13–14px, so focusing one on
+   a phone zoomed the whole page in. Force form controls to 16px on phones only —
+   unlayered + !important so it beats Tailwind's text-[13px] utilities. Desktop
+   keeps the designed sizes (this media query doesn't apply ≥ 641px).
+   ========================================================================== */
+@media (max-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* =============================================================================
    Theater mode — drifting aurora blobs behind the video (color set inline).
    ========================================================================== */
 .theater-blob {

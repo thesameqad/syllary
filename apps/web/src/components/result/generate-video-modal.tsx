@@ -27,8 +27,6 @@ import {
   IMAGE_SIZE_INFO,
   type ImageQuality,
   type ImageSize,
-  MAX_VIDEO_CHARACTERS,
-  referenceCountFor,
   type Song,
   type SongElement,
   type VideoJob,
@@ -38,8 +36,17 @@ import {
   type VideoPipelineMode,
   VIDEO_STYLE_PRESETS,
 } from "@syllary/shared";
-import { ApiError, createLyricsVideo, getVideoBrief, listElements, listMembers } from "@/lib/api";
+import {
+  ApiError,
+  createLyricsVideo,
+  deleteElement,
+  getVideoBrief,
+  listElements,
+  listMembers,
+} from "@/lib/api";
 import { ElementEditModal } from "@/components/dashboard/element-edit-modal";
+import { CustomizeCastMemberModal } from "@/components/result/customize-cast-member-modal";
+import { EntityCardMenu } from "@/components/dashboard/entity-card-menu";
 import { useAccount } from "@/lib/account-context";
 import { useToast } from "@/components/ui/toast";
 import { Modal } from "@/components/ui/modal";
@@ -94,24 +101,24 @@ export function GenerateVideoModal({
   const [sceneBrief, setSceneBrief] = useState("");
   const [briefLoading, setBriefLoading] = useState(false);
   const [briefLoaded, setBriefLoaded] = useState(false);
-  // Cast members the user can optionally depict as characters in scenes.
+  // Cast members the user can customize into per-video characters (elements).
   const [members, setMembers] = useState<BandMember[]>([]);
-  const [selectedCharacterIds, setSelectedCharacterIds] = useState<string[]>([]);
-  // Per-song persisted elements — a catalog you create + @mention (mention-driven,
-  // not selected per-video).
+  // Per-song elements — the unified pool of subjects for this video (customized cast
+  // members + objects). Selected ones are included; @mention them in scenes.
   const [elements, setElements] = useState<SongElement[]>([]);
+  const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
+  // New plain-object element (ElementEditModal).
   const [elementModal, setElementModal] = useState<{ element: SongElement | null } | null>(null);
+  // Customize a cast member into an instance, or edit an existing customized one.
+  const [customizeModal, setCustomizeModal] = useState<{
+    member: BandMember | null;
+    element: SongElement | null;
+  } | null>(null);
 
-  // Reference images sent per frame for the selected band members — matches the
-  // server's resolution so the quoted price equals the charged price. (Elements are
-  // mention-driven, resolved per scene, so they're not priced up front here.)
-  const referenceImages = useMemo(
-    () =>
-      referenceCountFor(
-        members.filter((m) => selectedCharacterIds.includes(m.id)).map((m) => m.images.length),
-      ),
-    [members, selectedCharacterIds],
-  );
+  // Characters are now customized-member elements, which (like all elements) are
+  // mention-driven and resolved per scene — the server doesn't price them up front,
+  // so neither do we. Quoted price == charged price.
+  const referenceImages = 0;
 
   // Live price for the chosen settings, computed from the same timeline the
   // renderer will produce — recomputes on every mode/quality/resolution change.
@@ -174,8 +181,9 @@ export function GenerateVideoModal({
       setSceneBrief("");
       setBriefLoaded(false);
       setBriefLoading(false);
-      setSelectedCharacterIds([]);
+      setSelectedElementIds([]);
       setElementModal(null);
+      setCustomizeModal(null);
       setPrerender(true);
       setBriefMode("write");
       // Load the user's band members + this song's elements for the cast step.
@@ -207,37 +215,55 @@ export function GenerateVideoModal({
     }
   }, [open, step, canPreview, brokePreview, model, previewCost, credits, song.id]);
 
-  // Only members with at least one photo / elements with an image are usable refs.
+  // Resolutions actually offered (4K is gated off) — drives the grid column count.
+  const enabledSizes = IMAGE_SIZES.filter((size) => IMAGE_SIZE_INFO[size].enabled);
+  // Cast members with a photo can be customized; elements with an image are usable.
   const usableMembers = members.filter((m) => m.images.length > 0);
   const usableElements = elements.filter((e) => e.imageUrl);
-  // @mention list for the brief = selected band members + ALL the song's elements
-  // (elements are mention-driven, so any of them can be referenced by name).
-  const castNames = [
-    ...usableMembers.filter((m) => selectedCharacterIds.includes(m.id)).map((m) => m.name),
-    ...usableElements.map((e) => e.name),
-  ];
+  // @mention list for the brief = the SELECTED elements (customized members + objects).
+  const castNames = usableElements
+    .filter((e) => selectedElementIds.includes(e.id))
+    .map((e) => e.name);
 
-  // After settings: always stop at the optional cast step — members are picked there
-  // and elements added (skippable with Next).
+  // After settings: always stop at the optional cast step — members are customized
+  // there and elements selected (skippable with Next).
   function afterSettings() {
     setStep("cast");
   }
 
-  function toggleCharacter(id: string) {
-    setSelectedCharacterIds((prev) =>
-      prev.includes(id)
-        ? prev.filter((x) => x !== id)
-        : prev.length >= MAX_VIDEO_CHARACTERS
-          ? prev
-          : [...prev, id],
+  function toggleElement(id: string) {
+    setSelectedElementIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     );
   }
 
-  // Merge a created/edited element into the catalog list.
+  // Merge a created/edited element into the list and auto-select it (the user just
+  // made/customized it for this video). Renames keep the existing selection.
   function onElementSaved(el: SongElement) {
     setElements((prev) =>
       prev.some((e) => e.id === el.id) ? prev.map((e) => (e.id === el.id ? el : e)) : [...prev, el],
     );
+    setSelectedElementIds((prev) => (prev.includes(el.id) ? prev : [...prev, el.id]));
+  }
+
+  // Remove an element everywhere (list + selection) after a delete.
+  async function removeElement(el: SongElement) {
+    await deleteElement(song.id, el.id);
+    setElements((prev) => prev.filter((e) => e.id !== el.id));
+    setSelectedElementIds((prev) => prev.filter((id) => id !== el.id));
+  }
+
+  // Open the right editor for an element: customized members → Customize modal
+  // (re-feeds the source member's photos), plain objects → ElementEditModal.
+  function editElement(el: SongElement) {
+    if (el.sourceMemberId) {
+      setCustomizeModal({
+        member: members.find((m) => m.id === el.sourceMemberId) ?? null,
+        element: el,
+      });
+    } else {
+      setElementModal({ element: el });
+    }
   }
 
   // Append "@Name " to the brief (no-op if already mentioned) — same as the manual
@@ -296,7 +322,7 @@ export function GenerateVideoModal({
         preview,
         // Manual + "I'll generate each scene" = skip pre-rendering all images.
         prerenderImages: mode === "manual" ? prerender : true,
-        characterIds: selectedCharacterIds.length > 0 ? selectedCharacterIds : undefined,
+        elementIds: selectedElementIds.length > 0 ? selectedElementIds : undefined,
       });
       refresh(); // tokens were just charged
       onStarted(created);
@@ -466,7 +492,12 @@ export function GenerateVideoModal({
 
             <div className="mb-4 flex items-center justify-between gap-x-3 rounded-[12px] border border-white/[0.08] bg-white/[0.02] px-4 py-3">
               <div className="min-w-0 text-[12px] text-white/55">
-                {noPrerender ? (
+                {account?.plan === "free" ? (
+                  <>
+                    Free preview · <span className="font-medium text-white">{previewCost} tokens</span>
+                    <span className="text-white/40"> · upgrade for the full video</span>
+                  </>
+                ) : noPrerender ? (
                   <>
                     <span className="font-medium text-white">Nothing now</span> — pay per scene as you
                     generate
@@ -483,7 +514,13 @@ export function GenerateVideoModal({
                   </>
                 )}
               </div>
-              <div className={cn("text-[12px] shrink-0", broke ? "text-pulse" : "text-white/45")}>
+              <div
+                className={cn(
+                  // Hidden on mobile so "This will use…" gets the full width.
+                  "hidden shrink-0 text-[12px] sm:block",
+                  (account?.plan === "free" ? brokePreview : broke) ? "text-pulse" : "text-white/45",
+                )}
+              >
                 {credits === null ? "—" : `You have ${credits} tokens`}
               </div>
             </div>
@@ -493,8 +530,17 @@ export function GenerateVideoModal({
                 <span className="text-[11px] uppercase tracking-[0.5px] text-white/35">
                   Resolution
                 </span>
-                <div className="mt-2 grid grid-cols-3 gap-2">
-                  {IMAGE_SIZES.map((size) => {
+                <div
+                  className={cn(
+                    "mt-2 grid gap-2",
+                    enabledSizes.length === 1
+                      ? "grid-cols-1"
+                      : enabledSizes.length === 2
+                        ? "grid-cols-2"
+                        : "grid-cols-3",
+                  )}
+                >
+                  {enabledSizes.map((size) => {
                     const info = IMAGE_SIZE_INFO[size];
                     const selected = imageSize === size;
                     return (
@@ -611,7 +657,9 @@ export function GenerateVideoModal({
                     >
                       <div className="text-[12.5px] font-medium text-white">Pre-generate all images</div>
                       <p className="mt-0.5 text-[11px] leading-snug text-white/45">
-                        Every scene is drawn up front, ready to review. Charged now.
+                        All {estimate.segments} scenes drawn up front, ready to review. Charges the
+                        full <span className="text-white/70">{cost} tokens</span> (the total above)
+                        when you start — nothing extra later.
                       </p>
                     </button>
                     <button
@@ -626,7 +674,8 @@ export function GenerateVideoModal({
                     >
                       <div className="text-[12.5px] font-medium text-white">I'll generate each scene</div>
                       <p className="mt-0.5 text-[11px] leading-snug text-white/45">
-                        Start blank — script + generate each scene on demand. Pay per scene.
+                        Start blank — <span className="text-white/70">nothing charged now</span>; pay
+                        per scene only as you generate each one.
                       </p>
                     </button>
                   </div>
@@ -658,96 +707,121 @@ export function GenerateVideoModal({
               </span>
               <div>
                 <h3 className="text-[14px] font-medium text-white">Cast &amp; elements (optional)</h3>
-                <p className="mt-0.5 text-[12px] leading-snug text-white/50">
-                  Cast members are people (real or AI-generated) the AI paints into scenes from your
-                  photos; elements are recurring objects (a dog, headphones, props). Add anyone or
-                  anything the video should feature, then reference them by name in the brief or a scene.
+                <p className="mt-0.5 hidden text-[12px] leading-snug text-white/50 sm:block">
+                  Customize a cast member to lock their face, outfit &amp; hair for this video — it
+                  becomes an element. Elements are the subjects (people + objects) the AI paints in;
+                  select the ones to include, then @mention them by name in the brief or a scene.
                 </p>
               </div>
             </div>
 
             <div className="max-h-[52vh] space-y-4 overflow-y-auto pr-1">
-              {/* Cast members */}
+              {/* Cast members — templates: click to customize into a per-video instance */}
               {usableMembers.length > 0 && (
                 <div>
                   <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.5px] text-white/45">
                     <Users className="h-3.5 w-3.5" /> Cast members
                     <span className="font-normal normal-case tracking-normal text-white/30">
-                      · up to {MAX_VIDEO_CHARACTERS}
+                      · click to customize for this video
                     </span>
                   </p>
                   <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-                    {usableMembers.map((m) => {
-                      const sel = selectedCharacterIds.includes(m.id);
-                      const atMax = !sel && selectedCharacterIds.length >= MAX_VIDEO_CHARACTERS;
-                      return (
-                        <button
-                          key={m.id}
-                          type="button"
-                          disabled={atMax}
-                          onClick={() => toggleCharacter(m.id)}
-                          className={cn(
-                            "overflow-hidden rounded-[12px] border text-left transition-colors disabled:opacity-40",
-                            sel
-                              ? "border-pulse bg-pulse/[0.08]"
-                              : "border-white/10 bg-white/[0.02] hover:border-white/25",
+                    {usableMembers.map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setCustomizeModal({ member: m, element: null })}
+                        className="group overflow-hidden rounded-[12px] border border-white/10 bg-white/[0.02] text-left transition-colors hover:border-pulse/50"
+                      >
+                        <div className="relative aspect-[3/4] w-full overflow-hidden bg-black/40">
+                          {m.images[0] ? (
+                            <img src={m.images[0].url} alt="" className="h-full w-full object-cover" />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center">
+                              <User className="h-7 w-7 text-white/25" />
+                            </div>
                           )}
-                        >
-                          <div className="relative aspect-[3/4] w-full overflow-hidden bg-black/40">
-                            {m.images[0] ? (
-                              <img src={m.images[0].url} alt="" className="h-full w-full object-cover" />
-                            ) : (
-                              <div className="flex h-full w-full items-center justify-center">
-                                <User className="h-7 w-7 text-white/25" />
-                              </div>
-                            )}
-                            {sel && (
-                              <span className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-pulse text-white shadow">
-                                <Check className="h-3 w-3" />
-                              </span>
-                            )}
+                          <div className="absolute inset-0 flex items-end justify-start bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100">
+                            <span className="m-1.5 inline-flex items-center gap-1 rounded-full bg-pulse px-2 py-0.5 text-[10px] font-medium text-white shadow">
+                              <Wand2 className="h-3 w-3" /> Customize
+                            </span>
                           </div>
-                          <div className="px-2.5 py-1.5 text-[12px] font-medium text-white">
-                            <span className="block truncate">{m.name}</span>
-                          </div>
-                        </button>
-                      );
-                    })}
+                        </div>
+                        <div className="px-2.5 py-1.5 text-[12px] font-medium text-white">
+                          <span className="block truncate">{m.name}</span>
+                        </div>
+                      </button>
+                    ))}
                   </div>
                 </div>
               )}
 
-              {/* Persisted elements (per-song catalog) — @mention them, no selection */}
+              {/* Elements — the selectable pool (customized members + objects) */}
               <div>
                 <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.5px] text-white/45">
                   <Shapes className="h-3.5 w-3.5" /> Elements
                   <span className="font-normal normal-case tracking-normal text-white/30">
-                    · a dog, headphones — @mention them in the next step
+                    · click to include · ⋮ to edit or delete
                   </span>
                 </p>
                 <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-                  {usableElements.map((e) => (
-                    <button
-                      key={e.id}
-                      type="button"
-                      onClick={() => setElementModal({ element: e })}
-                      className="overflow-hidden rounded-[12px] border border-white/10 bg-white/[0.02] text-left transition-colors hover:border-white/25"
-                    >
-                      <div className="relative aspect-[3/4] w-full overflow-hidden bg-black/40">
-                        {e.imageUrl ? (
-                          <img src={e.imageUrl} alt="" className="h-full w-full object-cover" />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center">
-                            <Shapes className="h-7 w-7 text-white/25" />
-                          </div>
+                  {usableElements.map((e) => {
+                    const sel = selectedElementIds.includes(e.id);
+                    return (
+                      <div
+                        key={e.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => toggleElement(e.id)}
+                        onKeyDown={(ev) => {
+                          if (ev.key === "Enter" || ev.key === " ") {
+                            ev.preventDefault();
+                            toggleElement(e.id);
+                          }
+                        }}
+                        className={cn(
+                          "group relative cursor-pointer overflow-hidden rounded-[12px] border text-left transition-colors",
+                          sel
+                            ? "border-pulse bg-pulse/[0.08]"
+                            : "border-white/10 bg-white/[0.02] hover:border-white/25",
                         )}
+                      >
+                        <div className="relative aspect-[3/4] w-full overflow-hidden bg-black/40">
+                          {e.imageUrl ? (
+                            <img src={e.imageUrl} alt="" className="h-full w-full object-cover" />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center">
+                              <Shapes className="h-7 w-7 text-white/25" />
+                            </div>
+                          )}
+                          {sel && (
+                            <span className="absolute left-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-pulse text-white shadow">
+                              <Check className="h-3 w-3" />
+                            </span>
+                          )}
+                          {/* 3-dot menu — stop propagation so it doesn't toggle selection */}
+                          <div onClick={(ev) => ev.stopPropagation()} onKeyDown={(ev) => ev.stopPropagation()}>
+                            <EntityCardMenu
+                              label={`Manage ${e.name}`}
+                              onEdit={() => editElement(e)}
+                              onDelete={() => removeElement(e)}
+                              deleteTitle="Delete element?"
+                              deleteWarning={
+                                <>
+                                  This removes <span className="text-white/80">{e.name}</span> and its
+                                  reference image from this song. This can’t be undone.
+                                </>
+                              }
+                            />
+                          </div>
+                        </div>
+                        <div className="px-2.5 py-1.5 text-[12px] font-medium text-white">
+                          <span className="block truncate">{e.name}</span>
+                        </div>
                       </div>
-                      <div className="px-2.5 py-1.5 text-[12px] font-medium text-white">
-                        <span className="block truncate">{e.name}</span>
-                      </div>
-                    </button>
-                  ))}
-                  {/* Add element */}
+                    );
+                  })}
+                  {/* Add object element */}
                   <button
                     type="button"
                     onClick={() => setElementModal({ element: null })}
@@ -761,9 +835,9 @@ export function GenerateVideoModal({
             </div>
 
             <p className="mt-3 text-[11px] text-white/40">
-              {selectedCharacterIds.length === 0
-                ? "No cast members selected. You can still @mention any element by name next."
-                : `${selectedCharacterIds.length} cast member${selectedCharacterIds.length > 1 ? "s" : ""} selected · @mention elements by name in the next step.`}
+              {selectedElementIds.length === 0
+                ? "No elements selected. Customize a cast member or add an element to feature it."
+                : `${selectedElementIds.length} element${selectedElementIds.length > 1 ? "s" : ""} selected · @mention them by name in the next step.`}
             </p>
 
             <div className="mt-5 flex items-center justify-between gap-2 border-t border-white/[0.06] pt-4">
@@ -886,7 +960,12 @@ export function GenerateVideoModal({
 
             <div className="mt-4 flex items-center justify-between gap-x-3 rounded-[12px] border border-white/[0.08] bg-white/[0.02] px-4 py-3">
               <div className="min-w-0 text-[12px] text-white/55">
-                {noPrerender ? (
+                {account?.plan === "free" ? (
+                  <>
+                    Free preview · <span className="font-medium text-white">{previewCost} tokens</span>
+                    <span className="text-white/40"> · upgrade for the full video</span>
+                  </>
+                ) : noPrerender ? (
                   <>
                     <span className="font-medium text-white">Nothing now</span> — pay per scene as you
                     generate
@@ -903,7 +982,13 @@ export function GenerateVideoModal({
                   </>
                 )}
               </div>
-              <div className={cn("text-[12px] shrink-0", broke ? "text-pulse" : "text-white/45")}>
+              <div
+                className={cn(
+                  // Hidden on mobile so "This will use…" gets the full width.
+                  "hidden shrink-0 text-[12px] sm:block",
+                  (account?.plan === "free" ? brokePreview : broke) ? "text-pulse" : "text-white/45",
+                )}
+              >
                 {credits === null ? "—" : `You have ${credits} tokens`}
               </div>
             </div>
@@ -931,21 +1016,46 @@ export function GenerateVideoModal({
                   </Button3D>
                 </div>
               </div>
+            ) : account?.plan === "free" ? (
+              <div className="mt-5 border-t border-white/[0.06] pt-4">
+                <Button3D
+                  className="flex w-full items-center justify-center gap-2 py-3 text-[15px]"
+                  disabled={previewing || brokePreview || briefLoading}
+                  onClick={onPreviewClick}
+                >
+                  {previewing ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <Eye className="h-5 w-5" />
+                  )}
+                  {brokePreview ? "Not enough tokens" : "Generate Preview"}
+                </Button3D>
+                <button
+                  type="button"
+                  onClick={() => setStep(usableMembers.length > 0 ? "cast" : "settings")}
+                  className="mx-auto mt-3 block text-[12px] text-white/40 transition-colors hover:text-white"
+                >
+                  Back
+                </button>
+              </div>
             ) : (
-              <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] pt-4">
+              // Mobile: a clean full-width stack, primary (Generate) at the bottom in
+              // the thumb zone, Back ghost on top. Desktop: the inline row with Back on
+              // the left and Preview + Generate on the right.
+              <div className="mt-5 flex flex-col gap-2 border-t border-white/[0.06] pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
                 <Button3D
                   variant="secondary"
-                  className="whitespace-nowrap"
+                  className="order-1 w-full whitespace-nowrap sm:order-none sm:w-auto"
                   onClick={() => setStep(usableMembers.length > 0 ? "cast" : "settings")}
                 >
                   <ArrowLeft className="h-4 w-4" />
                   Back
                 </Button3D>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="contents sm:flex sm:flex-wrap sm:items-center sm:gap-2">
                   {canPreview && (
                     <Button3D
                       variant="secondary"
-                      className="whitespace-nowrap"
+                      className="order-2 w-full whitespace-nowrap sm:order-none sm:w-auto"
                       disabled={previewing || submitting || brokePreview || briefLoading}
                       onClick={onPreviewClick}
                     >
@@ -954,7 +1064,7 @@ export function GenerateVideoModal({
                     </Button3D>
                   )}
                   <Button3D
-                    className="whitespace-nowrap"
+                    className="order-3 w-full whitespace-nowrap sm:order-none sm:w-auto"
                     disabled={submitting || previewing || broke || briefLoading}
                     onClick={() => void generate(false)}
                   >
@@ -981,6 +1091,16 @@ export function GenerateVideoModal({
         songId={song.id}
         element={elementModal.element}
         onClose={() => setElementModal(null)}
+        onSaved={onElementSaved}
+      />
+    )}
+    {customizeModal && (
+      <CustomizeCastMemberModal
+        songId={song.id}
+        style={effectiveStyle}
+        member={customizeModal.member}
+        element={customizeModal.element}
+        onClose={() => setCustomizeModal(null)}
         onSaved={onElementSaved}
       />
     )}

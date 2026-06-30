@@ -34,3 +34,6 @@ uploads/
 apps/api/debug/
 apps/api/src/scripts/debug-local/
 infra/whisperx-cog/predict-test-output.json
+
+# local ffmpeg stitch-perf reproduction scratch (frames, clips, benchmarks)
+.tmp-stitch-repro/

@@ -12,6 +12,7 @@ import gsap from "gsap";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight, Check, FileAudio, Loader2, Upload, X } from "lucide-react";
 import {
+  ACCEPTED_EXTENSIONS,
   creditCost,
   type GenerationMode,
   isAcceptedExtension,
@@ -245,7 +246,10 @@ export function UploadCard({
       <input
         ref={inputRef}
         type="file"
-        accept="audio/*,.mp3,.wav,.flac"
+        // Explicit extensions only (no `audio/*` wildcard) — on iOS a media wildcard
+        // opens the Photo Library / Take Video menu; extensions make it open Files
+        // directly. Kept in sync with the server's accepted types.
+        accept={ACCEPTED_EXTENSIONS.join(",")}
         className="hidden"
         onChange={onInputChange}
       />

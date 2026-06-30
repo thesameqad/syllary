@@ -1,4 +1,4 @@
-import { Clock, Library, LayoutDashboard, LifeBuoy, Megaphone, Upload } from "lucide-react";
+import { Clock, Coins, Library, LayoutDashboard, LifeBuoy, Megaphone, Upload } from "lucide-react";
 import { Link, Navigate, NavLink, Outlet } from "react-router-dom";
 import { SignedIn, SignedOut, UserButton } from "@clerk/clerk-react";
 import { LogoWordmark } from "@/components/logo";
@@ -19,6 +19,24 @@ const ADMIN_NAV = [{ to: "/admin/landing", label: "Landing pages", icon: Megapho
 function useNavItems() {
   const { account } = useAccount();
   return account?.isAdmin ? [...NAV, ...ADMIN_NAV] : NAV;
+}
+
+/** The token balance for mobile — the desktop sidebar's UserCard is hidden there,
+ *  so without this there's nowhere to see tokens left on a phone. Taps through to
+ *  the upgrade page. */
+function MobileTokens() {
+  const { account } = useAccount();
+  if (!account) return null;
+  return (
+    <Link
+      to="/upgrade"
+      aria-label={`${account.credits.toLocaleString()} tokens left`}
+      className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] font-medium text-white/85 transition-colors hover:border-pulse/50 hover:text-white md:hidden"
+    >
+      <Coins className="h-3.5 w-3.5 text-pulse" />
+      {account.credits.toLocaleString()}
+    </Link>
+  );
 }
 
 function navClass({ isActive }: { isActive: boolean }) {
@@ -65,7 +83,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <LifeBuoy className="h-4 w-4" />
             </NavLink>
           </div>
-          <div className="ml-auto">{authConfigured && <UserButton afterSignOutUrl="/" />}</div>
+          <div className="ml-auto flex items-center gap-2.5">
+            {authConfigured && <MobileTokens />}
+            {authConfigured && <UserButton afterSignOutUrl="/" />}
+          </div>
         </header>
         <main className="min-w-0 flex-1 overflow-y-auto p-6 md:p-8">{children}</main>
       </div>

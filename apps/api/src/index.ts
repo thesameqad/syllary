@@ -52,8 +52,22 @@ const allowedOrigins = Array.from(
   new Set([base, `${scheme}${host}`, `${scheme}www.${host}`]),
 );
 
+// In development also accept localhost / private-LAN origins on any port, so the
+// app can be opened from a real phone on the same WiFi (http://<LAN-IP>:5173)
+// without per-IP env juggling. Production stays locked to the configured origins.
+const isDev = env.NODE_ENV !== "production";
+const LAN_ORIGIN =
+  /^https?:\/\/(localhost|127\.0\.0\.1|(?:192\.168|10|172\.(?:1[6-9]|2\d|3[01]))(?:\.\d{1,3}){2})(?::\d+)?$/;
 await app.register(cors, {
-  origin: allowedOrigins,
+  origin: isDev
+    ? (origin, cb) => {
+        // No Origin header = same-origin / curl / native app → allow.
+        if (!origin || allowedOrigins.includes(origin) || LAN_ORIGIN.test(origin)) {
+          return cb(null, true);
+        }
+        return cb(null, false);
+      }
+    : allowedOrigins,
   methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
 });
 

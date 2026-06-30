@@ -266,4 +266,19 @@ export async function generateBackdrop(opts: {
   return withRetries(() => requestImageOnce(content, opts.aspectRatio, opts.imageSize, opts.quality));
 }
 
+/** Generate one image conditioned on reference photos (already-resolved URLs),
+ *  e.g. a customized-cast-member reference: the prompt describes the outfit/hair
+ *  and the attached photos lock the face/identity. Always uses the reference-capable
+ *  Nano path (the "fast" quality tier). Throws on failure. */
+export async function generateReferencedImage(opts: {
+  prompt: string;
+  referenceUrls: string[];
+  aspectRatio: AspectRatio;
+  imageSize: ImageSize;
+}): Promise<Buffer> {
+  const parts: Array<Record<string, unknown>> = [{ type: "text", text: opts.prompt }];
+  for (const url of opts.referenceUrls) parts.push({ type: "image_url", image_url: { url } });
+  return withRetries(() => requestImageOnce(parts, opts.aspectRatio, opts.imageSize, "fast"));
+}
+
 

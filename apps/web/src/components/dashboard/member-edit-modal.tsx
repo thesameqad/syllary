@@ -4,6 +4,7 @@ import { type BandMember, MEMBER_IMAGE_MAX } from "@syllary/shared";
 import {
   ApiError,
   createMember,
+  deleteMember,
   removeMemberImage,
   updateMember,
   uploadMemberImage,
@@ -35,10 +36,32 @@ export function MemberEditModal({
   const [artistId, setArtistId] = useState(initial?.artistId ?? artists[0]?.id ?? "");
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // True when the member shown was created in THIS modal session — an incomplete
+  // draft (it has no photos yet) gets discarded on close so we never persist a
+  // cast member with zero images.
+  const [createdNew, setCreatedNew] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const images = member?.images ?? [];
   const atMax = images.length >= MEMBER_IMAGE_MAX;
+  // Every cast member needs at least one reference photo to be usable.
+  const hasImages = images.length > 0;
+
+  // Close, discarding a just-created member that never got a photo (so it doesn't
+  // linger as an empty, unusable cast member).
+  async function handleClose() {
+    if (busy) return;
+    if (createdNew && member && !hasImages) {
+      try {
+        await deleteMember(member.id);
+        onSaved();
+        toast("Discarded — a cast member needs at least one photo.");
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+    onClose();
+  }
 
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
@@ -67,6 +90,10 @@ export function MemberEditModal({
 
   async function removeImage(key: string) {
     if (!member) return;
+    if (images.length <= 1) {
+      toast("A cast member needs at least one photo — add another before removing this.", "error");
+      return;
+    }
     setBusy(true);
     try {
       const updated = await removeMemberImage(member.id, key);
@@ -93,10 +120,12 @@ export function MemberEditModal({
         onClose();
       } else {
         // Create first, then unlock the photo gallery (uploads need the member id).
+        // It's an incomplete draft until at least one photo is added.
         const created = await createMember({ name: n, artistId });
         setMember(created);
+        setCreatedNew(true);
         onSaved();
-        toast("Cast member created — now add some photos.");
+        toast("Almost there — add at least one photo to finish.");
       }
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "Couldn't save the cast member.", "error");
@@ -108,7 +137,7 @@ export function MemberEditModal({
   return (
     <Modal
       open
-      onClose={() => !busy && onClose()}
+      onClose={() => !busy && void handleClose()}
       title={cropSrc ? "Crop photo" : member ? "Edit cast member" : "New cast member"}
       widthClass="max-w-[520px]"
     >
@@ -209,7 +238,13 @@ export function MemberEditModal({
                 Save the cast member first, then add up to {MEMBER_IMAGE_MAX} photos of them.
               </p>
             )}
-            {member && (
+            {member && !hasImages && (
+              <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-pulse">
+                <ImageIcon className="h-3.5 w-3.5" />
+                At least one reference photo is required to finish.
+              </p>
+            )}
+            {member && hasImages && (
               <p className="mt-1.5 text-[11px] text-white/40">
                 {images.length}/{MEMBER_IMAGE_MAX} photos for this cast member. A few clear shots
                 from different angles give the best likeness.
@@ -222,15 +257,16 @@ export function MemberEditModal({
             <button
               type="button"
               disabled={busy}
-              onClick={onClose}
+              onClick={() => void handleClose()}
               className="rounded-full px-5 py-2.5 text-[14px] text-white/70 transition-colors hover:bg-white/[0.06] hover:text-white disabled:opacity-60"
             >
-              {member ? "Done" : "Cancel"}
+              {member && hasImages ? "Done" : "Cancel"}
             </button>
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || (!!member && !hasImages)}
               onClick={() => void save()}
+              title={member && !hasImages ? "Add at least one reference photo first" : undefined}
               className="inline-flex items-center gap-2 rounded-full bg-pulse px-6 py-2.5 text-[14px] font-medium text-white transition-transform hover:scale-[1.03] disabled:opacity-60"
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}

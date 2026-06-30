@@ -586,16 +586,19 @@ export function LibraryPage() {
           <button
             type="button"
             onClick={() => setImportOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[13px] text-white/80 transition-colors hover:border-pulse/50 hover:text-white"
+            className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[13px] text-white/80 transition-colors hover:border-pulse/50 hover:text-white"
           >
             <DownloadCloud className="h-3.5 w-3.5 text-pulse" />
-            Import from Deezer
+            {/* One word on mobile so both buttons stay on one line; full on desktop. */}
+            <span className="sm:hidden">Import</span>
+            <span className="hidden sm:inline">Import from Deezer</span>
           </button>
           <Link
             to="/upload"
-            className="rounded-full bg-pulse px-4 py-2 text-[13px] font-medium text-white transition-transform hover:scale-[1.03]"
+            className="shrink-0 whitespace-nowrap rounded-full bg-pulse px-4 py-2 text-[13px] font-medium text-white transition-transform hover:scale-[1.03]"
           >
-            Upload new song
+            <span className="sm:hidden">Upload</span>
+            <span className="hidden sm:inline">Upload new song</span>
           </Link>
         </div>
       </div>

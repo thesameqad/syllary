@@ -40,6 +40,11 @@ export const createVideoSchema = z.object({
    *  are not selected here — they're mention-driven: @mention any of the song's
    *  elements in the brief or a scene and its reference is pulled in.) */
   characterIds: z.array(z.string().uuid()).max(MAX_VIDEO_CHARACTERS).optional(),
+  /** Per-song element ids to include in this video (customized cast members +
+   *  objects). Persisted on the job; the pipeline restricts the @mention-resolvable
+   *  element catalog to this set. Omitted/empty → no elements (legacy null jobs fall
+   *  back to the whole catalog). */
+  elementIds: z.array(z.string().uuid()).optional(),
   /** Manual mode only: pre-generate every per-line image up front (true, default),
    *  or skip it (false) and let the user generate each scene on demand — no upfront
    *  image spend, full per-scene control. */

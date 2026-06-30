@@ -330,6 +330,51 @@ export async function videoArtBrief(lines: string[], style: string): Promise<str
   }
 }
 
+const OUTFIT_PROMPT = `You style characters for AI-generated lyric videos.
+Given a character's name and the song's style/mood, propose ONE concrete wardrobe-and-hair look for that character that fits the video.
+Return ONLY the description as plain prose (no preamble, no quotes, no bullet points), about 20-40 words.
+Describe clothing, colors, hair and overall styling. Do NOT describe the face, identity, pose, background, camera, or lighting — only the look.`;
+
+/** Suggest a wardrobe/hair description for a customized cast member, fitting the
+ *  video's style + the song. Returns "" on failure so the UI just leaves the field
+ *  for the user to fill in manually. */
+export async function suggestCharacterOutfit(opts: {
+  memberName: string;
+  style: string;
+  songSummary: string;
+}): Promise<string> {
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: env.OPENROUTER_MODEL,
+        temperature: 0.7,
+        messages: [
+          { role: "system", content: OUTFIT_PROMPT },
+          {
+            role: "user",
+            content: JSON.stringify({
+              character: opts.memberName,
+              style: opts.style,
+              song: opts.songSummary,
+            }),
+          },
+        ],
+      }),
+    });
+    if (!res.ok) return "";
+    const data = (await res.json()) as ChatResponse;
+    const content = data.choices?.[0]?.message?.content;
+    return typeof content === "string" ? content.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
 const INSIGHTS_PROMPT = `You are given the full lyrics of a song as an ordered array of lines.
 Write a concise, factual "about this song" insight for a public lyrics page.
 Return ONLY JSON: { "summary": string, "themes": string[], "mood": string }.

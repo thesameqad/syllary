@@ -9,10 +9,11 @@ import {
   updateElementSchema,
 } from "@syllary/shared";
 import { db } from "../db/client.js";
-import { songElements, type SongElementRow, songs, users } from "../db/schema.js";
+import { bandMembers, songElements, type SongElementRow, songs, users } from "../db/schema.js";
 import { getAuthUserId } from "../lib/clerk.js";
 import { getOrCreateUser } from "../lib/users.js";
 import { generateElementImage } from "../lib/cover-image.js";
+import { suggestCharacterOutfit } from "../lib/openrouter.js";
 import { deleteObject, objectSize, presignGet, putObject } from "../lib/r2.js";
 
 const IMAGE_PREFIX = "song-elements";
@@ -24,7 +25,19 @@ async function toElementDto(row: SongElementRow) {
     name: row.name,
     description: row.description ?? null,
     imageUrl: row.imageKey ? await presignGet(row.imageKey) : null,
+    sourceMemberId: row.sourceMemberId ?? null,
   };
+}
+
+/** The source band member's reference photo R2 keys, owner-scoped. Empty if the
+ *  member is gone or has no photos. */
+async function loadMemberImageKeys(memberId: string, userId: string): Promise<string[]> {
+  const [row] = await db
+    .select({ images: bandMembers.images, name: bandMembers.name })
+    .from(bandMembers)
+    .where(and(eq(bandMembers.id, memberId), eq(bandMembers.userId, userId)))
+    .limit(1);
+  return row ? (row.images ?? []).map((i) => i.key) : [];
 }
 
 /** Verify the caller owns the song (elements are song-scoped). */
@@ -80,6 +93,16 @@ export async function elementRoutes(app: FastifyInstance) {
     if (!(await ownsSong(req.params.id, user.id))) {
       return reply.code(404).send({ error: "Not found." });
     }
+    // A customized cast member is seeded from a band member — verify ownership so we
+    // never link to someone else's member.
+    let sourceMemberId: string | null = null;
+    if (parsed.data.sourceMemberId) {
+      const keys = await loadMemberImageKeys(parsed.data.sourceMemberId, user.id);
+      if (keys.length === 0) {
+        return reply.code(400).send({ error: "That cast member has no reference photos." });
+      }
+      sourceMemberId = parsed.data.sourceMemberId;
+    }
     try {
       const [row] = await db
         .insert(songElements)
@@ -88,6 +111,7 @@ export async function elementRoutes(app: FastifyInstance) {
           userId: user.id,
           name: parsed.data.name,
           description: parsed.data.description?.trim() || null,
+          sourceMemberId,
         })
         .returning();
       return reply.send(await toElementDto(row!));
@@ -160,19 +184,41 @@ export async function elementRoutes(app: FastifyInstance) {
       const row = await loadElement(req.params.id, req.params.elementId, user.id);
       if (!row) return reply.code(404).send({ error: "Not found." });
 
-      const cost = coverImageTokens(parsed.data.model);
+      // Customized cast member: lock the source member's face by conditioning on
+      // their photos. This requires the reference-capable Nano path (FLUX can't take
+      // references), so the model + cost are forced regardless of the request.
+      let referenceUrls: string[] | undefined;
+      if (row.sourceMemberId) {
+        const keys = await loadMemberImageKeys(row.sourceMemberId, user.id);
+        if (keys.length === 0) {
+          return reply.code(400).send({ error: "That cast member has no reference photos." });
+        }
+        referenceUrls = await Promise.all(keys.map((k) => presignGet(k)));
+      }
+      const model = referenceUrls ? "nano" : parsed.data.model;
+
+      const cost = coverImageTokens(model);
       if (user.credits < cost) {
         return reply.code(402).send({
           error: `Not enough tokens — generating an element image costs ${cost}. Upgrade for more.`,
         });
       }
 
+      // Customized cast members bake the video's art direction into the reference so
+      // it matches the scenes' style (e.g. manga, not a realistic photo).
+      const style =
+        referenceUrls && typeof (req.body as { style?: unknown }).style === "string"
+          ? (req.body as { style: string }).style
+          : undefined;
+
       let image: { buffer: Buffer; contentType: string };
       try {
         image = await generateElementImage({
           name: row.name,
           description: parsed.data.prompt,
-          model: parsed.data.model,
+          model,
+          referenceUrls,
+          style,
         });
       } catch (err) {
         req.log.error({ err }, "element-image-generate failed");
@@ -229,6 +275,37 @@ export async function elementRoutes(app: FastifyInstance) {
         await deleteObject(oldKey);
       }
       return reply.send(await toElementDto(updated!));
+    },
+  );
+
+  // Suggest a wardrobe/hair look for a customized cast member, fitting the chosen
+  // video style + this song. Owner-only; best-effort (returns "" on AI failure).
+  app.post<{ Params: { id: string }; Body: { memberId?: string; style?: string } }>(
+    "/songs/:id/elements/suggest-outfit",
+    async (req, reply) => {
+      const clerkId = await getAuthUserId(req);
+      if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+      const user = await getOrCreateUser(clerkId);
+      const memberId = typeof req.body?.memberId === "string" ? req.body.memberId : "";
+      if (!memberId) return reply.code(400).send({ error: "Invalid request." });
+      const [song] = await db
+        .select({ insights: songs.insights })
+        .from(songs)
+        .where(and(eq(songs.id, req.params.id), eq(songs.userId, user.id)))
+        .limit(1);
+      if (!song) return reply.code(404).send({ error: "Not found." });
+      const [member] = await db
+        .select({ name: bandMembers.name })
+        .from(bandMembers)
+        .where(and(eq(bandMembers.id, memberId), eq(bandMembers.userId, user.id)))
+        .limit(1);
+      if (!member) return reply.code(404).send({ error: "Not found." });
+      const outfit = await suggestCharacterOutfit({
+        memberName: member.name,
+        style: typeof req.body?.style === "string" ? req.body.style : "",
+        songSummary: song.insights?.summary ?? "",
+      });
+      return reply.send({ outfit });
     },
   );
 }

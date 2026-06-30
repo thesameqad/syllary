@@ -7,20 +7,27 @@ import { z } from "zod";
 // the `elementIds` selected at generation time live in video.ts's createVideoSchema.
 
 /** An element as returned to the client — name, last description, and a presigned
- *  reference image URL (null until one has been generated + saved). */
+ *  reference image URL (null until one has been generated + saved). When
+ *  `sourceMemberId` is set the element is a "customized cast member": its image is
+ *  generated from that band member's photos + an outfit/hair prompt, so the face
+ *  stays locked while the appearance is pinned for this video. */
 export const songElementSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
   description: z.string().nullable(),
   imageUrl: z.string().url().nullable(),
+  sourceMemberId: z.string().uuid().nullable(),
 });
 export type SongElement = z.infer<typeof songElementSchema>;
 export const songElementListSchema = z.array(songElementSchema);
 
-/** Create a per-song element (its image is generated + saved separately). */
+/** Create a per-song element (its image is generated + saved separately). Pass
+ *  `sourceMemberId` to seed it from a band member (customized cast member) — its
+ *  photos are used as references when generating the locked image. */
 export const createElementSchema = z.object({
   name: z.string().trim().min(1).max(200),
   description: z.string().max(2000).optional(),
+  sourceMemberId: z.string().uuid().optional(),
 });
 export type CreateElement = z.infer<typeof createElementSchema>;
 

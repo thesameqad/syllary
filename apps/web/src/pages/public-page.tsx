@@ -531,6 +531,24 @@ function sectionSegments(lyrics: Lyrics, durationSeconds: number | null): Seg[] 
   return segs;
 }
 
+/** Compact section label for narrow screens — "Verse 2" → "V2", "Chorus" → "C",
+ *  "Pre-Chorus" → "PC", "Outro" → "O". Full words don't fit the structure bar on
+ *  mobile; the full name stays in the button's title tooltip + the playing badge. */
+function abbreviateSection(label: string): string {
+  const l = label.toLowerCase();
+  const num = l.match(/(\d+)\s*$/)?.[1] ?? "";
+  if (l.includes("pre")) return `PC${num}`;
+  if (l.includes("chorus")) return `C${num}`;
+  if (l.includes("verse")) return `V${num}`;
+  if (l.includes("bridge")) return `B${num}`;
+  if (l.includes("hook")) return `H${num}`;
+  if (l.includes("refrain")) return `R${num}`;
+  if (l.includes("intro")) return "I";
+  if (l.includes("outro")) return "O";
+  const word = l.replace(/[^a-z]/g, "").slice(0, 3).toUpperCase();
+  return `${word}${num}` || label;
+}
+
 function segColor(label: string): string {
   const l = label.toLowerCase();
   if (l.includes("pre")) return "rgba(200,100,80,0.2)";
@@ -570,7 +588,7 @@ function SectionTimeline({
               type="button"
               onClick={() => onSeek(seg.start)}
               title={`${seg.label} · ${durationLabel(Math.round(seg.start))}`}
-              className="flex h-full min-w-[34px] items-center justify-center overflow-hidden whitespace-nowrap border-r-[0.5px] border-black/40 px-1.5 text-[10px] font-medium uppercase tracking-[0.3px] transition-[filter] last:border-r-0 hover:brightness-125"
+              className="flex h-full min-w-[22px] items-center justify-center overflow-hidden whitespace-nowrap border-r-[0.5px] border-black/40 px-1 text-[10px] font-medium uppercase tracking-[0.3px] transition-[filter] last:border-r-0 hover:brightness-125 sm:min-w-[34px] sm:px-1.5"
               style={{
                 flexGrow: weight,
                 flexBasis: 0,
@@ -579,7 +597,9 @@ function SectionTimeline({
                 boxShadow: active ? "inset 0 -2px 0 #FF2D2D" : undefined,
               }}
             >
-              {seg.label}
+              {/* Abbreviated on mobile (no room for full words), full on desktop. */}
+              <span className="sm:hidden">{abbreviateSection(seg.label)}</span>
+              <span className="hidden sm:inline">{seg.label}</span>
             </button>
           );
         })}

@@ -485,10 +485,23 @@ export function ManualReview({
       )}
 
       <div className="relative overflow-hidden rounded-[16px] border border-white/[0.08] bg-gradient-to-br from-pulse/[0.05] to-transparent p-4">
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex items-center justify-between gap-2">
           <span className="text-[11px] uppercase tracking-[1px] text-white/40">
             Scene {index + 1} of {segments.length}
           </span>
+          {/* Edit jobs: a second, easy-to-find "Discard edits" (the top banner's was
+              easy to miss). Discarding an edit is safe — the source video survives. */}
+          {onCancel && job.isEdit && (
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={busy}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/65 transition-colors hover:border-pulse/50 hover:text-white disabled:opacity-50"
+            >
+              <X className="h-3.5 w-3.5" />
+              Discard edits
+            </button>
+          )}
         </div>
 
         <AnimatePresence mode="wait" custom={dir}>
@@ -539,6 +552,10 @@ export function ManualReview({
                   <span className="text-[11px] uppercase tracking-[0.5px] text-white/35">
                     Motion — how this shot should move
                   </span>
+                  <p className="mb-1.5 mt-0.5 text-[11px] leading-snug text-white/40">
+                    Controls how the scene moves, not what’s in it. To change what’s shown (e.g.
+                    remove clouds), edit the <span className="text-white/60">Image</span> instead.
+                  </p>
                   <MentionTextarea
                     value={motionDir}
                     onChange={setMotionDir}
@@ -704,16 +721,18 @@ export function ManualReview({
 
         {/* Controls — the per-scene action is the primary; the whole-video render
             is always available but only enabled once every scene has an image. */}
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] pt-4">
+        <div className="mt-4 flex flex-col gap-3 border-t border-white/[0.06] pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
           <Button3D
             variant={allGenerated && !busy ? "primary" : "secondary"}
             disabled={busy || !allGenerated}
             onClick={() => void finalize()}
+            className="w-full whitespace-nowrap sm:w-auto"
           >
+            {/* Icon hidden on mobile so the label stays on one line; spinner kept. */}
             {finalizing ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              <Clapperboard className="h-4 w-4" />
+              <Clapperboard className="hidden h-4 w-4 sm:inline-block" />
             )}
             Finish &amp; render video
             <span className="opacity-80">
@@ -724,12 +743,12 @@ export function ManualReview({
           <Button3D
             disabled={busy}
             onClick={() => void (mode === "motion" ? regenerateClipNow() : regenerate())}
-            className="px-7 py-3 text-[15px]"
+            className="w-full whitespace-nowrap px-7 py-3 text-[15px] sm:w-auto"
           >
             {(mode === "motion" ? clipBusy : regenBusy) ? (
               <Loader2 className="h-[18px] w-[18px] animate-spin" />
             ) : (
-              <RefreshCw className="h-[18px] w-[18px]" />
+              <RefreshCw className="hidden h-[18px] w-[18px] sm:inline-block" />
             )}
             {mode === "motion"
               ? hasClip
@@ -738,7 +757,11 @@ export function ManualReview({
               : hasImage
                 ? "Regenerate this scene"
                 : "Generate this scene"}
-            <span className="opacity-80">· {mode === "motion" ? clipCost : cost} tokens</span>
+            <span className="opacity-80">
+              · {mode === "motion" ? clipCost : cost}
+              {/* "tokens" only fits on desktop; mobile shows just the number. */}
+              <span className="hidden sm:inline"> tokens</span>
+            </span>
           </Button3D>
         </div>
         {!allGenerated && !busy && (
@@ -907,6 +930,13 @@ function ClipPreview({
  *  while a clip regenerates (over the dimmed old clip, or a black box for the
  *  first one). */
 function ClipGenerating() {
+  // Clips take ~30–75s (the video model submits → polls → downloads). A static
+  // spinner that long reads as "stuck", so show elapsed time + set expectations.
+  const [secs, setSecs] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setSecs((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
   return (
     <div className="absolute inset-0 overflow-hidden">
       {/* breathing red glow */}
@@ -957,6 +987,9 @@ function ClipGenerating() {
           <Film className="h-4 w-4 text-pulse" />
           Animating this shot…
         </motion.div>
+        <p className="text-[11px] text-white/45">
+          This usually takes up to a minute · {secs}s
+        </p>
       </div>
     </div>
   );

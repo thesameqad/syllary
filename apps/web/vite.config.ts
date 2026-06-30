@@ -21,5 +21,8 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Listen on all interfaces so the dev app is reachable from other devices on
+    // the LAN (e.g. testing on a real phone at http://<your-LAN-IP>:5173).
+    host: true,
   },
 });

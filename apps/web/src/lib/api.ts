@@ -70,8 +70,27 @@ import {
   type VideoModel,
 } from "@syllary/shared";
 
-export const API_BASE =
-  (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "") || "http://localhost:3000";
+// Resolve the API base. Prod uses VITE_API_URL (a real api domain) verbatim. In
+// dev VITE_API_URL is typically http://localhost:3000 — but when the app is opened
+// from another device on the LAN (e.g. a phone at http://192.168.x.x:5173), that
+// "localhost" would point at the PHONE. So if the page is served from a non-local
+// host and the configured API is localhost (or unset), target the page's host on
+// the same API port instead. Prod (non-localhost VITE_API_URL) is never rewritten.
+function resolveApiBase(): string {
+  const configured = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
+  if (typeof window !== "undefined" && window.location.hostname) {
+    const pageHost = window.location.hostname;
+    const pageIsLocal = pageHost === "localhost" || pageHost === "127.0.0.1";
+    const apiIsLocal = !configured || /\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(configured);
+    if (!pageIsLocal && apiIsLocal) {
+      const port = configured.match(/:(\d+)/)?.[1] ?? "3000";
+      return `${window.location.protocol}//${pageHost}:${port}`;
+    }
+  }
+  return configured || "http://localhost:3000";
+}
+
+export const API_BASE = resolveApiBase();
 
 // Clerk's getToken is a React hook; a bridge component registers it here so the
 // plain fetch helpers can attach the bearer token. Null when signed out.
@@ -617,15 +636,36 @@ export async function generateElementImage(
   elementId: string,
   prompt: string,
   model: CoverModel,
+  /** Customized cast members: the video's art direction, baked into the reference. */
+  style?: string,
 ): Promise<CoverGenerateResponse> {
   const res = await fetch(`${API_BASE}/api/songs/${songId}/elements/${elementId}/image/generate`, {
     method: "POST",
     headers: { "content-type": "application/json", ...(await authHeaders()) },
-    body: JSON.stringify({ prompt, model }),
+    body: JSON.stringify({ prompt, model, style }),
   });
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't generate the image."), res.status);
   return coverGenerateResponseSchema.parse(data);
+}
+
+/** Suggest a wardrobe/hair look for a customized cast member (best-effort; returns
+ *  "" if the AI couldn't produce one). `style` is the chosen video art direction. */
+export async function suggestElementOutfit(
+  songId: string,
+  memberId: string,
+  style: string,
+): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/songs/${songId}/elements/suggest-outfit`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ memberId, style }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Couldn't suggest a look."), res.status);
+  return typeof (data as { outfit?: unknown }).outfit === "string"
+    ? (data as { outfit: string }).outfit
+    : "";
 }
 
 /** Commit a generated image as the element's reference photo; returns the element. */

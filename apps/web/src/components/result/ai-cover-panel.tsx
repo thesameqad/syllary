@@ -26,6 +26,10 @@ export function AiCoverPanel({
   placeholder = "e.g. a lone figure on a neon-lit rooftop at night, moody and cinematic",
   saveLabel = "Save cover",
   savedToast = "Cover updated.",
+  hideModelPicker = false,
+  forcedModel,
+  onSuggest,
+  previewAspect = "square",
 }: {
   defaultPrompt: string;
   onGenerate: (prompt: string, model: CoverModel) => Promise<{ key: string; url: string }>;
@@ -36,12 +40,22 @@ export function AiCoverPanel({
   placeholder?: string;
   saveLabel?: string;
   savedToast?: string;
+  /** Hide the model grid (e.g. customized cast members are locked to one model). */
+  hideModelPicker?: boolean;
+  /** Force the model used for generation (defaults to "flux"). */
+  forcedModel?: CoverModel;
+  /** When set, renders a "Suggest with AI" affordance that fills the prompt. */
+  onSuggest?: () => Promise<string>;
+  /** Preview frame shape: "square" for covers, "portrait" for full-body character
+   *  references (9:16, shown whole so the body isn't cropped). */
+  previewAspect?: "square" | "portrait";
 }) {
   const toast = useToast();
   const [prompt, setPrompt] = useState(defaultPrompt);
-  const [model, setModel] = useState<CoverModel>("flux");
+  const [model, setModel] = useState<CoverModel>(forcedModel ?? "flux");
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
   const [preview, setPreview] = useState<{ key: string; url: string } | null>(null);
 
   const cost = coverImageTokens(model);
@@ -74,15 +88,43 @@ export function AiCoverPanel({
     }
   }
 
-  const working = busy || saving;
+  async function suggest() {
+    if (!onSuggest) return;
+    setSuggesting(true);
+    try {
+      const text = await onSuggest();
+      if (text.trim()) setPrompt(text.trim());
+      else toast("Couldn't suggest a look — try writing one.", "error");
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't suggest a look.", "error");
+    } finally {
+      setSuggesting(false);
+    }
+  }
+
+  const working = busy || saving || suggesting;
 
   return (
     <div>
-      <div className="flex items-start gap-4">
+      {/* Stack preview over the description on phones (a side-by-side input is too
+          narrow on mobile); side-by-side from sm up. */}
+      <div className="flex flex-col items-stretch gap-4 sm:flex-row sm:items-start">
         {/* Preview / placeholder */}
-        <div className="relative h-40 w-40 shrink-0 overflow-hidden rounded-[12px] border border-white/10 bg-black/40">
+        <div
+          className={cn(
+            "relative shrink-0 self-center overflow-hidden rounded-[12px] border border-white/10 bg-black/40 sm:self-auto",
+            previewAspect === "portrait" ? "h-56 w-[126px]" : "h-40 w-40",
+          )}
+        >
           {preview ? (
-            <img src={preview.url} alt="Generated cover" className="h-full w-full object-cover" />
+            <img
+              src={preview.url}
+              alt="Generated reference"
+              className={cn(
+                "h-full w-full",
+                previewAspect === "portrait" ? "object-contain" : "object-cover",
+              )}
+            />
           ) : (
             <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-white/30">
               <Sparkles className="h-7 w-7" />
@@ -99,9 +141,26 @@ export function AiCoverPanel({
 
         {/* Prompt */}
         <div className="min-w-0 flex-1">
-          <span className="text-[11px] uppercase tracking-[0.5px] text-white/40">
-            {describeLabel}
-          </span>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] uppercase tracking-[0.5px] text-white/40">
+              {describeLabel}
+            </span>
+            {onSuggest && (
+              <button
+                type="button"
+                disabled={working}
+                onClick={() => void suggest()}
+                className="inline-flex items-center gap-1 text-[11px] text-pulse transition-colors hover:text-white disabled:opacity-50"
+              >
+                {suggesting ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3 w-3" />
+                )}
+                Suggest with AI
+              </button>
+            )}
+          </div>
           <textarea
             value={prompt}
             disabled={working}
@@ -114,6 +173,7 @@ export function AiCoverPanel({
       </div>
 
       {/* Model picker */}
+      {!hideModelPicker && (
       <div className="mt-4">
         <span className="text-[11px] uppercase tracking-[0.5px] text-white/40">Quality</span>
         <div className="mt-1.5 grid grid-cols-2 gap-2">
@@ -153,13 +213,16 @@ export function AiCoverPanel({
           })}
         </div>
       </div>
+      )}
 
       <div className="mt-5 flex items-center justify-end gap-2 border-t border-white/[0.06] pt-4">
+        {/* Cancel is hidden on mobile (3 buttons wrap on a phone) — the modal's X /
+            backdrop still cancels; shown from sm up. */}
         <button
           type="button"
           disabled={working}
           onClick={onCancel}
-          className="rounded-full px-5 py-2.5 text-[14px] text-white/70 transition-colors hover:bg-white/[0.06] hover:text-white disabled:opacity-60"
+          className="hidden rounded-full px-5 py-2.5 text-[14px] text-white/70 transition-colors hover:bg-white/[0.06] hover:text-white disabled:opacity-60 sm:block"
         >
           Cancel
         </button>
@@ -171,7 +234,8 @@ export function AiCoverPanel({
               onClick={() => void generate()}
               className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-[14px] text-white/80 transition-colors hover:border-pulse/50 hover:text-white disabled:opacity-60"
             >
-              <RefreshCw className="h-4 w-4 text-pulse" />
+              {/* Decorative icons hidden on mobile to keep buttons on one line. */}
+              <RefreshCw className="hidden h-4 w-4 text-pulse sm:inline-block" />
               Regenerate · {cost}
             </button>
             <button
@@ -180,7 +244,11 @@ export function AiCoverPanel({
               onClick={() => void save()}
               className="inline-flex items-center gap-2 rounded-full bg-pulse px-6 py-2.5 text-[14px] font-medium text-white transition-transform hover:scale-[1.03] disabled:opacity-60"
             >
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
+              {saving ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ImageIcon className="hidden h-4 w-4 sm:inline-block" />
+              )}
               {saving ? "Saving…" : saveLabel}
             </button>
           </>
@@ -191,7 +259,11 @@ export function AiCoverPanel({
             onClick={() => void generate()}
             className="inline-flex items-center gap-2 rounded-full bg-pulse px-6 py-2.5 text-[14px] font-medium text-white transition-transform hover:scale-[1.03] disabled:opacity-60"
           >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {busy ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="hidden h-4 w-4 sm:inline-block" />
+            )}
             {busy ? "Generating…" : `Generate · ${cost} tokens`}
           </button>
         )}

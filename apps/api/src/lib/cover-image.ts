@@ -1,6 +1,6 @@
 import type { CoverModel } from "@syllary/shared";
 import { generateFalImage } from "./fal-image.js";
-import { generateBackdrop } from "./openrouter-image.js";
+import { generateBackdrop, generateReferencedImage } from "./openrouter-image.js";
 
 // AI album cover generation, dispatched by model:
 //   - "flux" → fal.ai FLUX schnell (cheap default, ~$0.003/image)
@@ -64,12 +64,55 @@ export function buildElementPrompt(name: string, description: string): string {
   ].join(" ");
 }
 
-/** Generate a square reference image for a persisted element. Throws on failure. */
+/** Wrap an outfit/hair description into a prompt for a "customized cast member"
+ *  reference — the SAME person shown in the attached photos, restyled into a fixed
+ *  look so their appearance stays locked across every scene of the video. The face
+ *  comes from the references; the prompt governs wardrobe/hair AND the video's art
+ *  style so the reference already matches the scenes (e.g. a manga illustration, not
+ *  a realistic photo). */
+export function buildCustomizedMemberPrompt(name: string, outfit: string, style?: string): string {
+  const label = name.trim() || "the character";
+  const look = outfit.trim();
+  const art = style?.trim();
+  return [
+    `A clean, full-body character reference of ${label} — the SAME individual shown in the attached reference photos (not a lookalike).`,
+    `Preserve their facial features, identity and build, and clearly SHOW their face and head — full figure, head-to-toe, facing the camera.`,
+    art
+      ? `Render the WHOLE character in this exact art style (do NOT make it a realistic photo): ${art}.`
+      : ``,
+    look
+      ? `Give them this exact wardrobe and hair: ${look}. Keep this outfit, hair and styling consistent.`
+      : `Keep a clean, consistent wardrobe and hairstyle.`,
+    `A single subject, centered on a plain neutral background, evenly lit and sharp — usable as a recurring character reference for a music video.`,
+    `No text, watermarks, logos, borders, or extra people.`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** Generate a reference image for a persisted element. Throws on failure.
+ *  - Plain object element (no `referenceUrls`): square image from the description.
+ *  - Customized cast member (`referenceUrls` = the source member's photos): a
+ *    vertical portrait conditioned on those photos so the face is locked, the
+ *    description pinning the outfit/hair. Always uses the reference-capable Nano path. */
 export async function generateElementImage(opts: {
   name: string;
   description: string;
   model: CoverModel;
+  referenceUrls?: string[];
+  /** Customized cast members only: the video's art direction, baked into the
+   *  reference so it matches the scenes' style (e.g. manga, not a photo). */
+  style?: string;
 }): Promise<{ buffer: Buffer; contentType: string }> {
+  if (opts.referenceUrls && opts.referenceUrls.length > 0) {
+    const buffer = await generateReferencedImage({
+      prompt: buildCustomizedMemberPrompt(opts.name, opts.description, opts.style),
+      referenceUrls: opts.referenceUrls,
+      aspectRatio: "9:16",
+      imageSize: "1K",
+    });
+    return { buffer, contentType: "image/png" };
+  }
   return generateImageBuffer({
     prompt: buildElementPrompt(opts.name, opts.description),
     model: opts.model,

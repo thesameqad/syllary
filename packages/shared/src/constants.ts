@@ -315,7 +315,7 @@ export const IMAGE_SIZE_INFO: Record<
 > = {
   "1K": { label: "1K", description: "Fastest, lowest cost — a little soft at 1080p.", enabled: true },
   "2K": { label: "2K", description: "Crisp at 1080p. The best balance.", enabled: true },
-  "4K": { label: "4K", description: "Maximum detail. Slower and pricier.", enabled: true },
+  "4K": { label: "4K", description: "Maximum detail. Slower and pricier.", enabled: false },
 };
 
 /** AI album-cover image model (separate from the video-backdrop models).

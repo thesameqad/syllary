@@ -212,8 +212,9 @@ export const videoJobs = pgTable(
     // can reference "Emily"/"Justin"). Null = no characters. (Legacy jobs stored a
     // bare string[][] here; normalizeCharacterRefs() reads both shapes.)
     characterImageKeys: jsonb("character_image_keys").$type<CharacterReference[]>(),
-    // Legacy: per-song element ids once selected per-job. Elements are now
-    // mention-driven (resolved per-frame from the song catalog), so this is unused.
+    // Per-song element ids included in this video (selected on the Cast step).
+    // The pipeline restricts the @mention-resolvable element catalog to this set.
+    // Null = legacy job → fall back to the whole song catalog.
     elementIds: jsonb("element_ids").$type<string[]>(),
     // Manual mode: pre-generate every per-line image up front (true), or skip it and
     // let the user generate each scene on demand (false). Ignored by autopilot.
@@ -277,6 +278,12 @@ export const songElements = pgTable(
     description: text("description"),
     // R2 key of the generated reference image; null until generated + saved.
     imageKey: text("image_key"),
+    // When set, this element is a "customized cast member": its image is generated
+    // from this band member's photos + an outfit/hair prompt (face locked). Null for
+    // plain object elements. SET NULL if the source member is deleted.
+    sourceMemberId: uuid("source_member_id").references(() => bandMembers.id, {
+      onDelete: "set null",
+    }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

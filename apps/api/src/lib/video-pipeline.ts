@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { and, eq, or, sql } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import {
   type AspectRatio,
   buildPreviewSegments,
@@ -133,13 +133,23 @@ export async function reapStaleVideoJob(row: VideoJobRow): Promise<VideoJobRow> 
   return failed;
 }
 
-/** The song's elements that have an image — mention-resolvable reference subjects. */
+/** The song's elements that have an image — mention-resolvable reference subjects.
+ *  Restricted to the job's selected `elementIds` when set; null/undefined (legacy
+ *  jobs) falls back to the whole song catalog. An empty array selects nothing. */
 type ElementRef = { name: string; imageKey: string };
-async function loadSongElementRefs(songId: string): Promise<ElementRef[]> {
+async function loadSongElementRefs(
+  songId: string,
+  elementIds?: string[] | null,
+): Promise<ElementRef[]> {
+  if (elementIds && elementIds.length === 0) return [];
+  const where =
+    elementIds && elementIds.length > 0
+      ? and(eq(songElements.songId, songId), inArray(songElements.id, elementIds))
+      : eq(songElements.songId, songId);
   const rows = await db
     .select({ name: songElements.name, imageKey: songElements.imageKey })
     .from(songElements)
-    .where(eq(songElements.songId, songId));
+    .where(where);
   return rows.flatMap((r) => (r.imageKey ? [{ name: r.name, imageKey: r.imageKey }] : []));
 }
 
@@ -295,8 +305,9 @@ export async function regenerateSegmentImage(
   if (newDirection !== undefined) seg.direction = newDirection.trim() || null;
   // Scenery-only toggle ("No one") — persisted so finalize/re-render honors it too.
   if (noCast !== undefined) seg.noCast = noCast;
-  // Members + the song's elements @mentioned in this scene (mention-driven).
-  const elementCatalog = await loadSongElementRefs(job.songId);
+  // Members + the song's elements @mentioned in this scene (mention-driven, within
+  // the job's selected element set).
+  const elementCatalog = await loadSongElementRefs(job.songId, job.elementIds);
   const characterReferences = frameCharacterRefs(job, seg, elementCatalog);
   const prompt = buildBackdropPrompt({
     style: job.styleDescription,
@@ -417,26 +428,45 @@ async function uploadClipReliably(clipKey: string, buf: Buffer): Promise<void> {
   throw new Error(`Could not store clip in R2: ${(uploadErr as Error).message}`);
 }
 
-/** The motion prompt for a segment: the per-model default (byte-identical to the
- *  old hardcoded prompts when no motion direction is set) plus the user's per-scene
- *  motion direction. */
+/** The motion prompt for a segment. When the user has NOT set a motion direction we
+ *  use a rich default that prescribes pleasant ambient motion (drifting light, moving
+ *  clouds, swaying elements). When they HAVE, that boilerplate would FIGHT their intent
+ *  (e.g. it asks for "moving clouds" while they asked for none), so we drop it and make
+ *  their direction authoritative — the user decides what moves and what stays still. */
 function buildMotionPrompt(job: VideoJobRow, seg: VideoSegment): string {
-  const base =
-    job.model === "pro"
-      ? `Cinematic camera motion that smoothly transforms the scene, in the style: ${job.styleDescription}. ` +
-        `Keep any lyric text in the frame legible and stable; add no other text. No real recognizable people.`
-      : [
-          `Bring this scene to life with gentle, natural motion in the style: ${job.styleDescription}.`,
-          seg.text
-            ? `The whole scene moves softly — drifting light, moving clouds or traffic, swaying elements, soft parallax — like a short looping background film.`
-            : `Soft ambient movement throughout — drifting light and atmosphere.`,
-          seg.text ? `Keep the lyric text in the frame perfectly still, sharp and fully legible.` : ``,
-          `Smooth, tasteful motion, no hard camera cuts. No warping of any text. No real people.`,
-        ].join(" ");
   // Keep the raw "@Name" in storage (so the editor highlights mentions), but strip
   // the "@" for the model so "@Rex wags his tail" reads as "Rex wags his tail".
   const dir = seg.motionDirection?.trim().replace(/@(?=[\p{L}\d])/gu, "");
-  return dir ? `${base} Motion direction for this shot: ${dir}.` : base;
+  const textRule = seg.text
+    ? `Keep the lyric text in the frame perfectly still, sharp and fully legible.`
+    : ``;
+
+  // User-directed: their words govern the motion; only add the non-negotiable
+  // constraints (style, text legibility, no people). No prescribed clouds/swaying.
+  if (dir) {
+    return [
+      `Animate this still image in the style: ${job.styleDescription}, following the motion direction below EXACTLY.`,
+      `Motion direction: ${dir}.`,
+      `Animate ONLY what the direction calls for. Anything it says should not move must stay completely still, and do not add any motion it does not mention.`,
+      textRule,
+      `Smooth, tasteful motion, no hard camera cuts. No warping of any text. No real recognizable people.`,
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  // Auto (no direction) — the original per-model defaults, unchanged.
+  return job.model === "pro"
+    ? `Cinematic camera motion that smoothly transforms the scene, in the style: ${job.styleDescription}. ` +
+        `Keep any lyric text in the frame legible and stable; add no other text. No real recognizable people.`
+    : [
+        `Bring this scene to life with gentle, natural motion in the style: ${job.styleDescription}.`,
+        seg.text
+          ? `The whole scene moves softly — drifting light, moving clouds or traffic, swaying elements, soft parallax — like a short looping background film.`
+          : `Soft ambient movement throughout — drifting light and atmosphere.`,
+        textRule,
+        `Smooth, tasteful motion, no hard camera cuts. No warping of any text. No real people.`,
+      ].join(" ");
 }
 
 /** Generate ONE motion clip for a segment (animating its frame; for Cinematic also
@@ -880,7 +910,7 @@ export async function runVideoPipeline(jobId: string): Promise<void> {
     .where(eq(videoJobs.id, job.id));
 
   // The song's elements (mention-driven references), resolved per frame.
-  const elementCatalog = await loadSongElementRefs(job.songId);
+  const elementCatalog = await loadSongElementRefs(job.songId, job.elementIds);
   const workDir = path.join(os.tmpdir(), `syllary-video-${job.id}`);
   try {
     await mkdir(workDir, { recursive: true });
@@ -930,7 +960,7 @@ export async function finalizeVideoJob(jobId: string): Promise<void> {
   }
 
   const aspectRatio = job.aspectRatio as AspectRatio;
-  const elementCatalog = await loadSongElementRefs(job.songId);
+  const elementCatalog = await loadSongElementRefs(job.songId, job.elementIds);
   const workDir = path.join(os.tmpdir(), `syllary-video-${job.id}-final`);
   try {
     await mkdir(workDir, { recursive: true });

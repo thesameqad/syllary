@@ -32,6 +32,8 @@ import { Modal } from "@/components/ui/modal";
 import { ManualReview } from "@/components/result/manual-review";
 import { TheaterMode } from "@/components/result/theater-mode";
 import { cn } from "@/lib/utils";
+import { captureClient } from "@/lib/analytics";
+import { PlansModal } from "@/components/result/plans-modal";
 
 /** The Cinematic (Seedance) model rejected the frames as possibly a real person —
  *  worth offering a retry on the more permissive motion model. */
@@ -215,6 +217,8 @@ export function VideoTabs({
   const [busy, setBusy] = useState(false);
   const [promoting, setPromoting] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [plansModalOpen, setPlansModalOpen] = useState(false);
+  const previewPlayedRef = useRef<string | null>(null);
 
   // When a new job starts, focus its tab and start tracking it.
   useEffect(() => {
@@ -286,7 +290,13 @@ export function VideoTabs({
       setLiveJob(job);
     } catch (e) {
       setPromoting(false);
-      toast(e instanceof ApiError ? e.message : "Couldn't start the full video.", "error");
+      // Out of tokens (100% of the time on free tier) → the plans modal IS the
+      // purchase moment. Real errors still get a toast.
+      if (e instanceof ApiError && (e.status === 402 || /not enough tokens|credits/i.test(e.message))) {
+        setPlansModalOpen(true);
+      } else {
+        toast(e instanceof ApiError ? e.message : "Couldn't start the full video.", "error");
+      }
     }
   }
 
@@ -520,6 +530,12 @@ export function VideoTabs({
               controls
               controlsList="nodownload"
               onContextMenu={(e) => e.preventDefault()}
+              onPlay={() => {
+                if (previewShown && previewPlayedRef.current !== url) {
+                  previewPlayedRef.current = url;
+                  captureClient("video_preview_played", { song_id: song.id, model: selected });
+                }
+              }}
               crossOrigin="anonymous"
               className="block aspect-video w-full overflow-hidden rounded-[10px] border border-white/10 bg-black"
             />
@@ -532,17 +548,33 @@ export function VideoTabs({
             )}
           </div>
           {previewShown ? (
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-              <span className="text-[12px] text-white/45">A ~10s sample — love it?</span>
-              <Button3D disabled={promoting} onClick={() => void generateFull()} className="whitespace-nowrap">
-                {promoting ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Clapperboard className="h-4 w-4" />
-                )}
-                Generate full music video
-              </Button3D>
-            </div>
+            <>
+              <div className="mt-4">
+                <p className="mb-2 text-center text-[13px] text-white/55 sm:text-left">
+                  That&apos;s your free ~10s preview. Love it? Get the full 1080p music video.
+                </p>
+                <Button3D
+                  disabled={promoting}
+                  onClick={() => {
+                    captureClient("video_full_clicked", { song_id: song.id, model: selected });
+                    void generateFull();
+                  }}
+                  className="flex w-full items-center justify-center gap-2 py-3 text-[15px]"
+                >
+                  {promoting ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <Clapperboard className="h-5 w-5" />
+                  )}
+                  Generate the full video
+                </Button3D>
+              </div>
+              <PlansModal
+                open={plansModalOpen}
+                onClose={() => setPlansModalOpen(false)}
+                trigger="video_full"
+              />
+            </>
           ) : (
             <>
             <div className="mt-3 flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
