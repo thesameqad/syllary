@@ -67,9 +67,35 @@ export function initAdTags(): void {
   }
 }
 
+let adUserEmail: string | null = null;
+
+/** Provide the signed-in user's email for enhanced conversions. Google and
+ *  Microsoft normalize + SHA-256 hash it client-side before sending; the raw
+ *  address never leaves the tag. Call whenever the email becomes known — it's
+ *  re-asserted right before each conversion event so ordering can't drop it. */
+export function setAdUserData(email: string | null | undefined): void {
+  if (!email || email === adUserEmail) return;
+  adUserEmail = email;
+  applyAdUserData();
+}
+
+function applyAdUserData(): void {
+  if (!adUserEmail) return;
+  try {
+    if (window.gtag && GTAG_ID) window.gtag("set", "user_data", { email: adUserEmail });
+    const uetq = window.uetq as { push?: (...a: unknown[]) => void } | unknown[] | undefined;
+    if (uetq && "push" in (uetq as object)) {
+      (uetq as { push: (...a: unknown[]) => void }).push("set", { pid: { em: adUserEmail } });
+    }
+  } catch {
+    // measurement must never break the app
+  }
+}
+
 /** Report a completed sign-up to both networks (secondary/bid-data conversion;
  *  the primary "purchase" conversion is imported server-side from Stripe). */
 export function reportSignupConversion(): void {
+  applyAdUserData();
   try {
     if (window.gtag) {
       if (GTAG_SIGNUP_LABEL) window.gtag("event", "conversion", { send_to: GTAG_SIGNUP_LABEL });
@@ -88,6 +114,7 @@ export function reportSignupConversion(): void {
  *  Fired from the Stripe success page. `transactionId` (the Checkout session id)
  *  lets Google dedupe if the page is refreshed or bookmarked. */
 export function reportPurchaseConversion(opts: { valueUsd: number | null; transactionId?: string }): void {
+  applyAdUserData();
   try {
     if (window.gtag && GTAG_PURCHASE_LABEL) {
       const payload: Record<string, unknown> = { send_to: GTAG_PURCHASE_LABEL };

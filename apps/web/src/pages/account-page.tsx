@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
-import { SignedIn, SignedOut, UserButton } from "@clerk/clerk-react";
+import { SignedIn, SignedOut, UserButton, useUser } from "@clerk/clerk-react";
 import { Check, ExternalLink, Loader2 } from "lucide-react";
 import type { Account, BillingPeriod } from "@syllary/shared";
 import { ApiError, changePlan, getAccount, openBillingPortal, startCheckout } from "@/lib/api";
 import { authConfigured } from "@/lib/auth";
-import { reportPurchaseConversion } from "@/lib/ad-tags";
+import { reportPurchaseConversion, setAdUserData } from "@/lib/ad-tags";
 import { LYRICS_TIERS, planPriceUsd, PLAN_LABEL, type PlanTier, VIDEO_TIERS } from "@/lib/plans";
 import { LogoWordmark } from "@/components/logo";
 import { cn } from "@/lib/utils";
@@ -121,6 +121,7 @@ function PlanCard({
 }
 
 function AccountInner() {
+  const { user } = useUser();
   const [account, setAccount] = useState<Account | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -143,6 +144,9 @@ function AccountInner() {
     const firedKey = `purchase_fired:${sessionId ?? "nosession"}`;
     if (!sessionStorage.getItem(firedKey)) {
       sessionStorage.setItem(firedKey, "1");
+      // Enhanced conversions: the buyer's email must be staged before the
+      // conversion event so Google/Microsoft can match cookieless purchases.
+      setAdUserData(user?.primaryEmailAddress?.emailAddress ?? user?.emailAddresses?.[0]?.emailAddress);
       // Annual subscriptions renew ~a year out; use that to pick the right price.
       const period: BillingPeriod =
         account.currentPeriodEnd &&
@@ -152,7 +156,11 @@ function AccountInner() {
       reportPurchaseConversion({ valueUsd: planPriceUsd(account.plan, period), transactionId: sessionId });
     }
     window.history.replaceState({}, "", "/account");
-  }, [account]);
+    // `user` is intentionally not a dependency: the conversion must fire as soon
+    // as the account loads, with the email as best-effort (AnalyticsBridge has
+    // usually staged it already; Clerk resolving later can't re-fire past the
+    // sessionStorage guard anyway).
+  }, [account]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function manage() {
     setBusy(true);

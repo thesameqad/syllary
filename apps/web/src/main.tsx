@@ -8,7 +8,7 @@ import { ClerkProvider, useAuth, useUser } from "@clerk/clerk-react";
 import { dark } from "@clerk/themes";
 import * as Sentry from "@sentry/react";
 import { App } from "./App";
-import { initAdTags, reportSignupConversion } from "@/lib/ad-tags";
+import { initAdTags, reportSignupConversion, setAdUserData } from "@/lib/ad-tags";
 import { identifyUser, initAnalytics } from "@/lib/analytics";
 import { setTokenGetter } from "@/lib/api";
 import { clerkPublishableKey } from "@/lib/auth";
@@ -43,6 +43,7 @@ function AnalyticsBridge() {
   const email = user?.primaryEmailAddress?.emailAddress ?? user?.emailAddresses?.[0]?.emailAddress;
   useEffect(() => {
     if (!user) return;
+    setAdUserData(email);
     identifyUser(user.id, {
       ...(email ? { email } : {}),
       ...(user.fullName ? { name: user.fullName } : {}),
