@@ -213,6 +213,32 @@ export function buildPreviewFixEmail(opts: {
   };
 }
 
+/** One-off apology (Jul 2026): the first reel subscriber hit the full-video
+ *  paywall right after paying — the plan's token grant didn't cover the render.
+ *  Sent after a manual token top-up. Transactional (service notice), so no
+ *  unsubscribe link needed. */
+export function buildTokenFixEmail(opts: {
+  firstName?: string | null;
+  ctaUrl: string;
+}): { subject: string; html: string } {
+  const greeting = opts.firstName ? `Hi ${opts.firstName},` : "Hi there,";
+  return {
+    subject: "Welcome to the Syllary family — and a token bug, fixed",
+    html: layout(
+      p(greeting) +
+        p("Thank you for subscribing — we're genuinely happy to have you in the Syllary family.") +
+        p(
+          "Now, an apology. Right after you upgraded, you clicked “Create full video” and kept hitting a paywall. That was a bug on our side with how tokens were counted — not something you did. It's fixed, and we've topped up your account to make up for it: <strong>you now have enough tokens for roughly 5–10 full lyric videos.</strong> Your song is sitting right where you left it, one click away from the full 1080p render.",
+        ) +
+        button(opts.ctaUrl, "Finish your full video →") +
+        p(
+          `One more thing, and this one matters to me personally. I'm Anton, the founder — <strong><a href="mailto:anton@syllary.com" style="color:${BRAND.red};">anton@syllary.com</a></strong> is my direct email. If anything breaks, behaves in a way you didn't expect, or there's a missing feature that would help your music, write me. I read everything and I'll usually have a fix or the feature shipped very fast.`,
+        ) +
+        p("Make something great,<br/>Anton · Syllary"),
+    ),
+  };
+}
+
 /** Look up the freshest user row for email decisions. */
 export async function userForEmail(userId: string): Promise<UserRow | null> {
   const [u] = await db.select().from(users).where(eq(users.id, userId)).limit(1);

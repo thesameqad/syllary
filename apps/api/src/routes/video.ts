@@ -4,17 +4,22 @@ import {
   type AspectRatio,
   type CharacterReference,
   type CreateVideoRequest,
+  createSegmentGroupSchema,
   createVideoSchema,
   estimateVideoCost,
   type ImageQuality,
   type ImageSize,
   normalizeCharacterRefs,
   referenceCountFor,
+  moveSegmentLineSchema,
   regenerateClipSchema,
   regenerateSegmentSchema,
   reRenderTokens,
+  type SceneGrouping,
   singleClipTokens,
   singleImageTokens,
+  singlePlateTokens,
+  updateSegmentGroupSchema,
   updateSegmentSchema,
   updateVideoJobSchema,
   type VideoJob,
@@ -40,6 +45,7 @@ import { getOrCreateUser } from "../lib/users.js";
 import { videoArtBrief } from "../lib/openrouter.js";
 import {
   finalizeVideoJob,
+  patchJobSegments,
   reapStaleVideoJob,
   regenerateSegmentClip,
   regenerateSegmentImage,
@@ -47,7 +53,7 @@ import {
   toReviewSegment,
 } from "../lib/video-pipeline.js";
 
-async function toVideoJobDto(row: VideoJobRow): Promise<VideoJob> {
+async function toVideoJobDto(row: VideoJobRow, opts: { scenes?: boolean } = {}): Promise<VideoJob> {
   const videoUrl =
     row.status === "ready" && row.videoKey ? await presignGet(row.videoKey) : null;
   // Per-line review cards (manual mode); empty for a fresh job. Presigns the frame
@@ -55,8 +61,14 @@ async function toVideoJobDto(row: VideoJobRow): Promise<VideoJob> {
   // Per-scene cards are only rendered in manual review. Presigning every frame on
   // every status poll (a long render is polled every ~2s) is pure wasted CPU that
   // steals cores from the ffmpeg stitch — so only do it when the job is in review.
-  const segments =
-    row.status === "review" ? await Promise.all((row.segments ?? []).map(toReviewSegment)) : [];
+  // The full-page Video Editor opts in (?scenes=1) to ALSO get them while a manual
+  // job is still generating — its live "scenes developing" view needs them, and
+  // that page polls at a gentler 3s.
+  const includeScenes =
+    row.status === "review" || (opts.scenes === true && row.mode === "manual");
+  const segments = includeScenes
+    ? await Promise.all((row.segments ?? []).map(toReviewSegment))
+    : [];
   return {
     id: row.id,
     songId: row.songId,
@@ -68,10 +80,14 @@ async function toVideoJobDto(row: VideoJobRow): Promise<VideoJob> {
     aspectRatio: row.aspectRatio as AspectRatio,
     imageSize: row.imageSize as ImageSize,
     imageQuality: row.imageQuality as ImageQuality,
+    sceneGrouping: (row.sceneGrouping ?? "line") as SceneGrouping,
     isPreview: row.isPreview,
     // A manual job seeded from a finished video's frames = a re-edit (reopened
     // into review to swap scenes + re-render), not a first-time manual render.
     isEdit: row.reuseFrames && row.mode === "manual",
+    // The editor needs this to compute the TRUE finalize cost (no-prerender jobs
+    // pay for blank images + clips at finalize; prerendered jobs already paid).
+    prerenderImages: row.prerenderImages,
     totalSegments: row.totalSegments,
     completedSegments: row.completedSegments,
     segments,
@@ -228,6 +244,10 @@ async function startVideoJob(
         durationSeconds: song.durationSeconds,
         preview: settings.preview,
         reuseImages: !!reuse,
+        sceneGrouping: settings.sceneGrouping,
+        // Reuse prices the SOURCE's exact persisted timeline (its grouping may
+        // differ from any re-plan; quote must equal charge).
+        segments: reuse?.segments,
         // Cost scales with total reference IMAGES per frame (sum across members).
         referenceImages: characterImageKeys?.reduce((n, c) => n + c.imageKeys.length, 0) ?? 0,
       }).tokens;
@@ -246,10 +266,17 @@ async function startVideoJob(
       // "" → "" (the user chose "no context" — never overridden); text → as-is.
       sceneBrief: settings.sceneBrief === undefined ? null : settings.sceneBrief.trim(),
       aspectRatio: settings.aspectRatio,
-      // Previews are forced to the cheapest fast/1K image quality so the flat
+      sceneGrouping: settings.sceneGrouping,
+      // Previews are pinned to 1K and Pro is downgraded to fast so the flat
       // preview price stays above our COGS; full renders keep the user's choice.
+      // "lite" is KEPT on previews — it's cheaper than fast AND the promote-to-
+      // full route inherits prev.imageQuality, so forcing "fast" here would make
+      // a Lite preview promote (and charge!) at Medium prices.
       imageSize: !reuse && settings.preview ? "1K" : settings.imageSize,
-      imageQuality: !reuse && settings.preview ? "fast" : settings.imageQuality,
+      imageQuality:
+        !reuse && settings.preview && settings.imageQuality === "pro"
+          ? "fast"
+          : settings.imageQuality,
       isPreview: reuse ? false : settings.preview,
       reuseFrames: !!reuse,
       segments: reuse?.segments ?? null,
@@ -290,6 +317,29 @@ export async function videoRoutes(app: FastifyInstance) {
       return reply
         .code(400)
         .send({ error: `${VIDEO_MODEL_INFO[settings.model].label} model is coming soon.` });
+    }
+
+    // Lite tier: paid plans only (free users never see it in the UI — the
+    // signup funnel is unchanged — but never trust the client), no Cinematic,
+    // and no cast members (Qwen-Image takes no reference photos).
+    if (settings.imageQuality === "lite") {
+      if (user.plan === "free") {
+        return reply.code(403).send({ error: "The Lite model is available on paid plans." });
+      }
+      if (settings.model === "pro") {
+        return reply.code(400).send({ error: "Cinematic isn't available on the Lite model." });
+      }
+      if (settings.characterIds?.length || settings.elementIds?.length) {
+        return reply.code(400).send({ error: "Cast members aren't available on the Lite model." });
+      }
+    }
+
+    // "One scene" grouping = one looping clip + typography plates for every
+    // line — the plates machinery only exists on Living Scenes.
+    if (settings.sceneGrouping === "single" && settings.model !== "normal") {
+      return reply
+        .code(400)
+        .send({ error: "One scene grouping needs the Living Scenes video style." });
     }
 
     const [song] = await db.select().from(songs).where(eq(songs.id, req.params.id)).limit(1);
@@ -379,6 +429,12 @@ export async function videoRoutes(app: FastifyInstance) {
         .limit(1);
       if (!prev) return reply.code(404).send({ error: "Nothing to generate yet." });
 
+      // A Lite preview can only be promoted while the plan is still paid (the
+      // preview was gated at creation, but the subscription may have lapsed).
+      if (prev.imageQuality === "lite" && user.plan === "free") {
+        return reply.code(403).send({ error: "The Lite model is available on paid plans." });
+      }
+
       // If the source job reused another style's frames, keep reusing them on the
       // retry (re-seed its segments) so we don't regenerate images — only the
       // motion step re-runs. Drop the stored clips so the motion actually re-runs
@@ -407,6 +463,7 @@ export async function videoRoutes(app: FastifyInstance) {
           aspectRatio: prev.aspectRatio as AspectRatio,
           imageSize: prev.imageSize as ImageSize,
           imageQuality: prev.imageQuality as ImageQuality,
+          sceneGrouping: (prev.sceneGrouping ?? "line") as SceneGrouping,
           preview: false,
           prerenderImages: true,
           elementIds: prev.elementIds ?? undefined, // carry the selected elements
@@ -522,6 +579,7 @@ export async function videoRoutes(app: FastifyInstance) {
           aspectRatio: source.aspectRatio as AspectRatio,
           imageSize: source.imageSize as ImageSize,
           imageQuality: source.imageQuality as ImageQuality,
+          sceneGrouping: (source.sceneGrouping ?? "line") as SceneGrouping,
           preview: false,
           prerenderImages: true,
           elementIds: source.elementIds ?? undefined, // carry the selected elements
@@ -653,7 +711,9 @@ export async function videoRoutes(app: FastifyInstance) {
   );
 
   // Poll a video job. Owner-only. Times out stale processing jobs and refunds.
-  app.get<{ Params: { id: string } }>("/video-jobs/:id", async (req, reply) => {
+  app.get<{ Params: { id: string }; Querystring: { scenes?: string } }>(
+    "/video-jobs/:id",
+    async (req, reply) => {
     const clerkId = await getAuthUserId(req);
     if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
     const user = await getOrCreateUser(clerkId);
@@ -673,8 +733,9 @@ export async function videoRoutes(app: FastifyInstance) {
       });
     }
 
-    return reply.send(await toVideoJobDto(row));
-  });
+    return reply.send(await toVideoJobDto(row, { scenes: req.query.scenes === "1" }));
+    },
+  );
 
   // Cancel a still-running generation (pending/processing): mark it failed + refund.
   // Covers stuck jobs (the in-process pipeline died on a restart) and ones the user
@@ -713,6 +774,11 @@ export async function videoRoutes(app: FastifyInstance) {
     return reply.send(await toVideoJobDto(failed));
   });
 
+  // A scene-level regeneration is 10-90s of model work; a double-click or a second
+  // tab firing the same (job, kind, scene) would double-charge for a result the
+  // user only sees once. Single-instance guard is enough (one Fastify process).
+  const regensInFlight = new Set<string>();
+
   // Manual mode: regenerate one line's image (optionally with an edited prompt).
   // Owner-only; job must be awaiting review. Charges singleImageTokens on
   // success only.
@@ -745,12 +811,19 @@ export async function videoRoutes(app: FastifyInstance) {
         });
       }
 
+      const flightKey = `${job.id}:image:${index}`;
+      if (regensInFlight.has(flightKey)) {
+        return reply.code(409).send({ error: "This scene is already regenerating." });
+      }
+      regensInFlight.add(flightKey);
       let segment;
       try {
         segment = await regenerateSegmentImage(job, index, parsed.data.direction, parsed.data.noCast);
       } catch (err) {
         req.log.error({ err }, "regenerate-segment failed");
         return reply.code(502).send({ error: "Could not regenerate this scene. Try again." });
+      } finally {
+        regensInFlight.delete(flightKey);
       }
 
       // Charge only after a successful regeneration.
@@ -793,23 +866,39 @@ export async function videoRoutes(app: FastifyInstance) {
 
       const seg = (job.segments ?? []).find((s) => s.index === index);
       if (!seg) return reply.code(404).send({ error: "Scene not found." });
-      if (!seg.imageKey) {
+      // Plates scenes generate their base on demand; others need the image first.
+      if (!seg.imageKey && seg.textMode !== "plates") {
         return reply.code(400).send({ error: "Generate this scene's image first." });
       }
 
-      const cost = singleClipTokens(job.model, seg.clipEnd - seg.clipStart);
+      // A plates scene's "clip" is the loop PLUS its inpainted lyric plates —
+      // regenerating it redoes both, priced accordingly.
+      const platesCount =
+        seg.textMode === "plates"
+          ? (seg.lines?.filter((l) => l.text.trim()).length ?? 0)
+          : 0;
+      const cost =
+        singleClipTokens(job.model, seg.clipEnd - seg.clipStart, job.imageQuality as ImageQuality) +
+        platesCount * singlePlateTokens();
       if (user.credits < cost) {
         return reply.code(402).send({
           error: `Not enough tokens — regenerating a clip costs ${cost}. Upgrade for more.`,
         });
       }
 
+      const flightKey = `${job.id}:clip:${index}`;
+      if (regensInFlight.has(flightKey)) {
+        return reply.code(409).send({ error: "This clip is already regenerating." });
+      }
+      regensInFlight.add(flightKey);
       let segment;
       try {
         segment = await regenerateSegmentClip(job, index, parsed.data.motionDirection);
       } catch (err) {
         req.log.error({ err }, "regenerate-clip failed");
         return reply.code(502).send({ error: "Could not regenerate this clip. Try again." });
+      } finally {
+        regensInFlight.delete(flightKey);
       }
 
       // Charge only after a successful regeneration.
@@ -847,24 +936,320 @@ export async function videoRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "This video isn't open for editing." });
       }
 
-      const segments = job.segments ?? [];
-      const seg = segments.find((s) => s.index === index);
-      if (!seg) return reply.code(404).send({ error: "Scene not found." });
-
-      if (parsed.data.motionDirection !== undefined) {
-        const next = parsed.data.motionDirection?.trim() || null;
-        if (next !== (seg.motionDirection ?? null)) {
-          seg.motionDirection = next;
-          // The stored clip no longer matches the requested motion → refresh on re-render.
-          if (seg.clipStatus === "ready") seg.clipStatus = "stale";
-        }
+      if (!(job.segments ?? []).some((s) => s.index === index)) {
+        return reply.code(404).send({ error: "Scene not found." });
       }
 
+      // Merge under the row lock — this PATCH is fast, but it used to lose
+      // against any concurrent regenerate writing its whole stale snapshot.
+      let updated: VideoSegment | undefined;
+      await patchJobSegments(job.id, (fresh) => {
+        const f = fresh.find((s) => s.index === index);
+        if (!f) return;
+        if (parsed.data.motionDirection !== undefined) {
+          const next = parsed.data.motionDirection?.trim() || null;
+          if (next !== (f.motionDirection ?? null)) {
+            f.motionDirection = next;
+            // The stored clip no longer matches the requested motion → refresh on re-render.
+            if (f.clipStatus === "ready") f.clipStatus = "stale";
+          }
+        }
+        updated = f;
+      });
+      if (!updated) return reply.code(404).send({ error: "Scene not found." });
+      return reply.send(await toReviewSegment(updated));
+    },
+  );
+
+  // Manual mode: merge the consecutive scenes [from..to] into ONE shared-clip
+  // scene — a single text-free base image + one looping motion clip, with each
+  // lyric line delivered as an inpainted text plate on its sung timing
+  // (textMode "plates"). Creation is free: the base/loop/plates are charged when
+  // they generate. Constituents' generated assets are dropped (no refunds — same
+  // rule as regenerating over them).
+  app.post<{ Params: { id: string } }>("/video-jobs/:id/groups", async (req, reply) => {
+    const clerkId = await getAuthUserId(req);
+    if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+    const user = await getOrCreateUser(clerkId);
+
+    const parsed = createSegmentGroupSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid request." });
+    const { from, to } = parsed.data;
+    if (to <= from) return reply.code(400).send({ error: "Select at least two scenes." });
+
+    const [job] = await db.select().from(videoJobs).where(eq(videoJobs.id, req.params.id)).limit(1);
+    if (!job || job.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+    if (job.status !== "review") {
+      return reply.code(400).send({ error: "This video isn't open for editing." });
+    }
+    if (job.model !== "normal") {
+      return reply.code(400).send({
+        error:
+          job.model === "pro"
+            ? "Cinematic scenes can't share one clip — its shots morph into each other."
+            : "Shared clips are for Living Scenes videos.",
+      });
+    }
+
+    let ok = false;
+    await patchJobSegments(job.id, (fresh) => {
+      const range = fresh.filter((s) => s.index >= from && s.index <= to);
+      if (range.length !== to - from + 1) return;
+      const withText = range.filter((s) => s.text);
+      if (withText.length === 0) return;
+      // Flatten every sung line in the range (constituents may already be groups).
+      const lines = range.flatMap(
+        (s) =>
+          s.lines?.map((l) => ({ ...l, plateKey: null })) ??
+          (s.text ? [{ text: s.text, start: s.start, end: s.end, plateKey: null }] : []),
+      );
+      const first = range[0]!;
+      const last = range[range.length - 1]!;
+      const merged: VideoSegment = {
+        ...first,
+        text: lines.map((l) => l.text).join("\n"),
+        start: lines[0]?.start ?? first.clipStart,
+        end: lines[lines.length - 1]?.end ?? last.clipEnd,
+        clipStart: first.clipStart,
+        clipEnd: last.clipEnd,
+        lines,
+        textMode: parsed.data.textMode,
+        plateRect: null,
+        loopClipKey: null,
+        imageKey: null,
+        prompt: null,
+        status: "pending",
+        clipKey: null,
+        clipStatus: "none",
+      };
+      fresh.splice(from, range.length, merged);
+      fresh.forEach((s, i) => (s.index = i));
+      ok = true;
+    });
+    if (!ok) return reply.code(400).send({ error: "Those scenes can't be grouped." });
+
+    const [row] = await db.select().from(videoJobs).where(eq(videoJobs.id, job.id)).limit(1);
+    if (!row) return reply.code(404).send({ error: "Not found." });
+    await db
+      .update(videoJobs)
+      .set({ totalSegments: row.segments?.length ?? 0, updatedAt: new Date() })
+      .where(eq(videoJobs.id, job.id));
+    captureServer(`clerk:${clerkId}`, "video_scenes_grouped", {
+      job_id: job.id,
+      from,
+      to,
+      lines: to - from + 1,
+    });
+    return reply.send(await toVideoJobDto({ ...row, totalSegments: row.segments?.length ?? 0 }, { scenes: true }));
+  });
+
+  // Flip a grouped scene between "show at once" (baked stanza) and "show in
+  // sequence" (plates). Free; resets the scene's generated assets — they encode
+  // the old mode (a stanza image can't serve as a plates base and vice versa).
+  app.patch<{ Params: { id: string; index: string } }>(
+    "/video-jobs/:id/groups/:index",
+    async (req, reply) => {
+      const clerkId = await getAuthUserId(req);
+      if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+      const user = await getOrCreateUser(clerkId);
+      const parsed = updateSegmentGroupSchema.safeParse(req.body ?? {});
+      if (!parsed.success) return reply.code(400).send({ error: "Invalid request." });
+      const index = Number(req.params.index);
+      if (!Number.isInteger(index)) return reply.code(400).send({ error: "Invalid scene." });
+
+      const [job] = await db.select().from(videoJobs).where(eq(videoJobs.id, req.params.id)).limit(1);
+      if (!job || job.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+      if (job.status !== "review") {
+        return reply.code(400).send({ error: "This video isn't open for editing." });
+      }
+      if (parsed.data.textMode === "plates" && job.model !== "normal") {
+        return reply.code(400).send({ error: "Show-in-sequence needs a Living Scenes video." });
+      }
+
+      let ok = false;
+      await patchJobSegments(job.id, (fresh) => {
+        const seg = fresh.find((s) => s.index === index);
+        if (!seg || !seg.lines || seg.lines.length < 2) return;
+        if (seg.textMode === parsed.data.textMode) {
+          ok = true; // no-op
+          return;
+        }
+        seg.textMode = parsed.data.textMode;
+        seg.imageKey = null;
+        seg.prompt = null;
+        seg.status = "pending";
+        seg.clipKey = null;
+        seg.clipStatus = "none";
+        seg.loopClipKey = null;
+        seg.plateRect = null;
+        for (const l of seg.lines) l.plateKey = null;
+        ok = true;
+      });
+      if (!ok) return reply.code(400).send({ error: "This scene isn't a group." });
+
+      const [row] = await db.select().from(videoJobs).where(eq(videoJobs.id, job.id)).limit(1);
+      if (!row) return reply.code(404).send({ error: "Not found." });
+      return reply.send(await toVideoJobDto(row, { scenes: true }));
+    },
+  );
+
+  // Move a BOUNDARY lyric line to the adjacent scene (drag-a-bubble in the
+  // editor). Lyric timing is fixed, so only the first line can move backward
+  // and the last line forward. Both scenes' generated assets reset — their
+  // windows changed, so image + clip no longer match. Free (regeneration is
+  // charged when it runs, same rule as grouping).
+  app.post<{ Params: { id: string } }>("/video-jobs/:id/lines/move", async (req, reply) => {
+    const clerkId = await getAuthUserId(req);
+    if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+    const user = await getOrCreateUser(clerkId);
+
+    const parsed = moveSegmentLineSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid request." });
+    const { fromScene, lineIndex, toScene } = parsed.data;
+    if (Math.abs(toScene - fromScene) !== 1) {
+      return reply.code(400).send({ error: "Lines can only move to the neighboring scene." });
+    }
+
+    const [job] = await db.select().from(videoJobs).where(eq(videoJobs.id, req.params.id)).limit(1);
+    if (!job || job.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+    if (job.status !== "review") {
+      return reply.code(400).send({ error: "This video isn't open for editing." });
+    }
+
+    let error: string | null = null;
+    await patchJobSegments(job.id, (fresh) => {
+      const src = fresh.find((s) => s.index === fromScene);
+      const dst = fresh.find((s) => s.index === toScene);
+      if (!src || !dst) return void (error = "Scene not found.");
+      if (!dst.text) return void (error = "Lines can't join an instrumental scene.");
+      // Normalize both to lines[] form (legacy singles become 1-line groups).
+      const srcLines = src.lines ?? [{ text: src.text, start: src.start, end: src.end, plateKey: null }];
+      const dstLines = dst.lines ?? [{ text: dst.text, start: dst.start, end: dst.end, plateKey: null }];
+      const movingBack = toScene < fromScene;
+      const boundaryOk = movingBack ? lineIndex === 0 : lineIndex === srcLines.length - 1;
+      const moved = srcLines[lineIndex];
+      if (!moved || !boundaryOk) {
+        return void (error = "Only the first or last line of a scene can move to its neighbor.");
+      }
+
+      const resetAssets = (s: VideoSegment) => {
+        s.imageKey = null;
+        s.prompt = null;
+        s.status = "pending";
+        s.clipKey = null;
+        s.clipStatus = "none";
+        s.loopClipKey = null;
+        s.plateRect = null;
+        if (s.lines) for (const l of s.lines) l.plateKey = null;
+      };
+      const rejoin = (s: VideoSegment, ls: typeof srcLines) => {
+        s.lines = ls.map((l) => ({ ...l, plateKey: null }));
+        s.text = ls.map((l) => l.text).join("\n");
+        s.start = ls[0]!.start;
+        s.end = ls[ls.length - 1]!.end;
+      };
+
+      const rest = srcLines.filter((_, i) => i !== lineIndex);
+      if (movingBack) {
+        // src's first line joins the PREVIOUS scene; the boundary shifts to the
+        // start of src's new first line (or src dissolves entirely).
+        const newBoundary = rest[0]?.start ?? src.clipEnd;
+        rejoin(dst, [...dstLines, { ...moved, plateKey: null }]);
+        dst.clipEnd = newBoundary;
+        resetAssets(dst);
+        if (rest.length === 0) {
+          fresh.splice(fresh.indexOf(src), 1);
+        } else {
+          rejoin(src, rest);
+          src.clipStart = newBoundary;
+          resetAssets(src);
+        }
+      } else {
+        // src's last line joins the NEXT scene; the boundary shifts to the
+        // moved line's start (or src dissolves entirely).
+        const newBoundary = rest.length > 0 ? moved.start : src.clipStart;
+        rejoin(dst, [{ ...moved, plateKey: null }, ...dstLines]);
+        dst.clipStart = newBoundary;
+        resetAssets(dst);
+        if (rest.length === 0) {
+          fresh.splice(fresh.indexOf(src), 1);
+        } else {
+          rejoin(src, rest);
+          src.clipEnd = newBoundary;
+          resetAssets(src);
+        }
+      }
+      fresh.forEach((s, i) => (s.index = i));
+    });
+    if (error) return reply.code(400).send({ error });
+
+    const [row] = await db.select().from(videoJobs).where(eq(videoJobs.id, job.id)).limit(1);
+    if (!row) return reply.code(404).send({ error: "Not found." });
+    await db
+      .update(videoJobs)
+      .set({ totalSegments: row.segments?.length ?? 0, updatedAt: new Date() })
+      .where(eq(videoJobs.id, job.id));
+    return reply.send(
+      await toVideoJobDto({ ...row, totalSegments: row.segments?.length ?? 0 }, { scenes: true }),
+    );
+  });
+
+  // Split a shared-clip scene back into per-line scenes (free; its generated
+  // assets are dropped). The per-line windows re-tile the group's span.
+  app.delete<{ Params: { id: string; index: string } }>(
+    "/video-jobs/:id/groups/:index",
+    async (req, reply) => {
+      const clerkId = await getAuthUserId(req);
+      if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+      const user = await getOrCreateUser(clerkId);
+      const index = Number(req.params.index);
+      if (!Number.isInteger(index)) return reply.code(400).send({ error: "Invalid scene." });
+
+      const [job] = await db.select().from(videoJobs).where(eq(videoJobs.id, req.params.id)).limit(1);
+      if (!job || job.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+      if (job.status !== "review") {
+        return reply.code(400).send({ error: "This video isn't open for editing." });
+      }
+
+      let ok = false;
+      await patchJobSegments(job.id, (fresh) => {
+        const seg = fresh.find((s) => s.index === index);
+        // Any grouped scene (baked stanza OR plates) can be split back to lines.
+        if (!seg || !seg.lines || seg.lines.length < 2) return;
+        const lines = seg.lines;
+        const parts: VideoSegment[] = lines.map((l, i) => ({
+          ...seg,
+          text: l.text,
+          start: l.start,
+          end: l.end,
+          // Re-tile the group's window contiguously across the lines.
+          clipStart: i === 0 ? seg.clipStart : lines[i]!.start,
+          clipEnd: i === lines.length - 1 ? seg.clipEnd : lines[i + 1]!.start,
+          lines: undefined,
+          textMode: undefined,
+          plateRect: undefined,
+          loopClipKey: undefined,
+          imageKey: null,
+          prompt: null,
+          status: "pending" as const,
+          clipKey: null,
+          clipStatus: "none" as const,
+        }));
+        fresh.splice(index, 1, ...parts);
+        fresh.forEach((s, i) => (s.index = i));
+        ok = true;
+      });
+      if (!ok) return reply.code(400).send({ error: "This scene isn't a group." });
+
+      const [row] = await db.select().from(videoJobs).where(eq(videoJobs.id, job.id)).limit(1);
+      if (!row) return reply.code(404).send({ error: "Not found." });
       await db
         .update(videoJobs)
-        .set({ segments, updatedAt: new Date() })
+        .set({ totalSegments: row.segments?.length ?? 0, updatedAt: new Date() })
         .where(eq(videoJobs.id, job.id));
-      return reply.send(await toReviewSegment(seg));
+      return reply.send(
+        await toVideoJobDto({ ...row, totalSegments: row.segments?.length ?? 0 }, { scenes: true }),
+      );
     },
   );
 
@@ -927,12 +1312,24 @@ export async function videoRoutes(app: FastifyInstance) {
     const segs = job.segments ?? [];
     let charge = 0;
     if (job.reuseFrames) {
-      charge = reRenderTokens(job.model, segs);
+      charge = reRenderTokens(job.model, segs, job.imageQuality as ImageQuality);
     } else if (!job.prerenderImages) {
       const blankImages = segs.filter((s) => !s.imageKey).length;
       charge =
         blankImages * singleImageTokens(job.imageQuality as ImageQuality, job.imageSize as ImageSize) +
-        reRenderTokens(job.model, segs);
+        reRenderTokens(job.model, segs, job.imageQuality as ImageQuality);
+    }
+    // Shared-clip groups are created in review, AFTER any up-front charge — so
+    // their un-generated text plates are charged here. EXCEPTION: "single"
+    // grouping plans its plates AT CREATE (buildSegments stamps textMode), so a
+    // prerender job's up-front estimate already includes them — charging again
+    // here would double-bill.
+    const platesPrepaid = job.sceneGrouping === "single" && job.prerenderImages && !job.reuseFrames;
+    if (!platesPrepaid) {
+      const missingPlates = segs
+        .filter((s) => s.textMode === "plates")
+        .reduce((n, s) => n + (s.lines?.filter((l) => l.text.trim() && !l.plateKey).length ?? 0), 0);
+      charge += missingPlates * singlePlateTokens();
     }
     if (charge > 0 && user.credits < charge) {
       captureServer(`clerk:${clerkId}`, "paywall_viewed", {

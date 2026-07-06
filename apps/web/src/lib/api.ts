@@ -994,13 +994,83 @@ export async function setPublicVideo(songId: string, model: VideoModel | null): 
   return songSchema.parse(data);
 }
 
-/** Poll a video job for progress / the finished video URL. */
-export async function getVideoJob(jobId: string): Promise<VideoJob> {
-  const res = await fetch(`${API_BASE}/api/video-jobs/${jobId}`, {
+/** Poll a video job for progress / the finished video URL. `scenes` includes the
+ *  per-scene cards even while the job is still generating — the full-page Video
+ *  Editor's live "scenes developing" view needs them (manual jobs only). */
+export async function getVideoJob(
+  jobId: string,
+  opts: { scenes?: boolean } = {},
+): Promise<VideoJob> {
+  const res = await fetch(`${API_BASE}/api/video-jobs/${jobId}${opts.scenes ? "?scenes=1" : ""}`, {
     headers: { ...(await authHeaders()) },
   });
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not load the video job."), res.status);
+  return videoJobSchema.parse(data);
+}
+
+/** Merge the consecutive scenes [from..to] into ONE grouped scene. textMode:
+ *  "baked" = one stanza image (show at once), "plates" = one looping clip with
+ *  the lines appearing in sequence. Free — generation is charged when it runs. */
+export async function createSceneGroup(
+  jobId: string,
+  from: number,
+  to: number,
+  textMode: "baked" | "plates" = "baked",
+): Promise<VideoJob> {
+  const res = await fetch(`${API_BASE}/api/video-jobs/${jobId}/groups`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ from, to, textMode }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not group those scenes."), res.status);
+  return videoJobSchema.parse(data);
+}
+
+/** Move a boundary lyric line to the adjacent scene (drag-a-bubble). Free;
+ *  both affected scenes' generated assets reset. */
+export async function moveSegmentLine(
+  jobId: string,
+  fromScene: number,
+  lineIndex: number,
+  toScene: number,
+): Promise<VideoJob> {
+  const res = await fetch(`${API_BASE}/api/video-jobs/${jobId}/lines/move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ fromScene, lineIndex, toScene }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not move that line."), res.status);
+  return videoJobSchema.parse(data);
+}
+
+/** Flip a grouped scene between "show at once" (baked) and "show in sequence"
+ *  (plates). Free; resets the scene's generated assets. */
+export async function updateSceneGroup(
+  jobId: string,
+  index: number,
+  textMode: "baked" | "plates",
+): Promise<VideoJob> {
+  const res = await fetch(`${API_BASE}/api/video-jobs/${jobId}/groups/${index}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ textMode }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not change the group mode."), res.status);
+  return videoJobSchema.parse(data);
+}
+
+/** Split a shared-clip scene back into per-line scenes (free). */
+export async function deleteSceneGroup(jobId: string, index: number): Promise<VideoJob> {
+  const res = await fetch(`${API_BASE}/api/video-jobs/${jobId}/groups/${index}`, {
+    method: "DELETE",
+    headers: { ...(await authHeaders()) },
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not ungroup this scene."), res.status);
   return videoJobSchema.parse(data);
 }
 

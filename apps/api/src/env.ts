@@ -43,6 +43,13 @@ const envSchema = z.object({
   // scene-changing shots) — Grok does NOT (first_frame only), Seedance/Wan/Kling
   // do. Seedance 2.0 Fast is the cheapest confirmed first+last option.
   OPENROUTER_CINEMATIC_MODEL: z.string().default("bytedance/seedance-2.0-fast"),
+  // Lite-tier motion (Living Scenes on the Lite model): Seedance 1.5 Pro i2v on
+  // fal, 480p silent — ~$0.0117/s vs Grok's $0.05/s. 4–12s clips only.
+  FAL_VIDEO_MODEL: z.string().default("fal-ai/bytedance/seedance/v1.5/pro/image-to-video"),
+  // Mask-constrained inpaint for shared-clip lyric plates (Qwen family — same
+  // typography strength as the Lite backdrops). FLUX fallback:
+  // fal-ai/flux-general/inpainting.
+  FAL_INPAINT_MODEL: z.string().default("fal-ai/qwen-image-edit/inpaint"),
   // Permissive fallback for Cinematic when the default model rejects the frames
   // as "possibly a real person" (the user clicks "Retry with a more permissive
   // model"). MUST also support first+last frame so the morphing transitions —

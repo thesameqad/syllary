@@ -1,0 +1,1366 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useAuth } from "@clerk/clerk-react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Ban,
+  ChevronDown,
+  Clapperboard,
+  Film,
+  HelpCircle,
+  Image as ImageIcon,
+  Layers,
+  Link2,
+  Loader2,
+  RefreshCw,
+  Repeat,
+  Scissors,
+  SlidersHorizontal,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
+import {
+  findMentionedNames,
+  GROK_MAX_SECONDS,
+  IMAGE_QUALITY_INFO,
+  LITE_CLIP_MAX_SECONDS,
+  type ReviewSegment,
+  reRenderTokens,
+  singleClipTokens,
+  singleImageTokens,
+  singlePlateTokens,
+  VIDEO_MODEL_INFO,
+  type VideoJob,
+} from "@syllary/shared";
+import {
+  ApiError,
+  createSceneGroup,
+  deleteSceneGroup,
+  discardVideoEdit,
+  finalizeVideoJob,
+  getSong,
+  getVideoJob,
+  listElements,
+  moveSegmentLine,
+  regenerateClip,
+  regenerateSegment,
+  updateSceneGroup,
+  updateSegment,
+  updateVideoJob,
+} from "@/lib/api";
+import { captureClient } from "@/lib/analytics";
+import { useAccount } from "@/lib/account-context";
+import { useToast } from "@/components/ui/toast";
+import { Modal } from "@/components/ui/modal";
+import { Button3D } from "@/components/ui/button-3d";
+import { MentionTextarea } from "@/components/ui/mention-textarea";
+import { LogoWordmark } from "@/components/logo";
+import { PlansModal } from "@/components/result/plans-modal";
+import {
+  ClipPreview,
+  FIELD,
+  fmtTime,
+  ImagePainting,
+  motionSeed,
+} from "@/components/result/clip-preview";
+import { DashboardChrome } from "@/components/dashboard/dashboard-layout";
+import { authConfigured } from "@/lib/auth";
+import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
+import { cn } from "@/lib/utils";
+
+// ---------------------------------------------------------------------------
+// The full-page Video Editor — "the cutting room" as a PIPELINE GRAPH:
+//   LYRIC LINES  ──connector──▶  IMAGE node  ──connector──▶  CLIP node
+// Lines are always individual rows with timings. Connectors show how many lines
+// feed one scene; the connection TYPE is visible and editable ("At once" = one
+// baked stanza image, "In sequence" = plates over one looping clip). Breaking /
+// making connections IS the grouping UI. Connector color carries state (red
+// pulse = generating, amber = the clip is stale because the image changed).
+// ---------------------------------------------------------------------------
+
+const MAX_PARALLEL = 4;
+
+type TaskKind = "image" | "clip";
+type TaskPhase = "queued" | "running" | "error";
+type TaskState = { kind: TaskKind; phase: TaskPhase; error?: string };
+
+function taskKey(kind: TaskKind, index: number): string {
+  return `${kind}:${index}`;
+}
+
+function EditorFrame({ signedIn, children }: { signedIn: boolean; children: ReactNode }) {
+  return signedIn ? (
+    <DashboardChrome>
+      <div className="mx-auto max-w-[1500px]">{children}</div>
+    </DashboardChrome>
+  ) : (
+    <main className="min-h-dvh bg-void text-white">
+      <header className="border-b border-white/[0.04]">
+        <div className="mx-auto flex max-w-[1500px] items-center justify-between px-6 py-4">
+          <Link to="/" aria-label="Syllary home">
+            <LogoWordmark />
+          </Link>
+        </div>
+      </header>
+      <div className="mx-auto max-w-[1500px] px-6 py-10">{children}</div>
+    </main>
+  );
+}
+
+export function VideoEditorPage() {
+  return authConfigured ? <VideoEditorAuthAware /> : <EditorSignedOut signedIn={false} />;
+}
+
+function VideoEditorAuthAware() {
+  const { isLoaded, isSignedIn } = useAuth();
+  if (!isLoaded) return null;
+  if (!isSignedIn) return <EditorSignedOut signedIn={false} />;
+  return <VideoEditorInner />;
+}
+
+function EditorSignedOut({ signedIn }: { signedIn: boolean }) {
+  const { songId } = useParams<{ songId: string }>();
+  return (
+    <EditorFrame signedIn={signedIn}>
+      <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-center">
+        <Clapperboard className="h-8 w-8 text-white/30" />
+        <h1 className="text-[18px] font-medium text-white">Sign in to edit videos</h1>
+        <p className="max-w-[360px] text-[13px] text-white/50">
+          The Video Editor lets you direct and regenerate every scene of your lyric video.
+        </p>
+        <div className="mt-2 flex items-center gap-2">
+          <Link to="/sign-in">
+            <Button3D>Sign in</Button3D>
+          </Link>
+          {songId && (
+            <Link to={`/s/${songId}`}>
+              <Button3D variant="secondary">Back to the song</Button3D>
+            </Link>
+          )}
+        </div>
+      </div>
+    </EditorFrame>
+  );
+}
+
+function VideoEditorInner() {
+  const { songId } = useParams<{ songId: string }>();
+  const [searchParams] = useSearchParams();
+  const jobIdParam = searchParams.get("job");
+  const navigate = useNavigate();
+  const toast = useToast();
+  const { account, refresh } = useAccount();
+  const reducedMotion = usePrefersReducedMotion();
+
+  const [job, setJob] = useState<VideoJob | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [songTitle, setSongTitle] = useState<string>("");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
+  const [plansOpen, setPlansOpen] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [finalizing, setFinalizing] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
+
+  // --- Parallel regeneration queue -----------------------------------------
+  const [tasks, setTasks] = useState<Map<string, TaskState>>(new Map());
+  const queueRef = useRef<{ key: string; run: () => Promise<ReviewSegment> }[]>([]);
+  const runningRef = useRef(0);
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
+
+  const setTask = useCallback((key: string, state: TaskState | null) => {
+    setTasks((prev) => {
+      const next = new Map(prev);
+      if (state) next.set(key, state);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
+
+  const applySegment = useCallback((seg: ReviewSegment) => {
+    setJob((j) =>
+      j ? { ...j, segments: j.segments.map((s) => (s.index === seg.index ? seg : s)) } : j,
+    );
+  }, []);
+
+  const pump = useCallback(() => {
+    while (runningRef.current < MAX_PARALLEL && queueRef.current.length > 0) {
+      const next = queueRef.current.shift()!;
+      runningRef.current += 1;
+      const kind = next.key.startsWith("image") ? ("image" as const) : ("clip" as const);
+      setTask(next.key, { kind, phase: "running" });
+      void next
+        .run()
+        .then((seg) => {
+          applySegment(seg);
+          setTask(next.key, null);
+          refresh(); // the balance just ticked down
+        })
+        .catch((e) => {
+          const msg = e instanceof ApiError ? e.message : "Couldn't regenerate this scene.";
+          if (e instanceof ApiError && e.status === 402) setPlansOpen(true);
+          else toast(msg, "error");
+          setTask(next.key, { kind, phase: "error", error: msg });
+        })
+        .finally(() => {
+          runningRef.current -= 1;
+          pump();
+        });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const enqueue = useCallback(
+    (kind: TaskKind, index: number, run: () => Promise<ReviewSegment>) => {
+      const key = taskKey(kind, index);
+      const existing = tasksRef.current.get(key);
+      if (existing && existing.phase !== "error") return;
+      setTask(key, { kind, phase: "queued" });
+      queueRef.current.push({ key, run });
+      pump();
+    },
+    [pump, setTask],
+  );
+
+  const busyIndexes = useMemo(() => {
+    const set = new Set<number>();
+    for (const [key, state] of tasks) {
+      if (state.phase !== "error") set.add(Number(key.split(":")[1]));
+    }
+    return set;
+  }, [tasks]);
+
+  // --- Load song + job -------------------------------------------------------
+  useEffect(() => {
+    if (!songId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const song = await getSong(songId);
+        if (cancelled) return;
+        setAudioUrl(song.audioUrl);
+        setSongTitle(song.title || song.originalFilename || "Untitled");
+        if (jobIdParam) {
+          const j = await getVideoJob(jobIdParam, { scenes: true });
+          if (cancelled) return;
+          if (j.songId !== songId) return setNotFound(true);
+          setJob(j);
+        } else if (
+          song.activeVideoJob &&
+          song.activeVideoJob.mode === "manual" &&
+          ["pending", "processing", "review"].includes(song.activeVideoJob.status)
+        ) {
+          setJob(song.activeVideoJob);
+        } else {
+          setNotFound(true);
+        }
+      } catch (e) {
+        if (!cancelled) setLoadError(e instanceof ApiError ? e.message : "Could not load this video.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [songId, jobIdParam]);
+
+  useEffect(() => {
+    if (job?.id) captureClient("video_editor_opened", { job_id: job.id, status: job.status });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.id]);
+
+  // --- Poll while the pipeline is working ------------------------------------
+  useEffect(() => {
+    if (!job || (job.status !== "pending" && job.status !== "processing")) return;
+    const t = setInterval(() => {
+      void getVideoJob(job.id, { scenes: true })
+        .then((fresh) => {
+          setJob((prev) => {
+            if (!prev) return fresh;
+            const merged = fresh.segments.length
+              ? {
+                  ...fresh,
+                  segments: fresh.segments.map((s) =>
+                    busyIndexes.has(s.index)
+                      ? (prev.segments.find((p) => p.index === s.index) ?? s)
+                      : s,
+                  ),
+                }
+              : fresh;
+            return merged;
+          });
+        })
+        .catch(() => undefined);
+    }, 3000);
+    return () => clearInterval(t);
+  }, [job, busyIndexes]);
+
+  useEffect(() => {
+    if (!job || !songId) return;
+    if (job.status === "ready") {
+      toast("Your video is ready!", "success");
+      navigate(`/s/${songId}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.status]);
+
+  if (!songId) return <Navigate to="/" replace />;
+  if (notFound) return <Navigate to={`/s/${songId}`} replace />;
+
+  if (loadError) {
+    return (
+      <EditorFrame signedIn>
+        <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-center">
+          <AlertTriangle className="h-7 w-7 text-pulse" />
+          <p className="text-[14px] text-white/70">{loadError}</p>
+          <Link to={`/s/${songId}`}>
+            <Button3D variant="secondary">Back to the song</Button3D>
+          </Link>
+        </div>
+      </EditorFrame>
+    );
+  }
+
+  if (!job) {
+    return (
+      <EditorFrame signedIn>
+        <div className="flex min-h-[50vh] items-center justify-center">
+          <Loader2 className="h-6 w-6 animate-spin text-white/40" />
+        </div>
+      </EditorFrame>
+    );
+  }
+
+  return (
+    <EditorFrame signedIn>
+      <EditorBody
+        job={job}
+        setJob={setJob}
+        songId={songId}
+        songTitle={songTitle}
+        audioUrl={audioUrl}
+        tasks={tasks}
+        enqueue={enqueue}
+        applySegment={applySegment}
+        credits={account?.credits ?? null}
+        finalizing={finalizing}
+        setFinalizing={setFinalizing}
+        discarding={discarding}
+        setDiscarding={setDiscarding}
+        confirmDiscard={confirmDiscard}
+        setConfirmDiscard={setConfirmDiscard}
+        reducedMotion={reducedMotion}
+        onPlans={() => setPlansOpen(true)}
+      />
+      <PlansModal open={plansOpen} onClose={() => setPlansOpen(false)} trigger="video_editor" />
+    </EditorFrame>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Body: header + rail + shared fields + the pipeline rows.
+// ---------------------------------------------------------------------------
+function EditorBody({
+  job,
+  setJob,
+  songId,
+  songTitle,
+  audioUrl,
+  tasks,
+  enqueue,
+  applySegment,
+  credits,
+  finalizing,
+  setFinalizing,
+  discarding,
+  setDiscarding,
+  confirmDiscard,
+  setConfirmDiscard,
+  reducedMotion,
+  onPlans,
+}: {
+  job: VideoJob;
+  setJob: (j: VideoJob | null) => void;
+  songId: string;
+  songTitle: string;
+  audioUrl: string | null;
+  tasks: Map<string, TaskState>;
+  enqueue: (kind: TaskKind, index: number, run: () => Promise<ReviewSegment>) => void;
+  applySegment: (seg: ReviewSegment) => void;
+  credits: number | null;
+  finalizing: boolean;
+  setFinalizing: (b: boolean) => void;
+  discarding: boolean;
+  setDiscarding: (b: boolean) => void;
+  confirmDiscard: boolean;
+  setConfirmDiscard: (b: boolean) => void;
+  reducedMotion: boolean;
+  onPlans: () => void;
+}) {
+  const toast = useToast();
+  const navigate = useNavigate();
+  const segments = job.segments;
+  const generating = job.status === "pending" || job.status === "processing";
+  const inReview = job.status === "review";
+  const supportsMotion = job.model !== "fast";
+
+  const rowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const [elementNames, setElementNames] = useState<string[]>([]);
+  useEffect(() => {
+    listElements(job.songId)
+      .then((els) => setElementNames(els.filter((e) => e.imageUrl).map((e) => e.name)))
+      .catch(() => undefined);
+  }, [job.songId]);
+  const cast = Array.from(new Set([...(job.characterNames ?? []), ...elementNames]));
+
+  const imagesDone = segments.filter((s) => !!s.imageUrl).length;
+  const allGenerated = segments.length > 0 && segments.every((s) => !!s.imageUrl);
+  const inFlight = Array.from(tasks.values()).filter((t) => t.phase !== "error").length;
+
+  const imageCost = singleImageTokens(job.imageQuality, job.imageSize);
+  const blanks = segments.filter((s) => !s.imageUrl).length;
+  // "One scene" (sceneGrouping "single") plans its plates AT CREATE, so a
+  // prerender job's up-front charge already covered them — mirror the server.
+  const platesPrepaid = job.sceneGrouping === "single" && job.prerenderImages && !job.isEdit;
+  const platesDue = platesPrepaid
+    ? 0
+    : segments
+        .filter((s) => s.textMode === "plates")
+        .reduce((n, s) => n + (s.lines?.filter((l) => l.text.trim()).length ?? 0) - s.platesReady, 0);
+  const finalizeCost =
+    (job.isEdit
+      ? reRenderTokens(job.model, segments, job.imageQuality)
+      : !job.prerenderImages
+        ? blanks * imageCost + reRenderTokens(job.model, segments, job.imageQuality)
+        : 0) +
+    Math.max(0, platesDue) * singlePlateTokens();
+
+  const totalSeconds = segments.length ? Math.max(...segments.map((s) => s.clipEnd)) : 0;
+
+  function scrollToScene(index: number) {
+    rowRefs.current.get(index)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  function regenerateImage(seg: ReviewSegment, direction?: string, noCast?: boolean) {
+    enqueue("image", seg.index, () => regenerateSegment(job.id, seg.index, direction, noCast));
+  }
+
+  function regenerateMotion(seg: ReviewSegment, motionDirection?: string) {
+    enqueue("clip", seg.index, () => regenerateClip(job.id, seg.index, motionDirection));
+  }
+
+  // A lyric bubble mid-drag: which scene + which line within it.
+  const [dragging, setDragging] = useState<{ scene: number; line: number; lines: number } | null>(
+    null,
+  );
+
+  async function dropLine(toScene: number) {
+    if (!dragging) return;
+    const { scene, line } = dragging;
+    setDragging(null);
+    try {
+      const updated = await moveSegmentLine(job.id, scene, line, toScene);
+      setJob(updated);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't move that line.", "error");
+    }
+  }
+
+  /** Is `seg` a valid drop target for the bubble being dragged? Timing is
+   *  fixed, so only boundary lines can hop to the NEIGHBORING text scene. */
+  function dropValidFor(segIndex: number): boolean {
+    if (!dragging) return false;
+    const target = segments.find((s) => s.index === segIndex);
+    if (!target?.text) return false;
+    if (dragging.scene === segIndex + 1 && dragging.line === 0) return true; // first line → previous
+    if (dragging.scene === segIndex - 1 && dragging.line === dragging.lines - 1) return true; // last line → next
+    return false;
+  }
+
+  const [linkBusy, setLinkBusy] = useState<number | null>(null);
+  // Link scene at `index` with the next scene (merge into one grouped scene).
+  async function linkScenes(index: number) {
+    if (linkBusy !== null) return;
+    setLinkBusy(index);
+    try {
+      const a = segments.find((s) => s.index === index);
+      // Preserve an existing group's mode when extending it.
+      const mode =
+        a?.textMode === "plates" || segments.find((s) => s.index === index + 1)?.textMode === "plates"
+          ? ("plates" as const)
+          : ("baked" as const);
+      const updated = await createSceneGroup(job.id, index, index + 1, mode);
+      setJob(updated);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't link those scenes.", "error");
+    } finally {
+      setLinkBusy(null);
+    }
+  }
+
+  async function ungroup(index: number) {
+    try {
+      const updated = await deleteSceneGroup(job.id, index);
+      setJob(updated);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't split this scene.", "error");
+    }
+  }
+
+  async function setGroupMode(index: number, mode: "baked" | "plates") {
+    try {
+      const updated = await updateSceneGroup(job.id, index, mode);
+      setJob(updated);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't change the group mode.", "error");
+    }
+  }
+
+  async function finalize() {
+    if (finalizing) return;
+    setFinalizing(true);
+    try {
+      await finalizeVideoJob(job.id);
+      // Hand off to the song page IMMEDIATELY — it shows the same render
+      // progress the inline manual flow does (via song.activeVideoJob).
+      toast("Rendering your video…", "success");
+      navigate(`/s/${songId}`);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 402) onPlans();
+      else toast(e instanceof ApiError ? e.message : "Could not start the render.", "error");
+    } finally {
+      setFinalizing(false);
+    }
+  }
+
+  async function discard() {
+    if (discarding) return;
+    setDiscarding(true);
+    try {
+      await discardVideoEdit(job.id);
+      navigate(`/s/${songId}`);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Could not discard this draft.", "error");
+      setDiscarding(false);
+    }
+  }
+
+  return (
+    <div className="px-1 pb-28 sm:px-0">
+      {/* ------------------------------ Header ------------------------------ */}
+      <div className="sticky top-0 z-20 -mx-1 border-b border-white/[0.06] bg-void/90 px-1 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <Link
+            to={`/s/${songId}`}
+            className="inline-flex items-center gap-1.5 text-[12.5px] text-white/50 transition-colors hover:text-white"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span className="max-w-[180px] truncate sm:max-w-[320px]">{songTitle}</span>
+          </Link>
+          <div className="flex items-center gap-2 text-[11px] text-white/40">
+            <span className="rounded-full bg-white/[0.06] px-2 py-0.5">
+              {VIDEO_MODEL_INFO[job.model].label}
+            </span>
+            <span className="rounded-full bg-white/[0.06] px-2 py-0.5">
+              {IMAGE_QUALITY_INFO[job.imageQuality].label}
+            </span>
+            {job.isEdit && (
+              <span className="rounded-full bg-amber-400/10 px-2 py-0.5 text-amber-300/80">
+                Editing
+              </span>
+            )}
+          </div>
+          <div className="ml-auto flex items-center gap-3">
+            {inFlight > 0 && (
+              <span className="flex items-center gap-1.5 text-[11.5px] text-pulse">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {inFlight} scene{inFlight > 1 ? "s" : ""} working
+              </span>
+            )}
+            {credits !== null && (
+              <span className="hidden text-[11.5px] text-white/40 sm:block">
+                {credits.toLocaleString()} tokens
+              </span>
+            )}
+            <span className="text-[11.5px] text-white/50">
+              {imagesDone}/{segments.length || job.totalSegments} scenes
+            </span>
+            {inReview && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => (job.isEdit ? void discard() : setConfirmDiscard(true))}
+                  disabled={discarding}
+                  className="hidden items-center gap-1 text-[11.5px] text-white/40 transition-colors hover:text-pulse sm:flex"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  {job.isEdit ? "Discard edits" : "Delete draft"}
+                </button>
+                <div className="hidden sm:block">
+                  <Button3D
+                    onClick={() => void finalize()}
+                    disabled={!allGenerated || inFlight > 0 || finalizing}
+                  >
+                    {finalizing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Clapperboard className="h-4 w-4" />
+                    )}
+                    {finalizeCost > 0 ? `Generate video · ${finalizeCost}` : "Generate video"}
+                  </Button3D>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* --------------------------- Timeline rail --------------------------- */}
+        {segments.length > 0 && (
+          <div className="mt-3 flex h-2 w-full items-stretch gap-[2px]" aria-hidden>
+            {segments.map((s) => {
+              const busyState =
+                tasks.get(taskKey("image", s.index)) ?? tasks.get(taskKey("clip", s.index));
+              const w = totalSeconds > 0 ? ((s.clipEnd - s.clipStart) / totalSeconds) * 100 : 0;
+              return (
+                <button
+                  key={s.index}
+                  type="button"
+                  onClick={() => scrollToScene(s.index)}
+                  style={{ width: `${Math.max(w, 0.6)}%` }}
+                  title={`Scene ${s.index + 1} · ${fmtTime(s.clipStart)}`}
+                  className={cn(
+                    "rounded-[2px] transition-colors",
+                    busyState && busyState.phase !== "error"
+                      ? "animate-pulse bg-pulse"
+                      : busyState?.phase === "error"
+                        ? "bg-pulse/50"
+                        : !s.imageUrl
+                          ? "border border-dashed border-amber-400/40 bg-transparent"
+                          : s.clipStatus === "stale"
+                            ? "bg-amber-400/60"
+                            : "bg-white/25 hover:bg-white/50",
+                  )}
+                />
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ------------------------- Status banners ------------------------- */}
+      {generating && (
+        <div className="mt-4 flex items-center gap-3 rounded-[12px] border border-white/[0.08] bg-white/[0.02] px-4 py-3">
+          <Loader2 className="h-4 w-4 animate-spin text-pulse" />
+          <div className="text-[12.5px] text-white/65">
+            {job.segments.length > 0 && job.completedSegments < (job.totalSegments || 1)
+              ? "Your scenes are being painted — they appear below as they finish."
+              : "Rendering your video — stitching every scene together with the song."}
+          </div>
+        </div>
+      )}
+      {job.status === "failed" && (
+        <div className="mt-4 flex items-center gap-3 rounded-[12px] border border-pulse/30 bg-pulse/[0.06] px-4 py-3 text-[12.5px] text-white/75">
+          <AlertTriangle className="h-4 w-4 text-pulse" />
+          {job.error ?? "Generation failed — your tokens were refunded."}
+        </div>
+      )}
+
+      {/* --------------------------- Shared fields --------------------------- */}
+      <SharedFields job={job} onJobUpdated={(j) => setJob(j)} disabled={!inReview} />
+
+      {/* --------------------------- Column headers -------------------------- */}
+      <div className="mt-6 hidden grid-cols-[minmax(200px,300px)_36px_minmax(0,1fr)_36px_minmax(0,1fr)] gap-0 px-1 text-[10.5px] uppercase tracking-[0.6px] text-white/30 lg:grid">
+        <span>Lyrics</span>
+        <span />
+        <span>Scene image</span>
+        <span />
+        <span>{supportsMotion ? "Motion clip" : ""}</span>
+      </div>
+
+      {/* ---------------------------- Pipeline rows --------------------------- */}
+      <div className="mt-1 flex flex-col">
+        {segments.map((seg, i) => (
+          <div key={seg.index}>
+            <SceneRow
+              seg={seg}
+              job={job}
+              audioUrl={audioUrl}
+              cast={cast}
+              state={tasks.get(taskKey("image", seg.index)) ?? tasks.get(taskKey("clip", seg.index))}
+              interactive={inReview}
+              supportsMotion={supportsMotion}
+              imageCost={imageCost}
+              clipCost={singleClipTokens(job.model, seg.clipEnd - seg.clipStart, job.imageQuality)}
+              onRegenerateImage={(direction, noCast) => regenerateImage(seg, direction, noCast)}
+              onRegenerateMotion={(motionDirection) => regenerateMotion(seg, motionDirection)}
+              onUngroup={() => void ungroup(seg.index)}
+              onSetMode={(m) => void setGroupMode(seg.index, m)}
+              dragging={dragging}
+              onDragStart={(line, count) => setDragging({ scene: seg.index, line, lines: count })}
+              onDragEnd={() => setDragging(null)}
+              dropValid={dropValidFor(seg.index)}
+              onDropLine={() => void dropLine(seg.index)}
+              onSegmentUpdated={applySegment}
+              registerRef={(el) => {
+                if (el) rowRefs.current.set(seg.index, el);
+                else rowRefs.current.delete(seg.index);
+              }}
+              reducedMotion={reducedMotion}
+            />
+            {/* Link gap: merge this scene with the next one. */}
+            {inReview && i < segments.length - 1 && (
+              <div className="group/gap relative flex h-6 items-center lg:w-[300px]">
+                <div className="absolute inset-x-6 top-1/2 h-px bg-white/[0.04]" />
+                <button
+                  type="button"
+                  disabled={linkBusy !== null}
+                  onClick={() => void linkScenes(seg.index)}
+                  title="Link with the next lines — they'll share one scene."
+                  className="relative mx-auto flex h-5 items-center gap-1 rounded-full border border-white/10 bg-void px-2 text-[10px] text-white/35 opacity-0 transition-all hover:border-pulse/50 hover:text-white group-hover/gap:opacity-100 max-lg:opacity-60"
+                >
+                  {linkBusy === seg.index ? (
+                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                  ) : (
+                    <Link2 className="h-2.5 w-2.5" />
+                  )}
+                  Link
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+        {segments.length === 0 && generating && (
+          <div className="flex min-h-[30vh] items-center justify-center text-[13px] text-white/45">
+            Planning your scenes…
+          </div>
+        )}
+      </div>
+
+      {/* ------------------------ Mobile finalize bar ------------------------ */}
+      {inReview && (
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-white/[0.08] bg-void/95 p-3 backdrop-blur sm:hidden">
+          <Button3D
+            className="w-full"
+            onClick={() => void finalize()}
+            disabled={!allGenerated || inFlight > 0 || finalizing}
+          >
+            {finalizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />}
+            {finalizeCost > 0 ? `Generate video · ${finalizeCost} tokens` : "Generate video"}
+          </Button3D>
+        </div>
+      )}
+
+      {/* ------------------------- Discard confirm --------------------------- */}
+      <Modal open={confirmDiscard} onClose={() => setConfirmDiscard(false)} title="Delete this draft?">
+        <p className="text-[13px] leading-relaxed text-white/60">
+          This deletes the whole in-progress video. Tokens you spent generating scenes are
+          refunded for pre-rendered drafts.
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button3D variant="secondary" onClick={() => setConfirmDiscard(false)}>
+            Keep working
+          </Button3D>
+          <Button3D onClick={() => void discard()} disabled={discarding}>
+            {discarding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+            Delete draft
+          </Button3D>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Shared style + context panel (collapsed).
+// ---------------------------------------------------------------------------
+function SharedFields({
+  job,
+  onJobUpdated,
+  disabled,
+}: {
+  job: VideoJob;
+  onJobUpdated: (j: VideoJob) => void;
+  disabled: boolean;
+}) {
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [style, setStyle] = useState(job.styleDescription);
+  const [context, setContext] = useState(job.sceneBrief ?? "");
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    const nextStyle = style.trim();
+    const styleChanged = nextStyle.length > 0 && nextStyle !== job.styleDescription;
+    const contextChanged = context.trim() !== (job.sceneBrief ?? "").trim();
+    if (!styleChanged && !contextChanged) return;
+    setSaving(true);
+    try {
+      const updated = await updateVideoJob(job.id, {
+        ...(styleChanged ? { styleDescription: nextStyle } : {}),
+        ...(contextChanged ? { sceneBrief: context } : {}),
+      });
+      onJobUpdated(updated);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't save those changes.", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-[12px] border border-white/[0.08] bg-white/[0.02]">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 px-4 py-3 text-left"
+      >
+        <SlidersHorizontal className="h-3.5 w-3.5 text-white/40" />
+        <span className="text-[12.5px] font-medium text-white/75">Style &amp; song context</span>
+        <span className="text-[11px] text-white/35">applies to every scene</span>
+        {saving && <Loader2 className="h-3 w-3 animate-spin text-white/40" />}
+        <ChevronDown
+          className={cn("ml-auto h-4 w-4 text-white/40 transition-transform", open && "rotate-180")}
+        />
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="overflow-hidden"
+          >
+            <div className="grid grid-cols-1 gap-3 px-4 pb-4 md:grid-cols-2">
+              <label className="block">
+                <span className="text-[11px] uppercase tracking-[0.5px] text-white/35">
+                  Visual style
+                </span>
+                <textarea
+                  value={style}
+                  onChange={(e) => setStyle(e.target.value)}
+                  onBlur={() => void save()}
+                  rows={3}
+                  disabled={disabled}
+                  className={FIELD}
+                />
+              </label>
+              <label className="block">
+                <span className="text-[11px] uppercase tracking-[0.5px] text-white/35">
+                  Song context
+                </span>
+                <textarea
+                  value={context}
+                  onChange={(e) => setContext(e.target.value)}
+                  onBlur={() => void save()}
+                  rows={3}
+                  disabled={disabled}
+                  placeholder="What the video is about — who/what to depict."
+                  className={FIELD}
+                />
+              </label>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/** Horizontal connector between pipeline nodes. Carries state through color:
+ *  quiet white, red pulse while the downstream node generates, amber when the
+ *  downstream is stale. */
+function Connector({ state }: { state: "idle" | "busy" | "stale" | "off" }) {
+  if (state === "off") return <div className="hidden lg:block" />;
+  return (
+    <div className="relative hidden lg:block" aria-hidden>
+      <div
+        className={cn(
+          "absolute left-0 right-0 top-1/2 h-[2px] -translate-y-1/2 rounded-full",
+          state === "busy"
+            ? "animate-pulse bg-pulse"
+            : state === "stale"
+              ? "bg-amber-400/70"
+              : "bg-white/15",
+        )}
+      />
+      {state === "stale" && (
+        <AlertTriangle className="absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 text-amber-300" />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// One pipeline row: lyric lines ─▶ image node ─▶ clip node.
+// ---------------------------------------------------------------------------
+function SceneRow({
+  seg,
+  job,
+  audioUrl,
+  cast,
+  state,
+  interactive,
+  supportsMotion,
+  imageCost,
+  clipCost,
+  onRegenerateImage,
+  onRegenerateMotion,
+  onUngroup,
+  onSetMode,
+  dragging,
+  onDragStart,
+  onDragEnd,
+  dropValid,
+  onDropLine,
+  onSegmentUpdated,
+  registerRef,
+  reducedMotion,
+}: {
+  seg: ReviewSegment;
+  job: VideoJob;
+  audioUrl: string | null;
+  cast: string[];
+  state: TaskState | undefined;
+  interactive: boolean;
+  supportsMotion: boolean;
+  imageCost: number;
+  clipCost: number;
+  onRegenerateImage: (direction?: string, noCast?: boolean) => void;
+  onRegenerateMotion: (motionDirection?: string) => void;
+  onUngroup: () => void;
+  onSetMode: (m: "baked" | "plates") => void;
+  dragging: { scene: number; line: number; lines: number } | null;
+  onDragStart: (lineIndex: number, lineCount: number) => void;
+  onDragEnd: () => void;
+  dropValid: boolean;
+  onDropLine: () => void;
+  onSegmentUpdated: (seg: ReviewSegment) => void;
+  registerRef: (el: HTMLDivElement | null) => void;
+  reducedMotion: boolean;
+}) {
+  const toast = useToast();
+  const [direction, setDirection] = useState(seg.direction ?? "");
+  const [noCast, setNoCast] = useState(seg.noCast);
+  const [motionDir, setMotionDir] = useState(motionSeed(seg));
+
+  useEffect(() => {
+    setDirection(seg.direction ?? "");
+    setNoCast(seg.noCast);
+    setMotionDir(motionSeed(seg));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seg.direction, seg.noCast, seg.motionDirection]);
+
+  const busyImage = state?.kind === "image" && state.phase !== "error";
+  const busyClip = state?.kind === "clip" && state.phase !== "error";
+  const queued = state?.phase === "queued";
+  const errored = state?.phase === "error";
+  const generatingScene =
+    !seg.imageUrl && (job.status === "pending" || job.status === "processing");
+  const isPlates = seg.textMode === "plates";
+  const isGroup = (seg.lines?.length ?? 0) > 1;
+  // Legacy single-line segments don't expose sung times in the DTO — the scene
+  // window is the honest timecode for them.
+  const lines =
+    seg.lines ?? (seg.text ? [{ text: seg.text, start: seg.clipStart, end: seg.clipEnd }] : []);
+  const platesTotal = seg.lines?.filter((l) => l.text.trim()).length ?? 0;
+  const span = seg.clipEnd - seg.clipStart;
+  const clipMax = job.imageQuality === "lite" ? LITE_CLIP_MAX_SECONDS : GROK_MAX_SECONDS;
+  const loops = supportsMotion && span > clipMax + 0.5;
+
+  const mentioned = cast.length > 0 ? findMentionedNames(direction, cast) : [];
+  const motionMentioned = cast.length > 0 ? findMentionedNames(motionDir, cast) : [];
+
+  async function saveMotion() {
+    const next = motionDir.trim();
+    if (next === (seg.motionDirection ?? motionSeed(seg))) return;
+    try {
+      const updated = await updateSegment(job.id, seg.index, { motionDirection: next || null });
+      onSegmentUpdated(updated);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't save the motion.", "error");
+    }
+  }
+
+  function appendMention(value: string, name: string): string {
+    if (findMentionedNames(value, [name]).length > 0) return value;
+    const base = value.trimEnd();
+    return `${base ? base + " " : ""}@${name} `;
+  }
+
+  return (
+    <div
+      ref={registerRef}
+      style={{ contentVisibility: "auto", containIntrinsicSize: "300px" } as React.CSSProperties}
+      onDragOver={(e) => {
+        if (dropValid) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        if (!dropValid) return;
+        e.preventDefault();
+        onDropLine();
+      }}
+      className={cn(
+        "grid grid-cols-1 gap-3 rounded-[14px] border p-3 transition-colors lg:grid-cols-[minmax(200px,300px)_36px_minmax(0,1fr)_36px_minmax(0,1fr)] lg:gap-0",
+        dropValid
+          ? "border-pulse/60 bg-pulse/[0.05] shadow-[0_0_0_1px_rgba(255,45,45,0.35)]"
+          : errored
+            ? "border-pulse/40"
+            : "border-white/[0.06] bg-white/[0.015]",
+      )}
+    >
+      {/* ------------------------------ Lyrics lane ------------------------------ */}
+      <div className="flex flex-col justify-center gap-1.5 lg:pr-2">
+        {lines.length > 0 ? (
+          lines.map((l, i) => {
+            // Timing is fixed → only the boundary lines can hop to a neighbor.
+            const draggable = interactive && (i === 0 || i === lines.length - 1);
+            const isDragged = dragging?.scene === seg.index && dragging.line === i;
+            return (
+              <div
+                key={i}
+                draggable={draggable}
+                onDragStart={(e) => {
+                  if (!draggable) return;
+                  e.dataTransfer.setData("text/plain", l.text);
+                  e.dataTransfer.effectAllowed = "move";
+                  onDragStart(i, lines.length);
+                }}
+                onDragEnd={onDragEnd}
+                title={draggable ? "Drag onto the scene above or below to move this line there." : undefined}
+                className={cn(
+                  "flex w-fit max-w-full items-center gap-2 rounded-[14px] rounded-bl-[4px] border px-2.5 py-1.5 transition-all",
+                  isDragged
+                    ? "border-pulse/60 bg-pulse/10 opacity-50"
+                    : "border-white/10 bg-white/[0.04]",
+                  draggable && "cursor-grab hover:border-white/30 active:cursor-grabbing",
+                )}
+              >
+                <span className="shrink-0 rounded bg-black/40 px-1 py-px text-[9.5px] tabular-nums text-white/45">
+                  {fmtTime(l.start)}
+                </span>
+                <span className="truncate text-[12.5px] leading-snug text-white/85">{l.text}</span>
+              </div>
+            );
+          })
+        ) : (
+          <div className="flex w-fit items-center gap-2 rounded-[14px] rounded-bl-[4px] border border-dashed border-white/10 px-2.5 py-1.5">
+            <span className="shrink-0 rounded bg-black/40 px-1 py-px text-[9.5px] tabular-nums text-white/45">
+              {fmtTime(seg.clipStart)}
+            </span>
+            <span className="text-[12px] italic text-white/35">Instrumental</span>
+          </div>
+        )}
+
+        {/* Group controls: type + split. */}
+        {isGroup && interactive && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            <div className="flex overflow-hidden rounded-full border border-white/12 text-[10px]">
+              <button
+                type="button"
+                onClick={() => !isPlates || onSetMode("baked")}
+                title="All lines painted into one image, shown together."
+                className={cn(
+                  "px-2 py-0.5 transition-colors",
+                  !isPlates ? "bg-white/12 text-white" : "text-white/45 hover:text-white",
+                )}
+              >
+                <Layers className="mr-1 inline h-2.5 w-2.5" />
+                At once
+              </button>
+              <button
+                type="button"
+                onClick={() => isPlates || onSetMode("plates")}
+                disabled={job.model !== "normal"}
+                title={
+                  job.model === "normal"
+                    ? "One looping clip; lines appear one by one on their timing."
+                    : "Needs a Living Scenes video."
+                }
+                className={cn(
+                  "px-2 py-0.5 transition-colors disabled:cursor-not-allowed disabled:opacity-35",
+                  isPlates ? "bg-pulse/20 text-white" : "text-white/45 hover:text-white",
+                )}
+              >
+                <Film className="mr-1 inline h-2.5 w-2.5" />
+                In sequence
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={onUngroup}
+              title="Split back into one scene per line."
+              className="flex items-center gap-1 rounded-full border border-white/12 px-2 py-0.5 text-[10px] text-white/45 transition-colors hover:border-white/30 hover:text-white"
+            >
+              <Scissors className="h-2.5 w-2.5" />
+              Split
+            </button>
+            <span className="group relative flex items-center">
+              <HelpCircle className="h-3 w-3 cursor-help text-white/30 transition-colors group-hover:text-white/70" />
+              <span className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-1.5 hidden w-[240px] -translate-x-1/2 rounded-[10px] border border-white/10 bg-[#1c1c1c] p-2.5 text-[10.5px] leading-snug text-white/70 shadow-xl group-hover:block">
+                <b className="text-white">At once</b> — all lines are painted into one image and
+                shown together for the whole scene.
+                <br />
+                <br />
+                <b className="text-white">In sequence</b> — one clip loops for the whole scene
+                while each line glows in at the moment it&rsquo;s sung, as styled text.
+              </span>
+            </span>
+          </div>
+        )}
+        {isGroup && seg.textMode === "overlay" && (
+          <p className="mt-1 max-w-[210px] text-[10px] leading-snug text-amber-400/80">
+            Text plates failed the quality check — these lines will render as timed subtitles
+            in the final video. Switch back to &ldquo;In sequence&rdquo; to retry plates.
+          </p>
+        )}
+        {isPlates && (
+          <div className="mt-1 flex items-center gap-1.5 text-[10px] text-white/40">
+            <span>
+              {seg.platesReady}/{platesTotal} plates
+            </span>
+            <span className="flex gap-1">
+              {Array.from({ length: platesTotal }, (_, i) => (
+                <span
+                  key={i}
+                  className={cn(
+                    "h-1.5 w-1.5 rounded-full",
+                    i < seg.platesReady ? "bg-pulse" : "bg-white/15",
+                  )}
+                />
+              ))}
+            </span>
+            <span>
+              {job.sceneGrouping === "single" && job.prerenderImages && !job.isEdit
+                ? "· included in the up-front price"
+                : `· ${platesTotal * singlePlateTokens()} tokens at render`}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* lines → image connector */}
+      <Connector state={busyImage || generatingScene ? "busy" : "idle"} />
+
+      {/* ------------------------------ Image node ------------------------------ */}
+      <div className="min-w-0">
+        <div className="relative aspect-video w-full overflow-hidden rounded-[10px] border border-white/10 bg-black">
+          {seg.imageUrl ? (
+            <motion.img
+              key={seg.imageUrl}
+              src={seg.imageUrl}
+              alt=""
+              loading="lazy"
+              initial={reducedMotion ? false : { opacity: 0, filter: "blur(10px)", scale: 1.04 }}
+              animate={{ opacity: 1, filter: "blur(0px)", scale: 1 }}
+              transition={{ type: "spring", stiffness: 120, damping: 22 }}
+              className={cn("h-full w-full object-cover", busyImage && "opacity-20")}
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center">
+              {!busyImage && !generatingScene && <ImageIcon className="h-7 w-7 text-white/20" />}
+            </div>
+          )}
+          {(busyImage || generatingScene) && <ImagePainting />}
+          {queued && state?.kind === "image" && (
+            <span className="absolute left-2 top-2 rounded bg-pulse/15 px-1.5 py-0.5 text-[10px] text-pulse backdrop-blur">
+              Queued
+            </span>
+          )}
+          {isPlates && (
+            <span className="absolute right-2 top-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white/70 backdrop-blur">
+              text-free base
+            </span>
+          )}
+        </div>
+
+        {errored && state?.kind === "image" && (
+          <div className="mt-1.5 flex items-center gap-2 rounded-[8px] border border-pulse/30 bg-pulse/[0.06] px-2 py-1 text-[10.5px] text-white/70">
+            <AlertTriangle className="h-3 w-3 shrink-0 text-pulse" />
+            <span className="truncate">{state.error ?? "Failed"}</span>
+          </div>
+        )}
+
+        {interactive && (
+          <div className="mt-2">
+            <MentionTextarea
+              value={direction}
+              onChange={setDirection}
+              names={cast}
+              rows={2}
+              placeholder={
+                isPlates
+                  ? "What should the backdrop scene show? (text-free — the lyrics arrive as plates)"
+                  : seg.text
+                    ? `Defaults to the lyric${isGroup ? " block" : ""}`
+                    : "What should this scene show?"
+              }
+              className={FIELD}
+            />
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {cast.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => {
+                    setNoCast(false);
+                    setDirection((d) => appendMention(d, name));
+                  }}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[10.5px] transition-colors",
+                    mentioned.includes(name)
+                      ? "border-pulse/50 bg-pulse/10 text-white"
+                      : "border-white/15 text-white/50 hover:border-white/35 hover:text-white",
+                  )}
+                >
+                  @{name}
+                </button>
+              ))}
+              {cast.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setNoCast((n) => !n)}
+                  className={cn(
+                    "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] transition-colors",
+                    noCast
+                      ? "border-pulse/50 bg-pulse/10 text-white"
+                      : "border-white/15 text-white/50 hover:border-white/35 hover:text-white",
+                  )}
+                >
+                  <Ban className="h-2.5 w-2.5" />
+                  No one
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={!!state && state.phase !== "error"}
+                onClick={() => onRegenerateImage(direction, noCast)}
+                className="ml-auto flex items-center gap-1.5 rounded-[9px] border border-pulse/40 bg-pulse/[0.08] px-2.5 py-1 text-[11.5px] font-medium text-white transition-colors hover:bg-pulse/[0.16] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <RefreshCw className={cn("h-3 w-3", busyImage && "animate-spin")} />
+                {isPlates
+                  ? `${seg.imageUrl ? "Regenerate" : "Generate"} base · ${imageCost}`
+                  : `${seg.imageUrl ? "Regenerate" : "Generate"} · ${imageCost}`}
+              </button>
+            </div>
+            {isPlates && (
+              <p className="mt-1 text-[10px] leading-snug text-white/35">
+                <Sparkles className="mr-1 inline h-2.5 w-2.5" />
+                Regenerating the base resets the loop and plates — they redo from the new scene.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* image → clip connector */}
+      <Connector
+        state={
+          !supportsMotion
+            ? "off"
+            : busyClip
+              ? "busy"
+              : seg.clipStatus === "stale"
+                ? "stale"
+                : "idle"
+        }
+      />
+
+      {/* ------------------------------ Clip node ------------------------------- */}
+      {supportsMotion ? (
+        <div className="min-w-0">
+          <ClipPreview
+            clipUrl={seg.clipUrl}
+            audioUrl={audioUrl}
+            clipStart={seg.clipStart}
+            busy={busyClip}
+          />
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10.5px] text-white/40">
+            <span className="tabular-nums">
+              {fmtTime(seg.clipStart)}–{fmtTime(seg.clipEnd)}
+            </span>
+            {loops && (
+              <span className="flex items-center gap-1 text-white/55" title="The clip is shorter than the scene — it ping-pong loops to fill it.">
+                <Repeat className="h-2.5 w-2.5" />
+                loops to fill
+              </span>
+            )}
+            {seg.clipStatus === "stale" && (
+              <span className="flex items-center gap-1 text-amber-300/85">
+                <AlertTriangle className="h-2.5 w-2.5" />
+                image changed — regenerates at render
+              </span>
+            )}
+            {queued && state?.kind === "clip" && <span className="text-pulse">Queued</span>}
+          </div>
+
+          {errored && state?.kind === "clip" && (
+            <div className="mt-1.5 flex items-center gap-2 rounded-[8px] border border-pulse/30 bg-pulse/[0.06] px-2 py-1 text-[10.5px] text-white/70">
+              <AlertTriangle className="h-3 w-3 shrink-0 text-pulse" />
+              <span className="truncate">{state.error ?? "Failed"}</span>
+            </div>
+          )}
+
+          {interactive && (
+            <div className="mt-2">
+              <MentionTextarea
+                value={motionDir}
+                onChange={setMotionDir}
+                onBlur={() => void saveMotion()}
+                names={cast}
+                rows={2}
+                placeholder={
+                  isPlates
+                    ? "How should the loop move? (gentle, seamless motion works best)"
+                    : "How should this shot move?"
+                }
+                className={FIELD}
+              />
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                {cast.map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    onClick={() => setMotionDir((d) => appendMention(d, name))}
+                    className={cn(
+                      "rounded-full border px-2 py-0.5 text-[10.5px] transition-colors",
+                      motionMentioned.includes(name)
+                        ? "border-pulse/50 bg-pulse/10 text-white"
+                        : "border-white/15 text-white/50 hover:border-white/35 hover:text-white",
+                    )}
+                  >
+                    @{name}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  disabled={
+                    (!!state && state.phase !== "error") || (!seg.imageUrl && !isPlates)
+                  }
+                  onClick={() => onRegenerateMotion(motionDir)}
+                  className="ml-auto flex items-center gap-1.5 rounded-[9px] border border-pulse/40 bg-pulse/[0.08] px-2.5 py-1 text-[11.5px] font-medium text-white transition-colors hover:bg-pulse/[0.16] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <RefreshCw className={cn("h-3 w-3", busyClip && "animate-spin")} />
+                  {isPlates
+                    ? `${seg.clipUrl ? "Regenerate" : "Generate"} loop + plates · ${clipCost + platesTotal * singlePlateTokens()}`
+                    : `${seg.clipUrl ? "Regenerate" : "Generate"} · ${clipCost}`}
+                </button>
+              </div>
+              {isPlates && (
+                <p className="mt-1 text-[10px] leading-snug text-white/35">
+                  <Repeat className="mr-1 inline h-2.5 w-2.5" />
+                  One clip loops for the whole block while the {platesTotal} lines change on their
+                  timing.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="hidden lg:block" />
+      )}
+    </div>
+  );
+}

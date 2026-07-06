@@ -20,7 +20,7 @@ async function main() {
     ],
   };
 
-  const segs = buildSegments(lyrics, 11);
+  const segs = buildSegments(lyrics, 11, "line");
   console.log("buildSegments ->");
   console.table(
     segs.map((s) => ({ i: s.index, clip: `${s.clipStart}-${s.clipEnd.toFixed(2)}`, text: `${s.start}-${s.end.toFixed(2)}` })),

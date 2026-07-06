@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { COVER_MODELS, GENERATION_MODES } from "./constants.js";
 import { lyricsSchema } from "./lyrics.js";
-import { videoJobSchema, videoJobStatusSchema, videoModelSchema } from "./video.js";
+import { sceneGroupingSchema, videoJobSchema, videoJobStatusSchema, videoModelSchema } from "./video.js";
 
 /** A finished lyric video saved on a song, for one style. */
 export const songVideoSchema = z.object({
@@ -9,6 +9,9 @@ export const songVideoSchema = z.object({
   url: z.string().url(),
   /** True when this saved video is only a short preview, not the full song. */
   isPreview: z.boolean().default(false),
+  /** How the source job grouped lyric lines into scenes — the reuse-frames
+   *  quote re-prices that exact timeline, so it must know the planning mode. */
+  sceneGrouping: sceneGroupingSchema.default("line"),
 });
 export type SongVideo = z.infer<typeof songVideoSchema>;
 

@@ -58,7 +58,8 @@ export async function renderDemoSlideshow(opts: {
   description: string;
   ownerHash: string;
 }): Promise<string> {
-  const segments = buildSegments(DEMO_CLIP_LYRICS, DEMO_CLIP_SECONDS);
+  // Pinned to "line": the demo clip's look predates grouping and must not change.
+  const segments = buildSegments(DEMO_CLIP_LYRICS, DEMO_CLIP_SECONDS, "line");
   if (segments.length === 0) throw new Error("DEMO_NOT_BUILT");
 
   const id = randomUUID();

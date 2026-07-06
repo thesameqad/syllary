@@ -21,6 +21,52 @@ export const ASPECT_RATIOS = ["16:9", "9:16", "1:1"] as const;
 export const aspectRatioSchema = z.enum(ASPECT_RATIOS);
 export type AspectRatio = z.infer<typeof aspectRatioSchema>;
 
+/** How lyric lines are grouped into scenes:
+ *  - "time": consecutive lines share one scene until it spans ~10s (the default —
+ *    ~30 scenes for a 5-min song instead of ~81, calmer pacing for dense lyrics).
+ *  - "line": one scene per lyric line (the original behavior).
+ *  - "block": semantic blocks — group by the lyrics' section labels
+ *    (Verse/Chorus), splitting any section at 4 lines; plain 4-line chunks when
+ *    the song has no section labels.
+ *  - "single": "One scene" — the ENTIRE song is one scene: a single motion clip
+ *    (at the model's max length) loops for the whole runtime while every lyric
+ *    line appears at its sung moment as a typography plate. Living Scenes only
+ *    (needs the plates loop machinery). */
+export const SCENE_GROUPINGS = ["time", "line", "block", "single"] as const;
+export const sceneGroupingSchema = z.enum(SCENE_GROUPINGS);
+export type SceneGrouping = z.infer<typeof sceneGroupingSchema>;
+
+/** How a scene's lyric text reaches the screen:
+ *  - "baked": painted into the frame by the image model (the classic Syllary
+ *    look — and the meaning of an ABSENT textMode on legacy segments).
+ *  - "overlay": text-free frame + timed ffmpeg subtitle overlay per line
+ *    (grouped Cinematic, and the safety fallback for failed plates).
+ *  - "plates": one text-free base + one looping clip for the whole scene, with
+ *    per-line inpainted text plates composited on the sung timing. */
+export const TEXT_MODES = ["baked", "overlay", "plates"] as const;
+export const textModeSchema = z.enum(TEXT_MODES);
+export type TextMode = z.infer<typeof textModeSchema>;
+
+/** One sung line inside a grouped scene. */
+export const segmentLineSchema = z.object({
+  text: z.string(),
+  /** When this line is sung (seconds, absolute song time). */
+  start: z.number(),
+  end: z.number(),
+  /** plates only: R2 key of this line's inpainted, alpha-feathered plate crop. */
+  plateKey: z.string().nullable().default(null),
+});
+export type SegmentLine = z.infer<typeof segmentLineSchema>;
+
+/** plates only: the text band chosen for a scene, normalized 0..1 to the canvas. */
+export const plateRectSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+  w: z.number(),
+  h: z.number(),
+});
+export type PlateRect = z.infer<typeof plateRectSchema>;
+
 /** Request body for POST /api/songs/:id/video. */
 export const createVideoSchema = z.object({
   styleDescription: z.string().trim().min(1).max(2000),
@@ -49,6 +95,8 @@ export const createVideoSchema = z.object({
    *  or skip it (false) and let the user generate each scene on demand — no upfront
    *  image spend, full per-scene control. */
   prerenderImages: z.boolean().default(true),
+  /** How lyric lines are grouped into scenes. See SCENE_GROUPINGS. */
+  sceneGrouping: sceneGroupingSchema.default("time"),
 });
 export type CreateVideoRequest = z.infer<typeof createVideoSchema>;
 
@@ -97,6 +145,19 @@ export const videoSegmentSchema = z.object({
    *  only. Overrides the default "@mention nobody → the whole band", for shots
    *  like "Suburban House" that shouldn't include any band member or element. */
   noCast: z.boolean().default(false),
+  /** Per-line windows inside a grouped scene (grouping modes always set it, even
+   *  for 1-line groups). ABSENT = legacy single-line scene; `text` then holds the
+   *  one line. When present, `text` = lines joined with "\n". */
+  lines: z.array(segmentLineSchema).optional(),
+  /** How the lyric text reaches the screen for this scene. ABSENT = "baked"
+   *  (exactly today's behavior for every existing job). */
+  textMode: textModeSchema.optional(),
+  /** plates only: the low-motion text band chosen for this scene. */
+  plateRect: plateRectSchema.nullable().optional(),
+  /** plates only: R2 key of the BARE loop clip (before plates are composited),
+   *  kept so re-doing one plate never re-bills the motion clip. `clipKey` holds
+   *  the composited result the assembly consumes. */
+  loopClipKey: z.string().nullable().optional(),
 });
 export type VideoSegment = z.infer<typeof videoSegmentSchema>;
 
@@ -121,8 +182,51 @@ export const reviewSegmentSchema = z.object({
   clipEnd: z.number(),
   /** This scene shows no recurring subjects (members/elements) — scenery only. */
   noCast: z.boolean().default(false),
+  /** Per-line windows for grouped scenes (text + sung timing, no keys). Absent =
+   *  single-line scene. */
+  lines: z
+    .array(z.object({ text: z.string(), start: z.number(), end: z.number() }))
+    .optional(),
+  /** How this scene's text reaches the screen. Defaults to "baked". */
+  textMode: textModeSchema.default("baked"),
+  /** plates only: how many of this scene's line-plates are generated (a count,
+   *  not N presigned URLs — polls stay cheap). */
+  platesReady: z.number().int().default(0),
 });
 export type ReviewSegment = z.infer<typeof reviewSegmentSchema>;
+
+/** Body for POST /api/video-jobs/:id/groups — merge the consecutive scenes
+ *  [from..to] (inclusive segment indexes) into ONE grouped scene. `textMode`
+ *  picks how its lines reach the screen: "baked" (one stanza image — "show at
+ *  once") or "plates" (one looping clip, lines appear in sequence). */
+export const createSegmentGroupSchema = z.object({
+  from: z.number().int().min(0),
+  to: z.number().int().min(1),
+  textMode: z.enum(["baked", "plates"]).default("baked"),
+});
+export type CreateSegmentGroupRequest = z.infer<typeof createSegmentGroupSchema>;
+
+/** Body for PATCH /api/video-jobs/:id/groups/:index — flip a grouped scene
+ *  between "show at once" (baked stanza) and "show in sequence" (plates).
+ *  Resets the scene's generated assets (they encode the old mode). */
+export const updateSegmentGroupSchema = z.object({
+  textMode: z.enum(["baked", "plates"]),
+});
+export type UpdateSegmentGroupRequest = z.infer<typeof updateSegmentGroupSchema>;
+
+/** Body for POST /api/video-jobs/:id/lines/move — move a BOUNDARY lyric line to
+ *  the adjacent scene (lyric timing is fixed, so the first line can only move
+ *  to the previous scene and the last line to the next). Both scenes' generated
+ *  assets reset (their timelines changed). */
+export const moveSegmentLineSchema = z.object({
+  /** Scene the line currently lives in (segment index). */
+  fromScene: z.number().int().min(0),
+  /** The line's position within that scene's lines[]. */
+  lineIndex: z.number().int().min(0),
+  /** Adjacent target scene (fromScene ± 1). */
+  toScene: z.number().int().min(0),
+});
+export type MoveSegmentLineRequest = z.infer<typeof moveSegmentLineSchema>;
 
 /** Body for POST /api/video-jobs/:id/segments/:index/regenerate. The per-scene
  *  direction (what to depict). An empty string clears it back to the lyric
@@ -172,6 +276,12 @@ export const videoJobSchema = z.object({
   aspectRatio: aspectRatioSchema,
   imageSize: imageSizeSchema,
   imageQuality: imageQualitySchema,
+  /** How lyric lines were grouped into scenes for this job. */
+  sceneGrouping: sceneGroupingSchema.default("line"),
+  /** Manual mode: whether every scene image was pre-generated up front (paid at
+   *  create) or is generated on demand (paid at finalize). Drives the editor's
+   *  finalize-cost display. */
+  prerenderImages: z.boolean().default(true),
   /** This job renders only a short preview (not the full song). */
   isPreview: z.boolean().default(false),
   /** This is a re-edit of an already-finished video (reopened into review to

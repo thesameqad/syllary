@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useAuth } from "@clerk/clerk-react";
 import { motion } from "framer-motion";
 import {
@@ -102,6 +102,7 @@ function Frame({ signedIn, children }: { signedIn: boolean; children: ReactNode 
 
 function ResultPageInner({ signedIn }: { signedIn: boolean }) {
   const { songId } = useParams<{ songId: string }>();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [song, setSong] = useState<Song | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -180,17 +181,25 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
     }
   }, [song?.status, song?.id, song?.mode, song?.canEdit]);
 
-  // Lyric-video generation: the modal kicks off the job, then hands it here so
-  // progress shows inside the video player while the user is free to roam.
-  const handleVideoStarted = useCallback((job: VideoJob) => {
-    setActiveVideoJob(job);
-    setVideoOpen(false);
-    setVideoNoticeOpen(true);
-    setTimeout(
-      () => videoSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }),
-      200,
-    );
-  }, []);
+  // Lyric-video generation: the modal kicks off the job. MANUAL jobs (the
+  // default) go straight to the full-page Video Editor — it doubles as the live
+  // progress view. Autopilot stays here, with progress inside the video player.
+  const handleVideoStarted = useCallback(
+    (job: VideoJob) => {
+      setActiveVideoJob(job);
+      setVideoOpen(false);
+      if (job.mode === "manual" && song?.id) {
+        navigate(`/s/${song.id}/editor?job=${job.id}`);
+        return;
+      }
+      setVideoNoticeOpen(true);
+      setTimeout(
+        () => videoSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }),
+        200,
+      );
+    },
+    [song?.id, navigate],
+  );
 
   const handleVideoDone = useCallback(() => {
     setActiveVideoJob(null);

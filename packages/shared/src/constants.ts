@@ -223,27 +223,41 @@ export function referenceCountFor(memberImageCounts: number[]): number {
 export const VIDEO_PIPELINE_MODES = ["autopilot", "manual"] as const;
 export type VideoPipelineMode = (typeof VIDEO_PIPELINE_MODES)[number];
 
-/** Backdrop image-model tier, orthogonal to resolution. Fast = Nano Banana 2
- *  (cheaper, near-Pro quality); Pro = Nano Banana Pro (best embedded-text
- *  rendering, pricier). Internal keys are stable DB values. The actual token
- *  price is computed per-song from real cost — see `estimateVideoCost` in
- *  video-plan.ts. */
-export const IMAGE_QUALITIES = ["fast", "pro"] as const;
+/** Generation-model tier ("Model" in the UI). Each tier selects the image
+ *  model AND (for AI-motion styles) the motion model as one combo:
+ *   - lite: Qwen-Image + Seedance 1.5 Pro @480p via fal — budget tier, priced
+ *     at a friendlier 2× markup. PAID PLANS ONLY (hidden from free users so
+ *     the signup funnel is untouched). No Cinematic, no cast members, 1K only.
+ *   - fast ("Medium"): Nano Banana 2 + Grok Imagine — the longtime default.
+ *   - pro: Nano Banana Pro + Grok Imagine — sharpest embedded text.
+ *  Internal keys are stable DB values ("fast" stays "fast"; only its label
+ *  changed to "Medium"). Token prices are computed per-song from real cost —
+ *  see `estimateVideoCost` in video-plan.ts. */
+export const IMAGE_QUALITIES = ["lite", "fast", "pro"] as const;
 export type ImageQuality = (typeof IMAGE_QUALITIES)[number];
 
 export const IMAGE_QUALITY_INFO: Record<
   ImageQuality,
-  { label: string; description: string; enabled: boolean }
+  { label: string; description: string; enabled: boolean; paidOnly: boolean }
 > = {
-  fast: {
-    label: "Fast",
-    description: "Cheapest, beautiful scenes — but the lyric text can occasionally render with typos.",
+  lite: {
+    label: "Lite",
+    description:
+      "The budget tier — beautiful scenes at the lowest price. Text can occasionally render with typos; no cast members.",
     enabled: true,
+    paidOnly: true,
+  },
+  fast: {
+    label: "Medium",
+    description: "Great scenes at a fair price — but the lyric text can occasionally render with typos.",
+    enabled: true,
+    paidOnly: false,
   },
   pro: {
     label: "Pro",
     description: "Renders the lyric text precisely (far fewer typos), plus the sharpest detail. Costs more.",
     enabled: true,
+    paidOnly: false,
   },
 };
 

@@ -21,6 +21,7 @@ import type {
   ImageSize,
   LandingBlock,
   Lyrics,
+  SceneGrouping,
   SongInsights,
   SongLink,
   StoredMemberImage,
@@ -219,6 +220,10 @@ export const videoJobs = pgTable(
     // Manual mode: pre-generate every per-line image up front (true), or skip it and
     // let the user generate each scene on demand (false). Ignored by autopilot.
     prerenderImages: boolean("prerender_images").notNull().default(true),
+    // How lyric lines are grouped into scenes: time | line | block. DB default
+    // 'line' so every pre-existing row reads as exact-legacy; new inserts write
+    // the request value (whose zod default is "time").
+    sceneGrouping: text("scene_grouping").$type<SceneGrouping>().notNull().default("line"),
     // One-time AI "art brief" (who/what the song depicts) injected into every
     // per-line image prompt so the model gets the subject/POV right.
     sceneBrief: text("scene_brief"),
@@ -251,6 +256,9 @@ export const songVideos = pgTable(
     videoKey: text("video_key").notNull(),
     // True when the saved video for this style is only a preview sample.
     isPreview: boolean("is_preview").notNull().default(false),
+    // The grouping the source job used — the reuse-frames flow quotes its price
+    // from the SOURCE timeline, so it must know how that timeline was planned.
+    sceneGrouping: text("scene_grouping").$type<SceneGrouping>().notNull().default("line"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

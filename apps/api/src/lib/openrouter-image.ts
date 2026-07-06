@@ -119,9 +119,15 @@ export function buildBackdropPrompt(opts: {
     `Depict the literal action, imagery and emotion of this exact moment: ${subject}.`,
     consistency,
     characterBlock,
-    `Render this exact lyric as the hero typography of the image, large and beautifully legible, integrated INTO the scene and styled to match the art direction (for example: glowing neon tubing if the style is neon, gold foil if elegant, hand-painted if folk):`,
+    // Grouped scenes bake a STANZA: every line of the group, stacked, in order.
+    line.includes("\n")
+      ? `Render these ${line.split("\n").length} short lyric lines as ONE elegant stacked lyric block — the hero typography of the image — in this exact order, each on its own line, integrated INTO the scene and styled to match the art direction (for example: glowing neon tubing if the style is neon, gold foil if elegant, hand-painted if folk):`
+      : `Render this exact lyric as the hero typography of the image, large and beautifully legible, integrated INTO the scene and styled to match the art direction (for example: glowing neon tubing if the style is neon, gold foil if elegant, hand-painted if folk):`,
     `"${line}"`,
-    `Spell it EXACTLY as written. Show ONLY this line of text — no other words, captions, watermarks, logos, signatures, or duplicate text.`,
+    line.includes("\n")
+      ? `Spell every line EXACTLY as written, keeping the given line breaks. Show ONLY these lines of text — no other words, captions, watermarks, logos, signatures, or duplicate text.`
+      : `Spell it EXACTLY as written. Show ONLY this line of text — no other words, captions, watermarks, logos, signatures, or duplicate text.`,
+    `Anchor the text to a physical surface or object in the scene — a billboard, wall, sign, screen, banner, or the side of an object — with matching perspective and lighting, so it exists INSIDE the world. Never float it as a flat caption over the image.`,
     `Keep the text fully inside the frame with generous safe margins from every edge so it is never cut off, with strong contrast against the background.`,
     peopleLine(true),
   ];

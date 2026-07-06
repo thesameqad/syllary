@@ -29,6 +29,7 @@ import {
   setPublicVideoSchema,
   type Song,
   type SongSummary,
+  type SceneGrouping,
   type SongVideo,
   syncLyricsSchema,
   videoDownloadSchema,
@@ -132,6 +133,9 @@ async function videosFor(songId: string): Promise<SongVideo[]> {
       model: r.model,
       url: await presignGet(r.videoKey),
       isPreview: r.isPreview,
+      // The reuse-frames quote re-prices the SOURCE timeline, so the client must
+      // know how that timeline was grouped.
+      sceneGrouping: (r.sceneGrouping ?? "line") as SceneGrouping,
     })),
   );
 }
@@ -175,6 +179,8 @@ async function activeVideoJobFor(songId: string): Promise<VideoJob | null> {
     aspectRatio: row.aspectRatio as AspectRatio,
     imageSize: row.imageSize as ImageSize,
     imageQuality: row.imageQuality as ImageQuality,
+    sceneGrouping: (row.sceneGrouping ?? "line") as SceneGrouping,
+    prerenderImages: row.prerenderImages,
     isPreview: row.isPreview,
     isEdit: row.reuseFrames && row.mode === "manual",
     totalSegments: row.totalSegments,

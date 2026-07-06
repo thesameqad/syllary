@@ -204,6 +204,13 @@
       "when": 1782764861902,
       "tag": "0028_customized_cast_member",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1783291002266,
+      "tag": "0029_mighty_ikaris",
+      "breakpoints": true
     }
   ]
 }

@@ -30,6 +30,23 @@ function resolveWatermarkPath(): string {
 
 export const WATERMARK_PATH = resolveWatermarkPath();
 
+/** Directory holding the bundled subtitle font (Inter Variable TTF). Render's
+ *  slim runtime has fontconfig but no fonts installed, so libass would render
+ *  ASS cues as empty boxes without an explicit fontsdir. Same dev/prod path
+ *  gymnastics as the watermark. */
+function resolveFontsDir(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(here, "../../assets/fonts"), // dev: apps/api/src/lib → apps/api/assets
+    path.resolve(here, "../assets/fonts"), // prod bundle: apps/api/dist → apps/api/assets
+    path.resolve(process.cwd(), "assets/fonts"), // process cwd = apps/api
+    path.resolve(process.cwd(), "apps/api/assets/fonts"), // cwd = repo root
+  ];
+  return candidates.find((p) => existsSync(p)) ?? candidates[0]!;
+}
+
+export const FONTS_DIR = resolveFontsDir();
+
 /** Resolve the ffmpeg binary: explicit override, else the bundled static build
  *  (a precompiled binary in node_modules — no Docker/apt needed on Render). */
 function ffmpegPath(): string {
@@ -355,7 +372,10 @@ export async function fitClipToDuration(opts: {
       "-y",
       "-i", path.basename(opts.inFile),
       "-vf",
-      `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},fps=${FPS},tpad=stop_mode=clone:stop_duration=${dur},format=yuv420p`,
+      // lanczos: AI clips arrive at 480p (Lite/Cinematic) or 720p (Grok) and get
+      // stretched to the 1080p canvas — lanczos keeps edges (esp. baked-in lyric
+      // text) noticeably crisper than the bicubic default for free.
+      `scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h},fps=${FPS},tpad=stop_mode=clone:stop_duration=${dur},format=yuv420p`,
       "-t", dur,
       "-an",
       "-c:v", "libx264",
@@ -388,7 +408,7 @@ export async function speedFitClip(opts: {
       "-y",
       "-i", path.basename(opts.inFile),
       "-vf",
-      `setpts=${factor}*PTS,scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},fps=${FPS},format=yuv420p`,
+      `setpts=${factor}*PTS,scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h},fps=${FPS},format=yuv420p`,
       "-t", target.toFixed(3),
       "-an",
       "-c:v", "libx264",
@@ -481,7 +501,9 @@ function buildAss(cues: LyricCue[], w: number, h: number): string {
     "",
     "[V4+ Styles]",
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-    `Style: Default,Sans,${fontSize},&H00FFFFFF,&H00FFFFFF,&H64000000,&H96000000,1,0,0,0,100,100,0,0,1,${outline},${shadow},2,${marginH},${marginH},${marginV},1`,
+    // "Inter Variable" = the bundled TTF in FONTS_DIR (passed via ass=…:fontsdir);
+    // libass falls back to any fontsdir face if the family name ever drifts.
+    `Style: Default,Inter Variable,${fontSize},&H00FFFFFF,&H00FFFFFF,&H64000000,&H96000000,1,0,0,0,100,100,0,0,1,${outline},${shadow},2,${marginH},${marginH},${marginV},1`,
     "",
     "[Events]",
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -506,15 +528,21 @@ export async function overlayLyricsAndMux(opts: {
   aspectRatio: AspectRatio;
   outName: string;
   maxSeconds: number;
+  /** Seek the song audio to this offset (previews start at the first lyric). */
+  audioStartSeconds?: number;
 }): Promise<string> {
   const { w, h } = DIMENSIONS[opts.aspectRatio];
   await writeFile(path.join(opts.workDir, "lyrics.ass"), buildAss(opts.cues, w, h), "utf8");
+  // ffmpeg filter args use ':' as an option separator — escape the Windows drive
+  // colon in the fontsdir path (C\:/...) so libass gets the whole path.
+  const fontsDir = FONTS_DIR.replace(/\\/g, "/").replace(/:/g, "\\:");
   await runFfmpeg(
     [
       "-y",
       "-i", opts.videoName,
+      ...(opts.audioStartSeconds ? ["-ss", opts.audioStartSeconds.toFixed(3)] : []),
       "-i", opts.audioFile,
-      "-filter_complex", "[0:v]ass=lyrics.ass[v]",
+      "-filter_complex", `[0:v]ass=lyrics.ass:fontsdir='${fontsDir}'[v]`,
       "-map", "[v]",
       "-map", "1:a",
       "-c:v", "libx264",

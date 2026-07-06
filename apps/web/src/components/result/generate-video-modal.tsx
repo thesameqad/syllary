@@ -27,6 +27,8 @@ import {
   IMAGE_SIZE_INFO,
   type ImageQuality,
   type ImageSize,
+  SCENE_GROUPINGS,
+  type SceneGrouping,
   type Song,
   type SongElement,
   type VideoJob,
@@ -86,12 +88,16 @@ export function GenerateVideoModal({
   const [step, setStep] = useState<Step>("style");
   const [style, setStyle] = useState("");
   const [presetId, setPresetId] = useState<string | null>(null);
-  const [mode, setMode] = useState<VideoPipelineMode>("autopilot");
+  // Manual is the default: the new full-page Video Editor makes reviewing scenes
+  // the primary flow; autopilot stays one tap away.
+  const [mode, setMode] = useState<VideoPipelineMode>("manual");
   // Manual mode: pre-render every image up front, or generate each scene on demand.
   const [prerender, setPrerender] = useState(true);
   const [model, setModel] = useState<VideoModel>("fast");
   const [imageSize, setImageSize] = useState<ImageSize>("1K");
   const [imageQuality, setImageQuality] = useState<ImageQuality>("fast");
+  // How lyric lines are grouped into scenes (time = ~10s scenes, the default).
+  const [sceneGrouping, setSceneGrouping] = useState<SceneGrouping>("time");
   const [submitting, setSubmitting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   // Manual mode + preview conflict: previews always run on autopilot, so confirm.
@@ -120,6 +126,35 @@ export function GenerateVideoModal({
   // so neither do we. Quoted price == charged price.
   const referenceImages = 0;
 
+  // "One scene" only exists on Living Scenes — leaving the style resets it.
+  useEffect(() => {
+    if (model !== "normal" && sceneGrouping === "single") setSceneGrouping("time");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model]);
+
+  // Scene-grouping option copy (labels shown on the tile grid).
+  const SCENE_GROUPING_INFO: Record<SceneGrouping, { label: string; description: string }> = {
+    time: {
+      label: "Every ~10 seconds",
+      description: "Nearby lines share one scene — calm pacing and ~3× fewer scenes to pay for.",
+    },
+    line: {
+      label: "Every line",
+      description: "A new scene for every lyric line — the classic, fast-cutting look.",
+    },
+    block: {
+      label: "By song section",
+      description: "Verse and chorus blocks share a scene, up to 4 lines each.",
+    },
+    single: {
+      label: "One scene",
+      description:
+        "A single looping shot carries the whole song — each line glows in at its sung moment. The cheapest way to a full video.",
+    },
+  };
+  // "One scene" runs on the plates machinery — Living Scenes only.
+  const groupingDisabled = (g: SceneGrouping) => g === "single" && model !== "normal";
+
   // Live price for the chosen settings, computed from the same timeline the
   // renderer will produce — recomputes on every mode/quality/resolution change.
   const estimate = useMemo(
@@ -131,8 +166,9 @@ export function GenerateVideoModal({
         lyrics: song.lyrics,
         durationSeconds: song.durationSeconds,
         referenceImages,
+        sceneGrouping,
       }),
-    [model, imageQuality, imageSize, song.lyrics, song.durationSeconds, referenceImages],
+    [model, imageQuality, imageSize, song.lyrics, song.durationSeconds, referenceImages, sceneGrouping],
   );
   const cost = estimate.tokens;
   // Manual + "I'll generate each scene" charges nothing up front (pay per scene),
@@ -150,8 +186,9 @@ export function GenerateVideoModal({
         durationSeconds: song.durationSeconds,
         preview: true,
         referenceImages,
+        sceneGrouping,
       }).tokens,
-    [model, imageQuality, imageSize, song.lyrics, song.durationSeconds, referenceImages],
+    [model, imageQuality, imageSize, song.lyrics, song.durationSeconds, referenceImages, sceneGrouping],
   );
   const credits = account?.credits ?? null;
   const broke = credits !== null && credits < upfrontCost;
@@ -174,7 +211,8 @@ export function GenerateVideoModal({
       setModel("fast");
       setImageSize("1K");
       setImageQuality("fast");
-      setMode("autopilot");
+      setSceneGrouping("time");
+      setMode("manual");
       setSubmitting(false);
       setPreviewing(false);
       setConfirmPreview(false);
@@ -226,9 +264,10 @@ export function GenerateVideoModal({
     .map((e) => e.name);
 
   // After settings: always stop at the optional cast step — members are customized
-  // there and elements selected (skippable with Next).
+  // there and elements selected (skippable with Next). Lite has no cast support
+  // (Qwen-Image takes no reference photos), so it skips straight to the brief.
   function afterSettings() {
-    setStep("cast");
+    setStep(imageQuality === "lite" ? "direction" : "cast");
   }
 
   function toggleElement(id: string) {
@@ -319,6 +358,7 @@ export function GenerateVideoModal({
         aspectRatio: "16:9",
         imageSize,
         imageQuality,
+        sceneGrouping,
         preview,
         // Manual + "I'll generate each scene" = skip pre-rendering all images.
         prerenderImages: mode === "manual" ? prerender : true,
@@ -455,7 +495,16 @@ export function GenerateVideoModal({
 
             <div className="space-y-2.5">
               {VIDEO_MODELS.map((m) => (
-                <StyleCard key={m} model={m} selected={model === m} onSelect={() => setModel(m)} />
+                <StyleCard
+                  key={m}
+                  model={m}
+                  selected={model === m}
+                  onSelect={() => {
+                    setModel(m);
+                    // Cinematic has no Lite tier — fall back to the default model.
+                    if (m === "pro" && imageQuality === "lite") setImageQuality("fast");
+                  }}
+                />
               ))}
             </div>
 
@@ -484,7 +533,7 @@ export function GenerateVideoModal({
               <div>
                 <h3 className="text-[14px] font-medium text-white">Quality &amp; generation</h3>
                 <p className="mt-0.5 text-[12px] leading-snug text-white/50">
-                  Fine-tune resolution, image quality, and whether we build it for you or you review
+                  Fine-tune resolution, the model, and whether we build it for you or you review
                   each scene. The defaults are great if you're not sure.
                 </p>
               </div>
@@ -543,11 +592,15 @@ export function GenerateVideoModal({
                   {enabledSizes.map((size) => {
                     const info = IMAGE_SIZE_INFO[size];
                     const selected = imageSize === size;
+                    // Lite bills per rounded-up megapixel — 1K is the only size
+                    // that hits its price, so the rest are locked.
+                    const sizeLocked = imageQuality === "lite" && size !== "1K";
                     return (
                       <motion.button
                         key={size}
                         type="button"
-                        title={info.description}
+                        disabled={sizeLocked}
+                        title={sizeLocked ? "The Lite model renders at 1K." : info.description}
                         onClick={() => setImageSize(size)}
                         style={{ transformPerspective: 700 }}
                         whileHover={{ y: -2, rotateX: -6 }}
@@ -555,6 +608,7 @@ export function GenerateVideoModal({
                         transition={{ type: "spring", stiffness: 400, damping: 22 }}
                         className={cn(
                           "rounded-[12px] border px-3 py-2.5 text-center transition-colors",
+                          sizeLocked && "cursor-not-allowed opacity-40",
                           selected
                             ? "border-pulse/50 bg-gradient-to-b from-pulse/[0.16] to-pulse/[0.04] text-white shadow-[0_8px_22px_-10px_rgba(255,45,45,0.6),inset_0_1px_0_rgba(255,255,255,0.15)]"
                             : "border-white/10 bg-white/[0.03] text-white/70 hover:border-white/20 hover:text-white",
@@ -572,23 +626,45 @@ export function GenerateVideoModal({
 
               <div>
                 <span className="text-[11px] uppercase tracking-[0.5px] text-white/35">
-                  Image model
+                  Model
                 </span>
-                <div className="mt-2 grid grid-cols-2 gap-2.5">
-                  {IMAGE_QUALITIES.map((q) => {
+                <div
+                  className={cn(
+                    "mt-2 grid gap-2.5",
+                    // Paid plans see the Lite tier as a third card; free users see
+                    // exactly the two cards they always have (funnel unchanged).
+                    account && account.plan !== "free" ? "grid-cols-1 sm:grid-cols-3" : "grid-cols-2",
+                  )}
+                >
+                  {IMAGE_QUALITIES.filter(
+                    (q) =>
+                      IMAGE_QUALITY_INFO[q].enabled &&
+                      !(IMAGE_QUALITY_INFO[q].paidOnly && (!account || account.plan === "free")),
+                  ).map((q) => {
                     const info = IMAGE_QUALITY_INFO[q];
                     const selected = imageQuality === q;
+                    // Cinematic's morphing needs Grok/Seedance-2.0 — no Lite there.
+                    const liteBlocked = q === "lite" && model === "pro";
                     return (
                       <motion.button
                         key={q}
                         type="button"
-                        onClick={() => setImageQuality(q)}
+                        disabled={liteBlocked}
+                        title={liteBlocked ? "Cinematic isn't available on Lite — pick Medium or Pro." : info.description}
+                        onClick={() => {
+                          setImageQuality(q);
+                          if (q === "lite") {
+                            setImageSize("1K"); // Lite renders 1K only
+                            setSelectedElementIds([]); // no cast members on Lite
+                          }
+                        }}
                         style={{ transformPerspective: 800 }}
                         whileHover={{ y: -3, rotateX: -5 }}
                         whileTap={{ scale: 0.98 }}
                         transition={{ type: "spring", stiffness: 380, damping: 22 }}
                         className={cn(
                           "relative overflow-hidden rounded-[14px] border p-3.5 text-left transition-colors",
+                          liteBlocked && "cursor-not-allowed opacity-40",
                           selected
                             ? "border-pulse/50 bg-gradient-to-br from-pulse/[0.12] to-transparent text-white shadow-[0_10px_30px_-12px_rgba(255,45,45,0.5),inset_0_1px_0_rgba(255,255,255,0.08)]"
                             : "border-white/[0.08] bg-white/[0.02] text-white/70 hover:border-white/20 hover:text-white",
@@ -596,6 +672,11 @@ export function GenerateVideoModal({
                       >
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-[14px] font-medium text-white">{info.label}</span>
+                          {q === "lite" && (
+                            <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[10px] font-medium text-white/55">
+                              Cheapest
+                            </span>
+                          )}
                           {q === "fast" && (
                             <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[10px] font-medium text-white/55">
                               Default
@@ -623,9 +704,72 @@ export function GenerateVideoModal({
 
               <div>
                 <span className="text-[11px] uppercase tracking-[0.5px] text-white/35">
+                  Scene grouping
+                </span>
+                <div className="mt-2 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                  {SCENE_GROUPINGS.map((g) => {
+                    const info = SCENE_GROUPING_INFO[g];
+                    const selected = sceneGrouping === g;
+                    const disabled = groupingDisabled(g);
+                    return (
+                      <motion.button
+                        key={g}
+                        type="button"
+                        disabled={disabled}
+                        title={disabled ? "One scene needs the Living Scenes video style." : undefined}
+                        onClick={() => setSceneGrouping(g)}
+                        style={{ transformPerspective: 800 }}
+                        whileHover={disabled ? undefined : { y: -3, rotateX: -5 }}
+                        whileTap={disabled ? undefined : { scale: 0.98 }}
+                        transition={{ type: "spring", stiffness: 380, damping: 22 }}
+                        className={cn(
+                          "relative overflow-hidden rounded-[14px] border p-3.5 text-left transition-colors",
+                          selected
+                            ? "border-pulse/50 bg-gradient-to-br from-pulse/[0.12] to-transparent text-white shadow-[0_10px_30px_-12px_rgba(255,45,45,0.5),inset_0_1px_0_rgba(255,255,255,0.08)]"
+                            : "border-white/[0.08] bg-white/[0.02] text-white/70 hover:border-white/20 hover:text-white",
+                          disabled && "cursor-not-allowed opacity-45 hover:border-white/[0.08] hover:text-white/70",
+                        )}
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[14px] font-medium text-white">{info.label}</span>
+                          {g === "time" && (
+                            <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[10px] font-medium text-white/55">
+                              Recommended
+                            </span>
+                          )}
+                          {g === "single" && (
+                            <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[10px] font-medium text-white/55">
+                              Living Scenes
+                            </span>
+                          )}
+                          {selected && (
+                            <span className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-pulse text-white">
+                              <Check className="h-3 w-3" />
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-1 text-[11.5px] leading-snug text-white/50">
+                          {info.description}
+                        </p>
+                      </motion.button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <span className="text-[11px] uppercase tracking-[0.5px] text-white/35">
                   Generation
                 </span>
                 <div className="mt-2 grid grid-cols-2 gap-3">
+                  <ModeCard
+                    icon={Hand}
+                    label="Manual"
+                    desc="Review and regenerate each scene in the editor before you stitch the video."
+                    tokens={estimate.tokens}
+                    selected={mode === "manual"}
+                    onSelect={() => setMode("manual")}
+                  />
                   <ModeCard
                     icon={Bot}
                     label="Autopilot"
@@ -633,14 +777,6 @@ export function GenerateVideoModal({
                     tokens={estimate.tokens}
                     selected={mode === "autopilot"}
                     onSelect={() => setMode("autopilot")}
-                  />
-                  <ModeCard
-                    icon={Hand}
-                    label="Manual"
-                    desc="Review and regenerate each scene before you stitch the video."
-                    tokens={estimate.tokens}
-                    selected={mode === "manual"}
-                    onSelect={() => setMode("manual")}
                   />
                 </div>
                 {mode === "manual" && (
@@ -1032,7 +1168,7 @@ export function GenerateVideoModal({
                 </Button3D>
                 <button
                   type="button"
-                  onClick={() => setStep(usableMembers.length > 0 ? "cast" : "settings")}
+                  onClick={() => setStep(imageQuality !== "lite" && usableMembers.length > 0 ? "cast" : "settings")}
                   className="mx-auto mt-3 block text-[12px] text-white/40 transition-colors hover:text-white"
                 >
                   Back
@@ -1046,7 +1182,7 @@ export function GenerateVideoModal({
                 <Button3D
                   variant="secondary"
                   className="order-1 w-full whitespace-nowrap sm:order-none sm:w-auto"
-                  onClick={() => setStep(usableMembers.length > 0 ? "cast" : "settings")}
+                  onClick={() => setStep(imageQuality !== "lite" && usableMembers.length > 0 ? "cast" : "settings")}
                 >
                   <ArrowLeft className="h-4 w-4" />
                   Back

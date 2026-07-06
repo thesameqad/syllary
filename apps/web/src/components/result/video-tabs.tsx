@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertCircle, Check, ChevronDown, Clapperboard, Download, Globe, Loader2, Lock, Maximize2, Pencil, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, Clapperboard, Download, Globe, LayoutGrid, Loader2, Lock, Maximize2, Pencil, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import {
   canRemoveWatermark,
   estimateVideoCost,
@@ -202,6 +203,7 @@ export function VideoTabs({
   onJobFailed: (message: string) => void;
 }) {
   const toast = useToast();
+  const navigate = useNavigate();
   const { account } = useAccount();
   const allowClean = !!account && canRemoveWatermark(account.plan);
   const [theaterOpen, setTheaterOpen] = useState(false);
@@ -319,6 +321,8 @@ export function VideoTabs({
       )
     : [];
   // Clip-only price (images are reused). quality/size don't affect the clip term.
+  // The SOURCE video's grouping decides the timeline being re-animated, so the
+  // quote replans with it (the server prices the same persisted timeline).
   const reuseTokens = (m: VideoModel) =>
     estimateVideoCost({
       model: m,
@@ -327,6 +331,7 @@ export function VideoTabs({
       lyrics: song.lyrics,
       durationSeconds: song.durationSeconds,
       reuseImages: true,
+      sceneGrouping: completed?.sceneGrouping ?? "line",
     }).tokens;
 
   async function createFromFrames(target: VideoModel, mode: "autopilot" | "manual" = "autopilot") {
@@ -341,14 +346,14 @@ export function VideoTabs({
     }
   }
 
-  // Re-open the finished video for this style into the manual-review carousel
-  // (a fresh edit job seeded with its frames). The existing showReview path then
-  // renders ManualReview.
+  // Re-open the finished video for this style into review (a fresh edit job
+  // seeded with its frames) and jump to the full-page Video Editor — the
+  // default editing surface. The inline carousel stays reachable from there.
   async function startEdit() {
     setEditing(true);
     try {
       const job = await editVideo(song.id, selected);
-      setLiveJob(job);
+      navigate(`/s/${song.id}/editor?job=${job.id}`);
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "Couldn't open the editor.", "error");
     } finally {
@@ -494,15 +499,26 @@ export function VideoTabs({
       </div>
 
       {showReview && liveJob ? (
-        <ManualReview
-          job={liveJob}
-          audioUrl={song.audioUrl}
-          onSegmentUpdated={applySegment}
-          onJobUpdated={(updated) => setLiveJob(updated)}
-          onFinalized={(updated) => setLiveJob(updated)}
-          onCancel={() => void discardReview()}
-          finalizeCost={liveJob.isEdit ? reRenderTokens(liveJob.model, liveJob.segments) : undefined}
-        />
+        <>
+          <div className="mt-3 flex justify-end">
+            <Link
+              to={`/s/${song.id}/editor?job=${liveJob.id}`}
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1 text-[11.5px] text-white/55 transition-colors hover:border-white/35 hover:text-white"
+            >
+              <LayoutGrid className="h-3 w-3" />
+              Open full-page editor
+            </Link>
+          </div>
+          <ManualReview
+            job={liveJob}
+            audioUrl={song.audioUrl}
+            onSegmentUpdated={applySegment}
+            onJobUpdated={(updated) => setLiveJob(updated)}
+            onFinalized={(updated) => setLiveJob(updated)}
+            onCancel={() => void discardReview()}
+            finalizeCost={liveJob.isEdit ? reRenderTokens(liveJob.model, liveJob.segments, liveJob.imageQuality) : undefined}
+          />
+        </>
       ) : showProgress ? (
         <ProgressPanel
           done={liveJob?.completedSegments ?? 0}

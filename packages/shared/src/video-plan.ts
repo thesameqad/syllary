@@ -1,7 +1,7 @@
 import type { CoverModel, ImageQuality, ImageSize, VideoModel } from "./constants.js";
 import { PREVIEW_MAX_SCENES, PREVIEW_SECONDS, VIDEO_MODEL_INFO } from "./constants.js";
 import type { Lyrics } from "./lyrics.js";
-import type { VideoClipStatus, VideoSegment } from "./video.js";
+import type { SceneGrouping, VideoClipStatus, VideoSegment } from "./video.js";
 
 // ===========================================================================
 // Segment planning — shared between the server pipeline (apps/api) and the
@@ -15,6 +15,9 @@ export const GROK_MAX_SECONDS = 15;
 // Cinematic model (Seedance) only generates 4–15s clips.
 export const CINEMATIC_MIN_SECONDS = 4;
 export const CINEMATIC_MAX_SECONDS = 15;
+// Seedance 1.5 Pro via fal (Living Scenes on the Lite tier): 4–12s clips only.
+export const LITE_CLIP_MIN_SECONDS = 4;
+export const LITE_CLIP_MAX_SECONDS = 12;
 export const MIN_CLIP_SECONDS = 0.4;
 // Instrumental stretches longer than this get their own text-free clip(s)
 // rather than letting the previous line's frame linger.
@@ -25,11 +28,115 @@ export const INSTRUMENTAL_CHUNK_SECONDS = 5;
 // How long a line's frame holds after it's sung before an instrumental gap.
 export const LINE_HOLD_SECONDS = 1.5;
 
+// Scene grouping: how many lyric lines share one scene (image + clip).
+export const GROUP_TIME_SECONDS = 10; // "time" mode: close a scene once it spans this
+export const BLOCK_MAX_LINES = 4; //     "block" mode: hard cap per semantic block
+
+/** Tile the song timeline into scenes according to the job's grouping mode.
+ *  "line" reproduces the original per-line output byte-identically (reuse-frames
+ *  determinism depends on this); "time"/"block" merge consecutive lines into
+ *  grouped scenes carrying `lines[]`. Instrumental chunks are never grouped. */
+export function buildSegments(
+  lyrics: Lyrics,
+  durationSeconds: number | null,
+  grouping: SceneGrouping = "time",
+): VideoSegment[] {
+  const perLine = buildLineSegments(lyrics, durationSeconds);
+  if (grouping === "line") return perLine;
+  if (grouping === "single") {
+    // "One scene": the whole song is ONE plates scene — a single loop clip
+    // covering the full runtime (intro/outro included), every lyric line
+    // delivered as a typography plate at its sung moment. Stamped "plates"
+    // here (not in the pipeline) so cost estimates price the plates too.
+    const textSegs = perLine.filter((s) => s.text);
+    if (textSegs.length === 0) return perLine;
+    const merged = mergeGroup(textSegs);
+    return [
+      {
+        ...merged,
+        index: 0,
+        clipStart: 0,
+        clipEnd: perLine[perLine.length - 1]!.clipEnd,
+        textMode: "plates",
+      },
+    ];
+  }
+  // Section label per non-empty line, in the SAME order buildLineSegments walks
+  // them (labels mark only the line that STARTS a section).
+  const sections = lyrics.lines
+    .filter((l) => l.text.trim().length > 0)
+    .slice()
+    .sort((a, b) => a.start - b.start)
+    .map((l) => l.section ?? null);
+  return regroupSegments(perLine, grouping, sections);
+}
+
+/** Merge consecutive line-segments into grouped scenes. Instrumental segments
+ *  pass through untouched and close any open group. */
+function regroupSegments(
+  perLine: VideoSegment[],
+  grouping: "time" | "block",
+  sections: (string | null)[],
+): VideoSegment[] {
+  const out: VideoSegment[] = [];
+  let group: VideoSegment[] = [];
+
+  const flush = () => {
+    if (group.length === 0) return;
+    out.push(mergeGroup(group));
+    group = [];
+  };
+
+  let lineCursor = 0;
+  for (const seg of perLine) {
+    if (!seg.text) {
+      flush();
+      out.push({ ...seg });
+      continue;
+    }
+    const label = sections[lineCursor] ?? null;
+    lineCursor += 1;
+    if (grouping === "block") {
+      // A labeled line STARTS a new section → close the previous block (unless
+      // this is the block's first line). Songs with no labels at all only ever
+      // hit the 4-line cap → plain 4-line chunks.
+      if (label != null && group.length > 0) flush();
+      group.push(seg);
+      if (group.length >= BLOCK_MAX_LINES) flush();
+    } else {
+      group.push(seg);
+      const span = group[group.length - 1]!.clipEnd - group[0]!.clipStart;
+      if (span >= GROUP_TIME_SECONDS) flush();
+    }
+  }
+  flush();
+  return out.map((s, i) => ({ ...s, index: i }));
+}
+
+/** Collapse a run of consecutive line-segments into ONE grouped scene. `text`
+ *  joins the lines with "\n" (so every existing seg.text consumer still works);
+ *  `lines[]` keeps per-line sung windows (plates/overlay timing + lossless
+ *  ungroup). Grouped modes set `lines[]` even for 1-line groups so downstream
+ *  handling is uniform. */
+function mergeGroup(group: VideoSegment[]): VideoSegment {
+  const first = group[0]!;
+  const last = group[group.length - 1]!;
+  return {
+    ...first,
+    text: group.map((s) => s.text).join("\n"),
+    start: first.start,
+    end: last.end,
+    clipStart: first.clipStart,
+    clipEnd: last.clipEnd,
+    lines: group.map((s) => ({ text: s.text, start: s.start, end: s.end, plateKey: null })),
+  };
+}
+
 /** Tile the song timeline into clips. Each lyric line gets a frame (with its
  *  text rendered in); a line's frame lingers through SHORT gaps to the next
  *  line, but a gap longer than GAP_SECONDS (intro, mid-song break, outro) gets
  *  its own text-free instrumental frame so the previous line doesn't hang on. */
-export function buildSegments(lyrics: Lyrics, durationSeconds: number | null): VideoSegment[] {
+function buildLineSegments(lyrics: Lyrics, durationSeconds: number | null): VideoSegment[] {
   const lines = lyrics.lines
     .filter((l) => l.text.trim().length > 0)
     .slice()
@@ -95,12 +202,23 @@ export function buildSegments(lyrics: Lyrics, durationSeconds: number | null): V
   return segs;
 }
 
+/** Clamp a grouped scene's per-line windows to [winStart, winEnd) (absolute
+ *  times), dropping lines that fall outside and re-deriving `text` from the
+ *  survivors. No-op for legacy single-line segments. */
+function clampLines(seg: VideoSegment, winStart: number, winEnd: number): VideoSegment {
+  if (!seg.lines) return seg;
+  const lines = seg.lines
+    .filter((l) => l.start < winEnd && l.end > winStart)
+    .map((l) => ({ ...l, start: Math.max(l.start, winStart), end: Math.min(l.end, winEnd) }));
+  return { ...seg, lines, text: lines.map((l) => l.text).join("\n") };
+}
+
 /** Clamp segments to a preview window (used by the AI-video styles). */
 export function capForPreview(segments: VideoSegment[], cap: number): VideoSegment[] {
   return segments
     .filter((s) => s.clipStart < cap)
     .map((s) => ({
-      ...s,
+      ...clampLines(s, 0, cap),
       clipEnd: Math.min(s.clipEnd, cap),
       end: s.text ? Math.min(s.end, cap) : Math.min(s.clipEnd, cap),
     }))
@@ -114,13 +232,20 @@ export function capForPreview(segments: VideoSegment[], cap: number): VideoSegme
 export function buildPreviewSegments(
   lyrics: Lyrics | null,
   durationSeconds: number | null,
+  grouping: SceneGrouping = "time",
 ): { segments: VideoSegment[]; audioStartSeconds: number } {
   if (!lyrics) return { segments: [], audioStartSeconds: 0 };
-  const all = buildSegments(lyrics, durationSeconds);
+  const all = buildSegments(lyrics, durationSeconds, grouping);
   const firstLine = all.find((s) => s.text.trim().length > 0) ?? all[0];
   if (!firstLine) return { segments: [], audioStartSeconds: 0 };
 
-  const start = firstLine.clipStart;
+  // "single" collapses the whole song into one scene whose clipStart is 0 —
+  // anchoring there would preview the (lyric-free) intro. Anchor at the first
+  // sung line instead; other modes keep the scene's own start (byte-identical).
+  const start =
+    grouping === "single"
+      ? Math.max(0, (firstLine.lines?.[0]?.start ?? firstLine.start) - 1)
+      : firstLine.clipStart;
   const end = start + PREVIEW_SECONDS;
   const segments = all
     .filter((s) => s.clipStart < end && s.clipEnd > start)
@@ -129,12 +254,15 @@ export function buildPreviewSegments(
       const clipEnd = Math.min(s.clipEnd, end) - start;
       const sungStart = Math.max(s.start, start) - start;
       const sungEnd = Math.min(s.end, end) - start;
+      const clamped = clampLines(s, start, end);
       return {
-        ...s,
+        ...clamped,
+        // Shift per-line windows into preview time (t=0 at the first line).
+        lines: clamped.lines?.map((l) => ({ ...l, start: l.start - start, end: l.end - start })),
         clipStart,
         clipEnd,
-        start: s.text ? sungStart : clipStart,
-        end: s.text ? Math.max(sungEnd, sungStart) : clipEnd,
+        start: clamped.text ? sungStart : clipStart,
+        end: clamped.text ? Math.max(sungEnd, sungStart) : clipEnd,
       };
     })
     .filter((s) => s.clipEnd - s.clipStart >= MIN_CLIP_SECONDS / 2)
@@ -147,11 +275,15 @@ export function buildPreviewSegments(
 
 /** The generated (billable) length of one segment's motion clip, after the
  *  model's min/max clamp. Mirrors runAnimated/runCinematic in the pipeline. */
-function clipGenSeconds(model: VideoModel, clipDuration: number): number {
+function clipGenSeconds(model: VideoModel, clipDuration: number, quality: ImageQuality = "fast"): number {
   if (model === "pro") {
     return Math.min(CINEMATIC_MAX_SECONDS, Math.max(CINEMATIC_MIN_SECONDS, Math.ceil(clipDuration)));
   }
-  // normal (Grok). fast has no clips, handled by the caller.
+  // normal on Lite = Seedance 1.5 (4–12s); normal otherwise = Grok (1–15s).
+  // fast has no clips, handled by the caller.
+  if (quality === "lite") {
+    return Math.min(LITE_CLIP_MAX_SECONDS, Math.max(LITE_CLIP_MIN_SECONDS, Math.ceil(clipDuration)));
+  }
   return Math.min(GROK_MAX_SECONDS, Math.max(GROK_MIN_SECONDS, Math.ceil(clipDuration)));
 }
 
@@ -161,8 +293,15 @@ function clipGenSeconds(model: VideoModel, clipDuration: number): number {
 // your OpenRouter usage dashboard.
 // ===========================================================================
 
-/** Markup over raw OpenRouter cost: we charge ~3× what generation costs us. */
+/** Markup over raw OpenRouter cost: we charge ~3× what generation costs us.
+ *  The Lite tier runs at a friendlier 2× so a reel-plan month (80k tokens)
+ *  covers 5+ Lite videos — see markupFor(). */
 export const VIDEO_COST_MARKUP = 3;
+export const LITE_COST_MARKUP = 2;
+
+export function markupFor(quality: ImageQuality): number {
+  return quality === "lite" ? LITE_COST_MARKUP : VIDEO_COST_MARKUP;
+}
 
 /** USD a single token is worth, anchored to the Pro plan ($29 / 60,000 tokens ≈
  *  $0.000483). Video token prices are computed off THIS one rate for every user
@@ -188,6 +327,11 @@ export const PREVIEW_TOKENS: Record<VideoModel, number> = {
  *  fast/1K is MEASURED from billing ($0.0682); the others are scaled estimates
  *  — verify against the OpenRouter dashboard and adjust. */
 export const IMAGE_COST_USD: Record<ImageQuality, Record<ImageSize, number>> = {
+  // Qwen-Image on fal: $0.02/megapixel (generated at ≤1MP — fal rounds UP per
+  // MP, so 1280×720 bills exactly $0.02) + ~$0.007 avg for the vision-QC retry
+  // loop (typos get one regenerate). Lite is 1K-only; the 2K/4K rows exist so
+  // the type stays total, but estimateVideoCost clamps lite to 1K.
+  lite: { "1K": 0.027, "2K": 0.027, "4K": 0.027 },
   fast: { "1K": 0.068, "2K": 0.102, "4K": 0.17 }, // Nano Banana 2 (Gemini 3.1 Flash Image)
   pro: { "1K": 0.136, "2K": 0.204, "4K": 0.34 }, //  Nano Banana Pro (Gemini 3 Pro Image), ~2× fast
 };
@@ -200,11 +344,22 @@ export const CLIP_COST_USD_PER_SEC: Record<VideoModel, number> = {
   pro: 0.04, //   Seedance 2.0 Fast @480p (Cinematic)
 };
 
+/** Lite-tier override: Living Scenes on Lite animates with Seedance 1.5 Pro
+ *  @480p silent via fal — (864×480×24fps)/1024 tokens/s at $1.2/M = $0.0117/s.
+ *  Cinematic has no Lite tier, and Slideshow's clips are free everywhere. */
+export const LITE_CLIP_COST_USD_PER_SEC = 0.0117;
+
+export function clipCostPerSec(model: VideoModel, quality: ImageQuality = "fast"): number {
+  if (quality === "lite" && model === "normal") return LITE_CLIP_COST_USD_PER_SEC;
+  return CLIP_COST_USD_PER_SEC[model];
+}
+
 /** Raw INPUT cost per character reference image fed to the model, by image-model
  *  tier (USD). A reference ≈ 560 input tokens; Nano Banana Pro input @ $2/M ≈
  *  $0.0011. Estimates — tune against the OpenRouter dashboard. Folded into rawUsd
  *  (then ×3 markup) so character videos are still priced on the standard formula. */
 export const REF_IMAGE_INPUT_USD: Record<ImageQuality, number> = {
+  lite: 0, // Lite has no cast members (Qwen-Image takes no reference photos)
   fast: 0.0003,
   pro: 0.0011,
 };
@@ -212,17 +367,35 @@ export const REF_IMAGE_INPUT_USD: Record<ImageQuality, number> = {
 /** Token cost to (re)generate a SINGLE backdrop image — the manual-mode
  *  Regenerate price. One image at the 3× markup, rounded up to the nearest 10. */
 export function singleImageTokens(quality: ImageQuality, imageSize: ImageSize): number {
-  const usd = IMAGE_COST_USD[quality][imageSize] * VIDEO_COST_MARKUP;
+  const usd = IMAGE_COST_USD[quality][imageSize] * markupFor(quality);
   return Math.max(10, Math.ceil(usd / USD_PER_TOKEN / 10) * 10);
 }
 
 /** Token cost to (re)generate a SINGLE motion clip — the motion-editor Regenerate
  *  price. One clip's billable seconds (after the model's min/max clamp) at the 3×
  *  markup, rounded up to the nearest 10. Zero for Slideshow (no AI motion). */
-export function singleClipTokens(model: VideoModel, clipDurationSeconds: number): number {
+export function singleClipTokens(
+  model: VideoModel,
+  clipDurationSeconds: number,
+  quality: ImageQuality = "fast",
+): number {
   if (model === "fast") return 0;
   const usd =
-    clipGenSeconds(model, clipDurationSeconds) * CLIP_COST_USD_PER_SEC[model] * VIDEO_COST_MARKUP;
+    clipGenSeconds(model, clipDurationSeconds, quality) *
+    clipCostPerSec(model, quality) *
+    markupFor(quality);
+  return Math.max(10, Math.ceil(usd / USD_PER_TOKEN / 10) * 10);
+}
+
+/** Raw cost of ONE inpainted lyric plate (Feature B: qwen-image-edit/inpaint at
+ *  the base image's ≤1MP size, + vision-QC + one retry allowance). PLACEHOLDER —
+ *  verified against fal's pricing page in the plates discovery step. */
+export const PLATE_COST_USD = 0.04;
+
+/** Token price of one inpainted lyric plate (the per-line unit of a shared-clip
+ *  group). Standard 3× markup — plates aren't a Lite-only feature. */
+export function singlePlateTokens(): number {
+  const usd = PLATE_COST_USD * VIDEO_COST_MARKUP;
   return Math.max(10, Math.ceil(usd / USD_PER_TOKEN / 10) * 10);
 }
 
@@ -235,11 +408,12 @@ export function singleClipTokens(model: VideoModel, clipDurationSeconds: number)
 export function reRenderTokens(
   model: VideoModel,
   segments: { clipStatus: VideoClipStatus; clipStart: number; clipEnd: number }[],
+  quality: ImageQuality = "fast",
 ): number {
   if (model === "fast") return MIN_VIDEO_TOKENS;
   return segments
     .filter((s) => s.clipStatus !== "ready")
-    .reduce((n, s) => n + singleClipTokens(model, s.clipEnd - s.clipStart), 0);
+    .reduce((n, s) => n + singleClipTokens(model, s.clipEnd - s.clipStart, quality), 0);
 }
 
 /** Raw cost of one AI album cover (USD), by model. `flux` (fal.ai FLUX schnell)
@@ -264,6 +438,8 @@ export type VideoCostEstimate = {
   images: number;
   /** Total billable seconds of motion clips (0 for Slideshow). */
   clipSeconds: number;
+  /** Inpainted lyric plates across shared-clip scenes (0 unless plates groups exist). */
+  plates: number;
   /** What the generation costs us at OpenRouter. */
   rawUsd: number;
   /** What we charge the user, in dollars (rawUsd × markup). */
@@ -289,19 +465,30 @@ export function estimateVideoCost(opts: {
   /** Character reference images sent to the model PER FRAME (their input cost is
    *  added to rawUsd before the markup). 0/undefined when no characters chosen. */
   referenceImages?: number;
+  /** How lyric lines are grouped into scenes (ignored when `segments` is given). */
+  sceneGrouping?: SceneGrouping;
+  /** Price THIS exact timeline instead of re-planning from lyrics — used by the
+   *  reuse/promote/finalize paths so the quote always matches the persisted job
+   *  (including shared-clip plates groups, which planning never creates). */
+  segments?: VideoSegment[];
 }): VideoCostEstimate {
   const { model } = opts;
   // Previews are forced to the cheapest fast/1K image quality (and capped scenes in
-  // buildPreviewSegments) so the flat preview price always beats our COGS. Full
-  // renders use the user's chosen quality untouched.
+  // buildPreviewSegments) so the flat preview price always beats our COGS — the
+  // free-tier preview funnel is identical across quality tiers. Full renders use
+  // the user's chosen quality; Lite additionally pins 1K (Qwen bills per rounded-up
+  // megapixel, so ≤1MP is the only size that hits its $0.02 price).
   const quality: ImageQuality = opts.preview ? "fast" : opts.quality;
-  const imageSize: ImageSize = opts.preview ? "1K" : opts.imageSize;
+  const imageSize: ImageSize = opts.preview || opts.quality === "lite" ? "1K" : opts.imageSize;
 
+  const grouping = opts.sceneGrouping ?? "time";
   let segs: VideoSegment[];
-  if (opts.preview) {
-    segs = buildPreviewSegments(opts.lyrics, opts.durationSeconds).segments;
+  if (opts.segments) {
+    segs = opts.segments;
+  } else if (opts.preview) {
+    segs = buildPreviewSegments(opts.lyrics, opts.durationSeconds, grouping).segments;
   } else {
-    segs = opts.lyrics ? buildSegments(opts.lyrics, opts.durationSeconds) : [];
+    segs = opts.lyrics ? buildSegments(opts.lyrics, opts.durationSeconds, grouping) : [];
     // The AI-video styles render only a capped window when one is set.
     const cap = VIDEO_MODEL_INFO[model].previewSeconds;
     if (cap != null) segs = capForPreview(segs, cap);
@@ -313,22 +500,31 @@ export function estimateVideoCost(opts: {
 
   let clipSeconds = 0;
   if (model !== "fast") {
-    for (const s of segs) clipSeconds += clipGenSeconds(model, s.clipEnd - s.clipStart);
+    // A plates scene bills ONE loop clip; clipGenSeconds' max-clamp already caps
+    // a long span at the model's max generatable length, so no special branch.
+    for (const s of segs) clipSeconds += clipGenSeconds(model, s.clipEnd - s.clipStart, quality);
   }
-  const clipUsd = clipSeconds * CLIP_COST_USD_PER_SEC[model];
+  const clipUsd = clipSeconds * clipCostPerSec(model, quality);
+
+  // Shared-clip scenes deliver each line as an inpainted plate.
+  let plates = 0;
+  for (const s of segs) {
+    if (s.textMode === "plates") plates += s.lines?.length ?? 0;
+  }
+  const platesUsd = plates * PLATE_COST_USD;
 
   // Character reference images are input on every generated frame. When reusing
   // frames the model isn't called, so there's no reference cost either.
   const refsPerFrame = opts.reuseImages ? 0 : (opts.referenceImages ?? 0);
   const refUsd = images * refsPerFrame * REF_IMAGE_INPUT_USD[quality];
 
-  const rawUsd = imageUsd + clipUsd + refUsd;
-  const chargeUsd = rawUsd * VIDEO_COST_MARKUP;
+  const rawUsd = imageUsd + clipUsd + platesUsd + refUsd;
+  const chargeUsd = rawUsd * markupFor(quality);
   // Previews are a flat price by model; full renders round up to a tidy multiple of
   // 100 tokens (only ever helps the margin).
   const tokens = opts.preview
     ? PREVIEW_TOKENS[model]
     : Math.max(MIN_VIDEO_TOKENS, Math.ceil(chargeUsd / USD_PER_TOKEN / 100) * 100);
 
-  return { segments: segs.length, images, clipSeconds, rawUsd, chargeUsd, tokens };
+  return { segments: segs.length, images, clipSeconds, plates, rawUsd, chargeUsd, tokens };
 }

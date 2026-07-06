@@ -16,8 +16,11 @@ import {
   GROK_MIN_SECONDS,
   type ImageQuality,
   type ImageSize,
+  LITE_CLIP_MAX_SECONDS,
+  LITE_CLIP_MIN_SECONDS,
   normalizeCharacterRefs,
   type ReviewSegment,
+  type SceneGrouping,
   VIDEO_MODEL_INFO,
   type VideoSegment,
 } from "@syllary/shared";
@@ -31,13 +34,18 @@ import {
   type VideoJobRow,
 } from "../db/schema.js";
 import { buildBackdropPrompt, generateBackdrop } from "./openrouter-image.js";
+import { buildLitePrompt, generateLiteBackdrop } from "./fal-image.js";
+import { loopFillClip, materializePlatesClip } from "./plates.js";
 import { videoArtBrief } from "./openrouter.js";
 import { generateMotionClip } from "./openrouter-video.js";
+import { generateLiteMotionClip } from "./fal-video.js";
 import {
   concatClips,
   fitClipToDuration,
+  type LyricCue,
   muxAudio,
   normalizeFrameToJpeg,
+  overlayLyricsAndMux,
   speedFitClip,
   stitchLyricsVideo,
   type StitchSegment,
@@ -226,33 +234,55 @@ async function makeFrame(
   aspectRatio: AspectRatio,
   workDir: string,
   elementCatalog: ElementRef[],
-  renderText = true,
 ): Promise<{ imageFile: string; imageUrl: string }> {
+  // "overlay" (grouped Cinematic) and "plates" scenes get TEXT-FREE frames — the
+  // lyrics arrive later via the timed ASS overlay / inpainted plates. Everything
+  // else (absent textMode = every legacy job) bakes the text in, as always.
+  const renderText = seg.textMode !== "overlay" && seg.textMode !== "plates";
   // Rebuild the prompt from the structured parts every time (style + context are
   // job-wide; direction is per-scene, defaulting to the lyric line) so editing a
   // shared field propagates to every not-yet-regenerated frame. Persisted for the
   // record (manual mode shows the parts, not this blob).
-  const characterReferences = frameCharacterRefs(job, seg, elementCatalog);
-  const prompt = buildBackdropPrompt({
-    style: job.styleDescription,
-    lyricText: seg.text,
-    aspectRatio,
-    renderText,
-    context: job.sceneBrief ?? undefined,
-    direction: seg.direction ?? undefined,
-    characterReferences,
-  });
+  const isLite = job.imageQuality === "lite";
+  const characterReferences = isLite ? [] : frameCharacterRefs(job, seg, elementCatalog);
+  // Lite renders on Qwen (diffusion dialect — no cast, no song context: stray
+  // instruction words get painted into the scene); everything else on Gemini.
+  const prompt = isLite
+    ? buildLitePrompt({
+        style: job.styleDescription,
+        lyricText: seg.text,
+        direction: seg.direction ?? undefined,
+        renderText,
+      })
+    : buildBackdropPrompt({
+        style: job.styleDescription,
+        lyricText: seg.text,
+        aspectRatio,
+        renderText,
+        context: job.sceneBrief ?? undefined,
+        direction: seg.direction ?? undefined,
+        characterReferences,
+      });
   seg.prompt = prompt;
-  const raw = await generateBackdrop({
-    style: job.styleDescription,
-    lineText: seg.text,
-    aspectRatio,
-    imageSize: job.imageSize as ImageSize,
-    quality: job.imageQuality as ImageQuality,
-    renderText,
-    promptOverride: prompt,
-    characterReferences: characterReferences.length > 0 ? characterReferences : undefined,
-  });
+  const raw = isLite
+    ? await generateLiteBackdrop({
+        style: job.styleDescription,
+        lyricText: seg.text,
+        aspectRatio,
+        renderText,
+        direction: seg.direction ?? undefined,
+        promptOverride: prompt,
+      })
+    : await generateBackdrop({
+        style: job.styleDescription,
+        lineText: seg.text,
+        aspectRatio,
+        imageSize: job.imageSize as ImageSize,
+        quality: job.imageQuality as ImageQuality,
+        renderText,
+        promptOverride: prompt,
+        characterReferences: characterReferences.length > 0 ? characterReferences : undefined,
+      });
   // Standardize every frame to one baseline JPEG before it touches disk/R2 — the
   // model returns a mix of PNG/JPEG with varying metadata, which makes the slideshow
   // stitch drop frames. See normalizeFrameToJpeg.
@@ -308,28 +338,47 @@ export async function regenerateSegmentImage(
   // Members + the song's elements @mentioned in this scene (mention-driven, within
   // the job's selected element set).
   const elementCatalog = await loadSongElementRefs(job.songId, job.elementIds);
-  const characterReferences = frameCharacterRefs(job, seg, elementCatalog);
-  const prompt = buildBackdropPrompt({
-    style: job.styleDescription,
-    lyricText: seg.text,
-    aspectRatio,
-    renderText: true,
-    context: job.sceneBrief ?? undefined,
-    direction: seg.direction ?? undefined,
-    characterReferences,
-  });
+  const isLite = job.imageQuality === "lite";
+  // Overlay/plates scenes regenerate TEXT-FREE (same rule as makeFrame).
+  const renderText = seg.textMode !== "overlay" && seg.textMode !== "plates";
+  const characterReferences = isLite ? [] : frameCharacterRefs(job, seg, elementCatalog);
+  const prompt = isLite
+    ? buildLitePrompt({
+        style: job.styleDescription,
+        lyricText: seg.text,
+        direction: seg.direction ?? undefined,
+        renderText,
+      })
+    : buildBackdropPrompt({
+        style: job.styleDescription,
+        lyricText: seg.text,
+        aspectRatio,
+        renderText,
+        context: job.sceneBrief ?? undefined,
+        direction: seg.direction ?? undefined,
+        characterReferences,
+      });
   seg.prompt = prompt;
 
-  const raw = await generateBackdrop({
-    style: job.styleDescription,
-    lineText: seg.text,
-    aspectRatio,
-    imageSize: job.imageSize as ImageSize,
-    quality: job.imageQuality as ImageQuality,
-    renderText: true,
-    promptOverride: prompt,
-    characterReferences: characterReferences.length > 0 ? characterReferences : undefined,
-  });
+  const raw = isLite
+    ? await generateLiteBackdrop({
+        style: job.styleDescription,
+        lyricText: seg.text,
+        aspectRatio,
+        renderText,
+        direction: seg.direction ?? undefined,
+        promptOverride: prompt,
+      })
+    : await generateBackdrop({
+        style: job.styleDescription,
+        lineText: seg.text,
+        aspectRatio,
+        imageSize: job.imageSize as ImageSize,
+        quality: job.imageQuality as ImageQuality,
+        renderText,
+        promptOverride: prompt,
+        characterReferences: characterReferences.length > 0 ? characterReferences : undefined,
+      });
   // Standardize to one baseline JPEG (see normalizeFrameToJpeg) so a regenerated
   // scene matches the rest and the slideshow stitch never drops it.
   const buf = await normalizeFrameToJpeg(raw);
@@ -340,23 +389,87 @@ export async function regenerateSegmentImage(
   // keep pointing at it, and materializeFrame downloads whichever key each holds.
   const imageKey = `video/${job.songId}/${job.id}/img_${seg.index}.jpg`;
   await uploadImageReliably(imageKey, buf);
-  seg.imageKey = imageKey;
-  seg.status = "done";
-  // The motion clip (if any) was built from the OLD image — flag it for refresh so
-  // the re-render regenerates it to match. Cinematic morphs frame[i] → frame[i+1],
-  // so the PREVIOUS clip (which morphs INTO this frame) goes stale too.
-  if (seg.clipStatus === "ready") seg.clipStatus = "stale";
-  if (job.model === "pro" && seg.index > 0) {
-    const prev = segments.find((s) => s.index === seg.index - 1);
-    if (prev && prev.clipStatus === "ready") prev.clipStatus = "stale";
+
+  // All slow work is done — now merge into the CURRENT row under the lock, so a
+  // concurrent regen of another scene can't be reverted by our stale snapshot.
+  const direction = seg.direction;
+  const noCastFinal = seg.noCast;
+  let updated: VideoSegment | undefined;
+  await patchJobSegments(job.id, (fresh) => {
+    const f = fresh.find((s) => s.index === index);
+    if (!f) return;
+    f.direction = direction;
+    f.noCast = noCastFinal;
+    f.prompt = prompt;
+    f.imageKey = imageKey;
+    f.status = "done";
+    // The motion clip (if any) was built from the OLD image — flag it for refresh
+    // so the re-render regenerates it to match. Cinematic morphs frame[i] →
+    // frame[i+1], so the PREVIOUS clip (which morphs INTO this frame) goes stale too.
+    if (f.clipStatus === "ready") f.clipStatus = "stale";
+    if (job.model === "pro" && f.index > 0) {
+      const prev = fresh.find((s) => s.index === f.index - 1);
+      if (prev && prev.clipStatus === "ready") prev.clipStatus = "stale";
+    }
+    // A plates scene's loop + lyric plates were cut from the OLD base — they all
+    // regenerate with the next clip run / at render.
+    if (f.textMode === "plates") {
+      f.loopClipKey = null;
+      f.plateRect = null;
+      f.clipKey = null;
+      f.clipStatus = "none";
+      if (f.lines) for (const l of f.lines) l.plateKey = null;
+    }
+    updated = f;
+  });
+
+  return toReviewSegment(updated ?? seg);
+}
+
+/** The job's scene-grouping mode. Legacy rows (and the DB default) are "line". */
+function grouping(job: VideoJobRow): SceneGrouping {
+  return (job.sceneGrouping as SceneGrouping) ?? "line";
+}
+
+/** Decide how each scene's lyric text reaches the screen. Only GROUPED scenes
+ *  (lines[] present) get an explicit mode: baked stanza block for Slideshow +
+ *  Living Scenes, text-free frame + timed ASS overlay for Cinematic (whose
+ *  motion model would warp a whole baked stanza beyond reading). Ungrouped
+ *  ("line") jobs keep textMode absent = exactly today's behavior everywhere.
+ *  Plates mode is never stamped here — it's a per-scene editor action. */
+function stampTextModes(job: VideoJobRow, segments: VideoSegment[]): void {
+  for (const seg of segments) {
+    if (!seg.lines || seg.textMode) continue;
+    if (!seg.text) continue; // instrumental — nothing to show
+    seg.textMode = job.model === "pro" ? "overlay" : "baked";
   }
+}
 
-  await db
-    .update(videoJobs)
-    .set({ segments, updatedAt: new Date() })
-    .where(eq(videoJobs.id, job.id));
-
-  return toReviewSegment(seg);
+/** Atomically merge a mutation into the job's CURRENT segments row. The manual
+ *  editor regenerates several scenes in parallel; each request used to write its
+ *  whole stale snapshot back, silently reverting whichever finished earlier.
+ *  SELECT … FOR UPDATE serializes the read-mutate-write (held for microseconds —
+ *  all slow model work happens before calling this), and is correct even if the
+ *  API ever runs more than one instance. */
+export async function patchJobSegments(
+  jobId: string,
+  mutate: (segments: VideoSegment[]) => void,
+): Promise<VideoSegment[]> {
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .select({ segments: videoJobs.segments })
+      .from(videoJobs)
+      .where(eq(videoJobs.id, jobId))
+      .for("update")
+      .limit(1);
+    const segments = row?.segments ?? [];
+    mutate(segments);
+    await tx
+      .update(videoJobs)
+      .set({ segments, updatedAt: new Date() })
+      .where(eq(videoJobs.id, jobId));
+    return segments;
+  });
 }
 
 /** Get a segment's frame into the local workDir: download the already-generated
@@ -409,6 +522,11 @@ export async function toReviewSegment(seg: VideoSegment): Promise<ReviewSegment>
     clipStart: seg.clipStart,
     clipEnd: seg.clipEnd,
     noCast: seg.noCast ?? false,
+    // Grouped scenes: per-line text + sung windows (no storage keys — the editor
+    // shows plate progress as a count, keeping polls cheap).
+    lines: seg.lines?.map((l) => ({ text: l.text, start: l.start, end: l.end })),
+    textMode: seg.textMode ?? "baked",
+    platesReady: seg.lines?.filter((l) => l.plateKey != null).length ?? 0,
   };
 }
 
@@ -512,6 +630,17 @@ async function generateSegmentClip(
       durationSeconds: genDur,
       resolution: permissive ? "1080p" : "480p",
     });
+  } else if (job.imageQuality === "lite") {
+    // Living Scenes on the Lite tier: Seedance 1.5 Pro @480p silent via fal
+    // (4–12s clips; fitClipToDuration trims to the real window). The stitch
+    // upscales 480p to the 1080p canvas.
+    genDur = Math.min(LITE_CLIP_MAX_SECONDS, Math.max(LITE_CLIP_MIN_SECONDS, Math.ceil(dur)));
+    raw = await generateLiteMotionClip({
+      prompt,
+      firstFrameUrl,
+      aspectRatio,
+      durationSeconds: genDur,
+    });
   } else {
     // Living Scenes: animate the single frame (Grok), generated at ~the segment's
     // length and trimmed.
@@ -530,6 +659,11 @@ async function generateSegmentClip(
   await writeFile(rawFile, raw);
   if (job.model === "pro") {
     await speedFitClip({ workDir, inFile: rawFile, outName, targetSeconds: dur, sourceSeconds: genDur, aspectRatio });
+  } else if (dur > genDur + 0.5) {
+    // Grouped scenes can span far longer than the model's max clip — LOOP the
+    // clip (ping-pong) to fill the window instead of freeze-framing the tail.
+    const { w, h } = CANVAS[aspectRatio];
+    await loopFillClip({ workDir, inFile: rawFile, outName, spanSeconds: dur, canvasW: w, canvasH: h });
   } else {
     await fitClipToDuration({ workDir, inFile: rawFile, outName, durationSeconds: dur, aspectRatio });
   }
@@ -576,24 +710,64 @@ export async function regenerateSegmentClip(
   const segments = job.segments ?? [];
   const seg = segments.find((s) => s.index === index);
   if (!seg) throw new Error("Segment not found.");
-  if (!seg.imageKey) throw new Error("This scene has no image to animate yet.");
+  // Plates scenes generate their text-free base on demand (materializeFrame).
+  if (!seg.imageKey && seg.textMode !== "plates") {
+    throw new Error("This scene has no image to animate yet.");
+  }
   if (newMotionDirection !== undefined) seg.motionDirection = newMotionDirection.trim() || null;
+  // Captured BEFORE the work: a plates run can FLIP seg.textMode to "overlay"
+  // (QC double-fail fallback) and that flip must be persisted below.
+  const wasPlates = seg.textMode === "plates";
 
   const aspectRatio = job.aspectRatio as AspectRatio;
   const workDir = path.join(os.tmpdir(), `syllary-clip-${job.id}-${index}`);
   try {
     await mkdir(workDir, { recursive: true });
-    await generateSegmentClip(job, seg, segments, aspectRatio, workDir, `clip_${index}.mp4`);
+    if (seg.textMode === "plates") {
+      // The plates scene's "clip" = one loop + all its inpainted lyric plates,
+      // composited. Generating it here lets the user PREVIEW the living block
+      // before rendering the whole video.
+      const elementCatalog = await loadSongElementRefs(job.songId, job.elementIds);
+      // Ensures the text-free base exists (generates + persists imageKey on demand).
+      await materializeFrame(job, seg, aspectRatio, workDir, elementCatalog);
+      const { w, h } = CANVAS[aspectRatio];
+      await materializePlatesClip({
+        job,
+        seg,
+        aspectRatio,
+        workDir,
+        motionPrompt: buildMotionPrompt(job, seg),
+        canvasW: w,
+        canvasH: h,
+        outName: `clip_${index}.mp4`,
+      });
+    } else {
+      await generateSegmentClip(job, seg, segments, aspectRatio, workDir, `clip_${index}.mp4`);
+    }
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
 
-  await db
-    .update(videoJobs)
-    .set({ segments, updatedAt: new Date() })
-    .where(eq(videoJobs.id, job.id));
+  // Slow work done — merge the result into the CURRENT row under the lock (see
+  // patchJobSegments) so parallel regens of other scenes aren't reverted.
+  let updated: VideoSegment | undefined;
+  await patchJobSegments(job.id, (fresh) => {
+    const f = fresh.find((s) => s.index === index);
+    if (!f) return;
+    f.motionDirection = seg.motionDirection;
+    f.clipKey = seg.clipKey;
+    f.clipStatus = seg.clipStatus;
+    if (wasPlates) {
+      f.textMode = seg.textMode; // may have flipped to "overlay" on QC failure
+      f.imageKey = seg.imageKey; // base may have been generated on demand
+      f.loopClipKey = seg.loopClipKey;
+      f.plateRect = seg.plateRect;
+      if (seg.lines) f.lines = seg.lines.map((l) => ({ ...l }));
+    }
+    updated = f;
+  });
 
-  return toReviewSegment(seg);
+  return toReviewSegment(updated ?? seg);
 }
 
 async function downloadAudio(r2Key: string, workDir: string): Promise<string> {
@@ -621,12 +795,13 @@ async function finalize(job: VideoJobRow, outFile: string): Promise<void> {
     .where(eq(videoJobs.id, job.id));
   // Save this style's video (one row per song+style; replaces a prior render —
   // a later full render overwrites a preview row, flipping isPreview back off).
+  const sceneGrouping = grouping(job);
   await db
     .insert(songVideos)
-    .values({ songId: job.songId, model: job.model, videoKey, isPreview: job.isPreview })
+    .values({ songId: job.songId, model: job.model, videoKey, isPreview: job.isPreview, sceneGrouping })
     .onConflictDoUpdate({
       target: [songVideos.songId, songVideos.model],
-      set: { videoKey, isPreview: job.isPreview, updatedAt: new Date() },
+      set: { videoKey, isPreview: job.isPreview, sceneGrouping, updatedAt: new Date() },
     });
   // A finished video is NOT made public automatically — the user explicitly
   // chooses which style (if any) appears on their public page from the video
@@ -712,11 +887,27 @@ async function runAnimated(
   // clip. materializeClip reuses a stored clip (edit re-render) or generates +
   // persists one (autopilot / stale clip), so this single loop serves both. mapPool's
   // concurrency cap (VIDEO_CONCURRENCY) naturally bounds the image burst.
+  const { w: canvasW, h: canvasH } = CANVAS[aspectRatio];
   const clipNames = new Array<string>(segments.length);
   await mapPool(segments, VIDEO_CONCURRENCY, async (seg, i) => {
     const { imageFile } = await materializeFrame(job, seg, aspectRatio, workDir, elementCatalog);
     const clipName = `clip_${i}.mp4`;
-    await materializeClip(job, seg, segments, aspectRatio, workDir, clipName);
+    if (seg.textMode === "plates" && (seg.clipStatus !== "ready" || !seg.clipKey)) {
+      // Shared-clip scene: one loop + per-line inpainted plates (or the overlay
+      // fallback). The composited result becomes this scene's fitted clip.
+      await materializePlatesClip({
+        job,
+        seg,
+        aspectRatio,
+        workDir,
+        motionPrompt: buildMotionPrompt(job, seg),
+        canvasW,
+        canvasH,
+        outName: clipName,
+      });
+    } else {
+      await materializeClip(job, seg, segments, aspectRatio, workDir, clipName);
+    }
     clipNames[i] = clipName;
     // The local frame copy isn't needed (the model fetched it by R2 URL).
     await rm(imageFile, { force: true });
@@ -728,17 +919,39 @@ async function runAnimated(
   await Promise.all(clipNames.filter(Boolean).map((c) => rm(path.join(workDir, c), { force: true })));
   const audioFile = await downloadAudio(audioR2Key, workDir);
   const total = Math.max(...segments.map((s) => s.clipEnd));
-  const outFile = await muxAudio({
-    workDir,
-    videoName: "concat.mp4",
-    audioFile,
-    outName: "lyrics.mp4",
-    maxSeconds: total,
-    audioStartSeconds,
-  });
+  // Scenes that fell back to "overlay" (plates QC double-fail) get their lines
+  // burned as timed subtitles here — same machinery as grouped Cinematic.
+  const cues = overlayCues(segments);
+  const outFile =
+    cues.length > 0
+      ? await overlayLyricsAndMux({
+          workDir,
+          videoName: "concat.mp4",
+          audioFile,
+          cues,
+          aspectRatio,
+          outName: "lyrics.mp4",
+          maxSeconds: total,
+          audioStartSeconds,
+        })
+      : await muxAudio({
+          workDir,
+          videoName: "concat.mp4",
+          audioFile,
+          outName: "lyrics.mp4",
+          maxSeconds: total,
+          audioStartSeconds,
+        });
   await rm(path.join(workDir, "concat.mp4"), { force: true });
   await finalize(job, outFile);
 }
+
+/** Canvas dimensions per aspect (mirrors ffmpeg.ts DIMENSIONS). */
+const CANVAS: Record<AspectRatio, { w: number; h: number }> = {
+  "16:9": { w: 1920, h: 1080 },
+  "9:16": { w: 1080, h: 1920 },
+  "1:1": { w: 1080, h: 1080 },
+};
 
 // ---------------------------------------------------------------------------
 // Style 3 — Cinematic: exactly like Living Scenes (a per-line Nano frame that
@@ -779,18 +992,46 @@ async function runCinematic(
   await Promise.all(clipNames.filter(Boolean).map((c) => rm(path.join(workDir, c), { force: true })));
   const audioFile = await downloadAudio(audioR2Key, workDir);
   const total = Math.max(...segments.map((s) => s.clipEnd));
-  // The lyric is already painted into each frame (and carried through the morph),
-  // so we just mux the audio — no ffmpeg subtitle overlay.
-  const outFile = await muxAudio({
-    workDir,
-    videoName: "concat.mp4",
-    audioFile,
-    outName: "lyrics.mp4",
-    maxSeconds: total,
-    audioStartSeconds,
-  });
+  // Ungrouped ("line") Cinematic bakes the lyric into each frame → just mux.
+  // GROUPED Cinematic renders text-free frames (a whole baked stanza would warp
+  // beyond reading in the morph) and burns crisp per-line ASS cues here instead.
+  const cues = overlayCues(segments);
+  const outFile =
+    cues.length > 0
+      ? await overlayLyricsAndMux({
+          workDir,
+          videoName: "concat.mp4",
+          audioFile,
+          cues,
+          aspectRatio,
+          outName: "lyrics.mp4",
+          maxSeconds: total,
+          audioStartSeconds,
+        })
+      : await muxAudio({
+          workDir,
+          videoName: "concat.mp4",
+          audioFile,
+          outName: "lyrics.mp4",
+          maxSeconds: total,
+          audioStartSeconds,
+        });
   await rm(path.join(workDir, "concat.mp4"), { force: true });
   await finalize(job, outFile);
+}
+
+/** Per-line subtitle cues for every "overlay" scene (grouped Cinematic + the
+ *  plates fallback). Baked scenes contribute none. Line times are already in
+ *  video time (previews shift them; full renders start at t=0). */
+function overlayCues(segments: VideoSegment[]): LyricCue[] {
+  return segments.flatMap((s) => {
+    if (s.textMode !== "overlay" || !s.text) return [];
+    return (
+      s.lines?.map((l) => ({ text: l.text, start: l.start, end: l.end })) ?? [
+        { text: s.text, start: s.start, end: s.end },
+      ]
+    );
+  });
 }
 
 /** Dispatch the clip+stitch assembly for a style (frames are generated or
@@ -888,19 +1129,20 @@ export async function runVideoPipeline(jobId: string): Promise<void> {
     segments = job.segments;
   } else if (job.isPreview) {
     // A ~10s sample starting at the first lyric line (audio seeked to match).
-    const preview = buildPreviewSegments(song.lyrics, song.durationSeconds);
+    const preview = buildPreviewSegments(song.lyrics, song.durationSeconds, grouping(job));
     segments = preview.segments;
     audioStartSeconds = preview.audioStartSeconds;
   } else {
     // Each style renders a capped window when one is set (none today = full song).
     const cap = VIDEO_MODEL_INFO[job.model].previewSeconds;
-    segments = buildSegments(song.lyrics, song.durationSeconds);
+    segments = buildSegments(song.lyrics, song.durationSeconds, grouping(job));
     if (cap != null) segments = capForPreview(segments, cap);
   }
   if (segments.length === 0) {
     await failJob(job, "No lyric lines to render.");
     return;
   }
+  stampTextModes(job, segments);
 
   // Every style now renders one clip per segment.
   const totalSegments = segments.length;

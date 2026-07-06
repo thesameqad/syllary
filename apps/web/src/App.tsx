@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "@clerk/clerk-react";
 import { LandingPage } from "@/components/landing/landing-page";
 import { ResultPage } from "@/pages/result-page";
+import { VideoEditorPage } from "@/pages/video-editor-page";
 import { PublicPage } from "@/pages/public-page";
 import { EmbedPage } from "@/pages/embed-page";
 import { SeoLandingPage } from "@/pages/seo-landing-page";
@@ -49,6 +50,7 @@ export function App() {
       <Routes>
       <Route path="/" element={<Home />} />
       <Route path="/s/:songId" element={<ResultPage />} />
+      <Route path="/s/:songId/editor" element={<VideoEditorPage />} />
       <Route path="/p/:songId" element={<PublicPage />} />
       <Route path="/embed/:songId" element={<EmbedPage />} />
       {/* Programmatic SEO landing pages — section-prefixed slugs (splat supports
