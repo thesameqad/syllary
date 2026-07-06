@@ -12,6 +12,7 @@ import { conversionsRoutes } from "./routes/conversions.js";
 import { elementRoutes } from "./routes/elements.js";
 import { emailRoutes } from "./routes/email.js";
 import { landingRoutes } from "./routes/landing.js";
+import { showcaseRoutes } from "./routes/showcase.js";
 import { memberRoutes } from "./routes/members.js";
 import { seoRoutes } from "./routes/seo.js";
 import { songsRoutes } from "./routes/songs.js";
@@ -68,7 +69,7 @@ await app.register(cors, {
         return cb(null, false);
       }
     : allowedOrigins,
-  methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 });
 
 app.get("/health", () => ({ ok: true }));
@@ -86,6 +87,7 @@ await app.register(videoRoutes, { prefix: "/api" });
 await app.register(trackRoutes, { prefix: "/api" });
 await app.register(toolsRoutes, { prefix: "/api" });
 await app.register(landingRoutes, { prefix: "/api" });
+await app.register(showcaseRoutes, { prefix: "/api" });
 await app.register(billingRoutes, { prefix: "/api" });
 await app.register(webhookRoutes, { prefix: "/api" });
 await app.register(conversionsRoutes, { prefix: "/api" });

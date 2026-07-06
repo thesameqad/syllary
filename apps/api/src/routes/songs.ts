@@ -195,15 +195,22 @@ async function activeVideoJobFor(songId: string): Promise<VideoJob | null> {
   };
 }
 
-/** Presigned URL of the song's chosen public lyric video, or null. */
-async function publicVideoUrlFor(row: SongRow): Promise<string | null> {
+/** R2 key of the song's chosen public lyric video, or null. Exported for the
+ *  dashboard showcase (routes/showcase.ts). */
+export async function publicVideoKeyFor(row: SongRow): Promise<string | null> {
   if (!row.publicVideoModel) return null;
   const [v] = await db
     .select({ videoKey: songVideos.videoKey })
     .from(songVideos)
     .where(and(eq(songVideos.songId, row.id), eq(songVideos.model, row.publicVideoModel)))
     .limit(1);
-  return v ? presignGet(v.videoKey) : null;
+  return v?.videoKey ?? null;
+}
+
+/** Presigned URL of the song's chosen public lyric video, or null. */
+async function publicVideoUrlFor(row: SongRow): Promise<string | null> {
+  const key = await publicVideoKeyFor(row);
+  return key ? presignGet(key) : null;
 }
 
 async function toSongDto(row: SongRow, canEdit = false): Promise<Song> {

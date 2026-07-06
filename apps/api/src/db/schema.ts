@@ -267,6 +267,40 @@ export const songVideos = pgTable(
 
 export type SongVideoRow = typeof songVideos.$inferSelect;
 
+// Hand-curated showcase categories for the dashboard ("abstract", "realistic",
+// "living scenes", …). Admin-managed; each tag renders as a horizontal row of
+// its picked public videos.
+export const showcaseTags = pgTable("showcase_tags", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type ShowcaseTagRow = typeof showcaseTags.$inferSelect;
+
+// A hand-picked public video in a showcase tag. Points at the SONG — the row
+// renders whatever video style the owner has made public (songs.publicVideoModel),
+// so an owner republishing a different style keeps the pick fresh.
+export const showcaseItems = pgTable(
+  "showcase_items",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tagId: uuid("tag_id")
+      .notNull()
+      .references(() => showcaseTags.id, { onDelete: "cascade" }),
+    songId: uuid("song_id")
+      .notNull()
+      .references(() => songs.id, { onDelete: "cascade" }),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ uniqueTagSong: unique("showcase_items_tag_song_unique").on(t.tagId, t.songId) }),
+);
+
+export type ShowcaseItemRow = typeof showcaseItems.$inferSelect;
+
 // Per-song "persisted elements" — reusable AI-generated reference subjects (a dog,
 // headphones, a guitar) addressable like band members in prompts, but scoped to ONE
 // song (not shared across songs/bands). The generated image is fed to the image model

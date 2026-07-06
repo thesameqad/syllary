@@ -349,3 +349,39 @@ export const publicSongSchema = z.object({
   moreFromUploader: z.array(publicTrackItemSchema),
 });
 export type PublicSong = z.infer<typeof publicSongSchema>;
+
+/** A hand-curated dashboard showcase category ("abstract", "living scenes", …). */
+export const showcaseTagSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  slug: z.string(),
+  sortOrder: z.number(),
+});
+export type ShowcaseTag = z.infer<typeof showcaseTagSchema>;
+
+/** One picked public video inside a showcase row. */
+export const showcaseVideoSchema = z.object({
+  songId: z.string().uuid(),
+  title: z.string(),
+  artist: z.string().nullable(),
+  coverUrl: z.string().url().nullable(),
+  /** Presigned URL of the song's public lyric video (hover-plays on the card). */
+  videoUrl: z.string().url().nullable(),
+});
+export type ShowcaseVideo = z.infer<typeof showcaseVideoSchema>;
+
+/** A dashboard showcase row: the tag plus its picked videos, in curated order. */
+export const showcaseSectionSchema = z.object({
+  tag: showcaseTagSchema,
+  videos: z.array(showcaseVideoSchema),
+});
+export type ShowcaseSection = z.infer<typeof showcaseSectionSchema>;
+
+/** Admin view of a tag: includes how many videos are assigned. */
+export const showcaseTagAdminSchema = showcaseTagSchema.extend({
+  itemCount: z.number(),
+});
+export type ShowcaseTagAdmin = z.infer<typeof showcaseTagAdminSchema>;
+
+export const showcaseSectionListSchema = z.array(showcaseSectionSchema);
+export const showcaseTagAdminListSchema = z.array(showcaseTagAdminSchema);

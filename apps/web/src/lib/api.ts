@@ -43,6 +43,12 @@ import {
   presignResponseSchema,
   publicSongSchema,
   ratingSummarySchema,
+  type ShowcaseSection,
+  showcaseSectionListSchema,
+  type ShowcaseTag,
+  showcaseTagSchema,
+  type ShowcaseTagAdmin,
+  showcaseTagAdminListSchema,
   songListSchema,
   songSchema,
   type Account,
@@ -285,6 +291,68 @@ export async function listPublicSongs(): Promise<SongSummary[]> {
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not load songs."), res.status);
   return songListSchema.parse(data);
+}
+
+/** Dashboard showcase rows (admin-curated public videos). Public endpoint. */
+export async function getShowcase(): Promise<ShowcaseSection[]> {
+  const res = await fetch(`${API_BASE}/api/showcase`);
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not load the showcase."), res.status);
+  return showcaseSectionListSchema.parse(data);
+}
+
+// ---- Admin: showcase curation ----
+
+export async function adminListShowcaseTags(): Promise<ShowcaseTagAdmin[]> {
+  const res = await fetch(`${API_BASE}/api/admin/showcase/tags`, {
+    headers: await authHeaders(),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not load showcase tags."), res.status);
+  return showcaseTagAdminListSchema.parse(data);
+}
+
+export async function adminCreateShowcaseTag(name: string): Promise<ShowcaseTag> {
+  const res = await fetch(`${API_BASE}/api/admin/showcase/tags`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ name }),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not create the tag."), res.status);
+  return showcaseTagSchema.parse(data);
+}
+
+export async function adminDeleteShowcaseTag(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/admin/showcase/tags/${id}`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
+  if (!res.ok) {
+    const data: unknown = await res.json().catch(() => null);
+    throw new ApiError(errorMessage(data, "Could not delete the tag."), res.status);
+  }
+}
+
+export async function adminGetSongShowcaseTags(songId: string): Promise<string[]> {
+  const res = await fetch(`${API_BASE}/api/admin/showcase/songs/${songId}/tags`, {
+    headers: await authHeaders(),
+  });
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not load tags."), res.status);
+  return Array.isArray(data) ? data.filter((t): t is string => typeof t === "string") : [];
+}
+
+export async function adminSetSongShowcaseTags(songId: string, tagIds: string[]): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/admin/showcase/songs/${songId}/tags`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ tagIds }),
+  });
+  if (!res.ok) {
+    const data: unknown = await res.json().catch(() => null);
+    throw new ApiError(errorMessage(data, "Could not save showcase tags."), res.status);
+  }
 }
 
 export async function updateSong(id: string, body: UpdateSong): Promise<Song> {
