@@ -49,7 +49,11 @@ function AnalyticsBridge() {
       ...(user.fullName ? { name: user.fullName } : {}),
     });
     const created = user.createdAt ? Date.now() - user.createdAt.getTime() : Infinity;
-    if (created < 5 * 60 * 1000 && !sessionStorage.getItem("syl_signup_reported")) {
+    // Wait for the email before reporting: it's usually unresolved on the first
+    // render, and a conversion fired without user_data can't be enhanced-matched.
+    // The effect re-runs when the email lands (it's in the deps), and the 5-min
+    // freshness window is far longer than Clerk needs to resolve it.
+    if (email && created < 5 * 60 * 1000 && !sessionStorage.getItem("syl_signup_reported")) {
       sessionStorage.setItem("syl_signup_reported", "1");
       reportSignupConversion();
     }
