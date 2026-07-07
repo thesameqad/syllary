@@ -90,7 +90,7 @@ export const PLAN_TIERS: PlanTier[] = [
     annual: 390,
     features: [
       { text: "80,000 tokens / month" },
-      { text: "≈ 2–3 music videos" },
+      { text: "≈ 5 videos on Lite, 2–3 on Medium/Pro" },
       { text: "All 3 video styles" },
       { text: "Unlimited lyric files" },
     ],
@@ -104,7 +104,7 @@ export const PLAN_TIERS: PlanTier[] = [
     annual: 990,
     features: [
       { text: "220,000 tokens / month" },
-      { text: "≈ 5–9 music videos" },
+      { text: "≈ 13 videos on Lite, 5–9 on Medium/Pro" },
       { text: "Everything in Reel" },
       { text: "Unlimited lyric files" },
     ],
@@ -119,7 +119,7 @@ export const PLAN_TIERS: PlanTier[] = [
     annual: 1990,
     features: [
       { text: "620,000 tokens / month" },
-      { text: "≈ 20–36 music videos" },
+      { text: "≈ 38 videos on Lite, 14–25 on Medium/Pro" },
       { text: "Best token value (2× rate)" },
       { text: "Everything in Studio" },
     ],

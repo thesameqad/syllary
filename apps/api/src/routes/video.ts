@@ -43,11 +43,13 @@ import { captureServer } from "../lib/posthog.js";
 import { deleteObject, presignGet } from "../lib/r2.js";
 import { getOrCreateUser } from "../lib/users.js";
 import { videoArtBrief } from "../lib/openrouter.js";
+import { PLATES_QUEUE_BUSY } from "../lib/plates.js";
 import {
   finalizeVideoJob,
   patchJobSegments,
   reapStaleVideoJob,
   regenerateSegmentClip,
+  regenerateSegmentPlates,
   regenerateSegmentImage,
   runVideoPipeline,
   toReviewSegment,
@@ -871,15 +873,15 @@ export async function videoRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "Generate this scene's image first." });
       }
 
-      // A plates scene's "clip" is the loop PLUS its inpainted lyric plates —
-      // regenerating it redoes both, priced accordingly.
-      const platesCount =
-        seg.textMode === "plates"
-          ? (seg.lines?.filter((l) => l.text.trim()).length ?? 0)
-          : 0;
-      const cost =
-        singleClipTokens(job.model, seg.clipEnd - seg.clipStart, job.imageQuality as ImageQuality) +
-        platesCount * singlePlateTokens();
+      // A plates scene regenerates ONLY its bare loop here (the lyrics are a
+      // separate apply-plates step) — priced as one clip either way. The loop's
+      // GENERATED length is user-selectable, but billing stays by the scene
+      // window's clamped seconds (the loop tiles to fill it regardless).
+      const cost = singleClipTokens(
+        job.model,
+        seg.clipEnd - seg.clipStart,
+        job.imageQuality as ImageQuality,
+      );
       if (user.credits < cost) {
         return reply.code(402).send({
           error: `Not enough tokens — regenerating a clip costs ${cost}. Upgrade for more.`,
@@ -893,7 +895,12 @@ export async function videoRoutes(app: FastifyInstance) {
       regensInFlight.add(flightKey);
       let segment;
       try {
-        segment = await regenerateSegmentClip(job, index, parsed.data.motionDirection);
+        segment = await regenerateSegmentClip(
+          job,
+          index,
+          parsed.data.motionDirection,
+          parsed.data.loopSeconds,
+        );
       } catch (err) {
         req.log.error({ err }, "regenerate-clip failed");
         return reply.code(502).send({ error: "Could not regenerate this clip. Try again." });
@@ -906,6 +913,80 @@ export async function videoRoutes(app: FastifyInstance) {
         .update(users)
         .set({ credits: sql`GREATEST(${users.credits} - ${cost}, 0)`, updatedAt: new Date() })
         .where(eq(users.id, user.id));
+
+      return reply.send(segment);
+    },
+  );
+
+  // Apply the lyric plates to a plates scene's already-generated loop — the
+  // cheap half of the split flow. Missing stickers are generated (charged per
+  // plate); existing ones are reused free, so re-compositing costs nothing.
+  app.post<{ Params: { id: string; index: string } }>(
+    "/video-jobs/:id/segments/:index/apply-plates",
+    async (req, reply) => {
+      const clerkId = await getAuthUserId(req);
+      if (!clerkId) return reply.code(401).send({ error: "Unauthorized" });
+      const user = await getOrCreateUser(clerkId);
+
+      const index = Number(req.params.index);
+      if (!Number.isInteger(index)) return reply.code(400).send({ error: "Invalid segment." });
+
+      const [job] = await db
+        .select()
+        .from(videoJobs)
+        .where(eq(videoJobs.id, req.params.id))
+        .limit(1);
+      if (!job || job.userId !== user.id) return reply.code(404).send({ error: "Not found." });
+      if (job.mode !== "manual") {
+        return reply.code(400).send({ error: "Scenes can only be edited on manual videos." });
+      }
+      if (job.status !== "review") {
+        return reply.code(400).send({ error: "This video isn't open for editing." });
+      }
+
+      const seg = (job.segments ?? []).find((s) => s.index === index);
+      if (!seg) return reply.code(404).send({ error: "Scene not found." });
+      if (seg.textMode !== "plates") {
+        return reply.code(400).send({ error: "This scene doesn't use lyric plates." });
+      }
+      if (!seg.loopClipKey) {
+        return reply.code(400).send({ error: "Generate this scene's loop first." });
+      }
+
+      const missingPlates =
+        seg.lines?.filter((l) => l.text.trim() && !l.plateKey).length ?? 0;
+      const cost = missingPlates * singlePlateTokens();
+      if (cost > 0 && user.credits < cost) {
+        return reply.code(402).send({
+          error: `Not enough tokens — applying the lyrics costs ${cost}. Upgrade for more.`,
+        });
+      }
+
+      const flightKey = `${job.id}:plates:${index}`;
+      if (regensInFlight.has(flightKey) || regensInFlight.has(`${job.id}:clip:${index}`)) {
+        return reply.code(409).send({ error: "This scene is already generating." });
+      }
+      regensInFlight.add(flightKey);
+      let segment;
+      try {
+        segment = await regenerateSegmentPlates(job, index);
+      } catch (err) {
+        req.log.error({ err }, "apply-plates failed");
+        const msg =
+          err instanceof Error && err.message === PLATES_QUEUE_BUSY
+            ? PLATES_QUEUE_BUSY
+            : "Could not apply the lyrics. Try again.";
+        return reply.code(502).send({ error: msg });
+      } finally {
+        regensInFlight.delete(flightKey);
+      }
+
+      if (cost > 0) {
+        await db
+          .update(users)
+          .set({ credits: sql`GREATEST(${users.credits} - ${cost}, 0)`, updatedAt: new Date() })
+          .where(eq(users.id, user.id));
+      }
 
       return reply.send(segment);
     },

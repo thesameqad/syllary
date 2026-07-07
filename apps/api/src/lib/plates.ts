@@ -15,7 +15,7 @@ import { env } from "../env.js";
 import { presignGet, putObject } from "./r2.js";
 import { generateLiteMotionClip } from "./fal-video.js";
 import { generateMotionClip } from "./openrouter-video.js";
-import { falQueueImage, lyricTextLooksRight } from "./fal-image.js";
+import { falQueueImage, lyricTextLooksRight, SNAPPY_ATTEMPTS_MS } from "./fal-image.js";
 
 // ---------------------------------------------------------------------------
 // Shared-clip "plates" scenes (Living Scenes only): ONE text-free base image +
@@ -27,6 +27,11 @@ import { falQueueImage, lyricTextLooksRight } from "./fal-image.js";
 // "overlay" (timed ASS subtitles) so a bad generation day can never block a
 // render.
 // ---------------------------------------------------------------------------
+
+/** Thrown (verbatim, user-facing) when fal's image queue stalls mid-plates —
+ *  transient: the caller persists any finished plates and the user retries. */
+export const PLATES_QUEUE_BUSY =
+  "The image model's queue is busy right now — try again in a minute. Finished lyric plates were kept.";
 
 const exec = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -199,12 +204,20 @@ export async function loopFillClip(opts: {
   );
 }
 
-/** Build a plates scene end-to-end: one loop clip (from the text-free base) →
- *  per-line typography stickers (QC'd) → composited fitted clip. When any line
- *  exhausts its retries the scene FLIPS to "overlay" — the caller burns timed
- *  subtitles instead. Mutates `seg` (keys, textMode); persistence is the
- *  caller's job. Returns the fitted clip's local filename. */
-export async function materializePlatesClip(opts: {
+/** The valid generated-loop length range for a plates scene (before ping-pong
+ *  tiling), given the job's motion model. */
+export function loopSecondsRange(job: VideoJobRow): { min: number; max: number } {
+  return job.imageQuality === "lite"
+    ? { min: LITE_CLIP_MIN_SECONDS, max: LITE_CLIP_MAX_SECONDS }
+    : { min: 1, max: GROK_MAX_SECONDS };
+}
+
+/** Generate ONLY the bare motion loop for a plates scene: one clip at the
+ *  chosen (or max) generatable length, ping-pong-tiled to the scene window and
+ *  uploaded. Sets clipKey to the BARE loop (platesApplied=false) so the user
+ *  can preview and iterate on the motion cheaply before applying the lyrics.
+ *  Mutates `seg`; persistence is the caller's job. */
+export async function materializeLoopClip(opts: {
   job: VideoJobRow;
   seg: VideoSegment;
   aspectRatio: AspectRatio;
@@ -212,34 +225,31 @@ export async function materializePlatesClip(opts: {
   motionPrompt: string;
   canvasW: number;
   canvasH: number;
-  outName: string;
 }): Promise<string> {
-  const { job, seg, aspectRatio, workDir, outName } = opts;
+  const { job, seg, aspectRatio, workDir } = opts;
   const span = seg.clipEnd - seg.clipStart;
-  const lines = seg.lines ?? [];
 
-  // 1. One motion clip at the model's max viable length, looped to the span.
-  const isLite = job.imageQuality === "lite";
-  const genDur = isLite
-    ? Math.min(LITE_CLIP_MAX_SECONDS, Math.max(LITE_CLIP_MIN_SECONDS, Math.ceil(Math.min(span, LITE_CLIP_MAX_SECONDS))))
-    : Math.min(GROK_MAX_SECONDS, Math.max(1, Math.ceil(Math.min(span, GROK_MAX_SECONDS))));
+  const { min, max } = loopSecondsRange(job);
+  const wanted = seg.loopSeconds ?? Math.ceil(Math.min(span, max));
+  const genDur = Math.min(max, Math.max(min, Math.ceil(wanted)));
   const baseUrl = seg.imageKey ? await presignGet(seg.imageKey) : null;
   if (!baseUrl) throw new Error(`Scene ${seg.index} has no base image.`);
-  const raw = isLite
-    ? await generateLiteMotionClip({
-        prompt: opts.motionPrompt,
-        firstFrameUrl: baseUrl,
-        aspectRatio,
-        durationSeconds: genDur,
-      })
-    : await generateMotionClip({
-        model: env.OPENROUTER_VIDEO_MODEL,
-        prompt: opts.motionPrompt,
-        firstFrameUrl: baseUrl,
-        aspectRatio,
-        durationSeconds: genDur,
-        resolution: "720p",
-      });
+  const raw =
+    job.imageQuality === "lite"
+      ? await generateLiteMotionClip({
+          prompt: opts.motionPrompt,
+          firstFrameUrl: baseUrl,
+          aspectRatio,
+          durationSeconds: genDur,
+        })
+      : await generateMotionClip({
+          model: env.OPENROUTER_VIDEO_MODEL,
+          prompt: opts.motionPrompt,
+          firstFrameUrl: baseUrl,
+          aspectRatio,
+          durationSeconds: genDur,
+          resolution: "720p",
+        });
   const rawFile = path.join(workDir, `plraw_${seg.index}.mp4`);
   await writeFile(rawFile, raw);
   const loopName = `loop_${seg.index}.mp4`;
@@ -255,15 +265,50 @@ export async function materializePlatesClip(opts: {
   const loopKey = `video/${job.songId}/${job.id}/loop_${seg.index}.mp4`;
   await putObject(loopKey, await readFile(loopFile), "video/mp4");
   seg.loopClipKey = loopKey;
+  seg.clipKey = loopKey; // preview the bare loop until the lyrics are applied
+  seg.clipStatus = "ready";
+  seg.platesApplied = false;
+  return loopName;
+}
 
-  // 2. Per-line typography card (Qwen t2i: styled text on solid black — far
+/** Apply the lyric plates to an ALREADY-GENERATED loop: generate any missing
+ *  typography stickers (existing ones are reused — they don't depend on the
+ *  loop), composite them on their sung timing, upload as the scene's fitted
+ *  clip. When any line exhausts its retries the scene FLIPS to "overlay" — the
+ *  assembly burns timed subtitles instead. Mutates `seg`; persistence is the
+ *  caller's job. Returns the fitted clip's local filename. */
+export async function applyPlatesToLoop(opts: {
+  job: VideoJobRow;
+  seg: VideoSegment;
+  aspectRatio: AspectRatio;
+  workDir: string;
+  canvasW: number;
+  canvasH: number;
+  outName: string;
+}): Promise<string> {
+  const { job, seg, aspectRatio, workDir, outName } = opts;
+  const lines = seg.lines ?? [];
+  if (!seg.loopClipKey) throw new Error(`Scene ${seg.index} has no loop clip yet.`);
+  const loopFile = path.join(workDir, `loop_${seg.index}.mp4`);
+  {
+    const res = await fetch(await presignGet(seg.loopClipKey));
+    if (!res.ok) throw new Error(`Could not fetch the loop clip (HTTP ${res.status}).`);
+    await writeFile(loopFile, Buffer.from(await res.arrayBuffer()));
+  }
+
+  // Per-line typography card (Qwen t2i: styled text on solid black — far
   //    more reliable than mask inpainting, which truncated long lines and
   //    slanted them along scene surfaces) → luma-keyed sticker → QC (transcribe
   //    + compare in code, 2 retries: generation is stochastic). Lines run in
   //    PARALLEL (cap 3): a cold fal queue can cost 100s+ per call.
   const lettering = await letteringStyleFor(job);
   const { w: cw, h: ch } = PLATE_CANVAS[aspectRatio];
-  let failed = false;
+  // Two DISTINCT failure modes: qcFailed = the model can't render this text
+  // (deterministic-ish → overlay fallback); infraFailed = fal's queue stalled /
+  // errored (transient → abort WITHOUT the fallback, keep what succeeded, and
+  // let the user simply retry in a minute).
+  let qcFailed = false;
+  let infraFailed = false;
   const makePlate = async (k: number): Promise<void> => {
     const line = lines[k]!;
     if (!line.text.trim()) return;
@@ -283,12 +328,31 @@ export async function materializePlatesClip(opts: {
       }
       line.plateKey = null;
     }
-    for (let attempt = 0; attempt < 3 && !line.plateKey && !failed; attempt++) {
-      const card = await falQueueImage("fal-ai/qwen-image", {
-        prompt: cardPrompt(lettering, line.text),
-        image_size: { width: cw, height: ch },
-        num_images: 1,
-      });
+    for (let attempt = 0; attempt < 3 && !line.plateKey && !qcFailed && !infraFailed; attempt++) {
+      let card: Buffer;
+      try {
+        // Snappy deadlines: this runs behind the editor's Apply-lyrics button —
+        // fail fast (~45s per submit, 3 submits) instead of holding the user
+        // for minutes on a stuck queue.
+        card = await falQueueImage(
+          "fal-ai/qwen-image",
+          {
+            prompt: cardPrompt(lettering, line.text),
+            image_size: { width: cw, height: ch },
+            num_images: 1,
+          },
+          { attemptsMs: SNAPPY_ATTEMPTS_MS },
+        );
+      } catch (err) {
+        // falQueueImage already retried with resubmits — a throw here means the
+        // queue is genuinely stuck. Don't burn more attempts on it.
+        console.warn(
+          `[plates] seg=${seg.index} line=${k} card generation failed:`,
+          err instanceof Error ? err.message : err,
+        );
+        infraFailed = true;
+        return;
+      }
       const cardFile = path.join(workDir, `plcard_${seg.index}_${k}.png`);
       await writeFile(cardFile, card);
       const plateFile = path.join(workDir, `plate_${seg.index}_${k}.png`);
@@ -301,14 +365,19 @@ export async function materializePlatesClip(opts: {
         line.plateKey = plateKey;
       }
     }
-    if (line.text.trim() && !line.plateKey) failed = true;
+    if (line.text.trim() && !line.plateKey && !infraFailed) qcFailed = true;
   };
   const pending = [...lines.keys()];
   await Promise.all(
     Array.from({ length: Math.min(3, lines.length) }, async () => {
-      while (pending.length > 0 && !failed) await makePlate(pending.shift()!);
+      while (pending.length > 0 && !qcFailed && !infraFailed) await makePlate(pending.shift()!);
     }),
   );
+  if (infraFailed) {
+    // Successful plateKeys stay on `seg` — the caller persists them so a retry
+    // reuses them for free instead of regenerating.
+    throw new Error(PLATES_QUEUE_BUSY);
+  }
   const plates = [...lines.entries()]
     .filter(([, l]) => l.plateKey)
     .map(([k, l]) => ({
@@ -317,15 +386,14 @@ export async function materializePlatesClip(opts: {
       end: Math.max(0.4, l.end - seg.clipStart),
     }));
 
-  // 5. Deterministic safety net: any line failing QC twice flips the WHOLE scene
-  //    to timed-subtitle overlay on the bare loop. The render can't be blocked.
-  if (failed) {
+  // Deterministic safety net: any line exhausting its retries flips the WHOLE
+  // scene to timed-subtitle overlay on the bare loop. The render can't be blocked.
+  if (qcFailed) {
     console.warn(`[plates] seg=${seg.index} QC failed twice — falling back to overlay`);
     seg.textMode = "overlay";
     for (const l of lines) l.plateKey = null;
     const { copyFile } = await import("node:fs/promises");
     await copyFile(loopFile, path.join(workDir, outName));
-    seg.clipKey = null; // overlay burns cues at assembly; the loop IS the visual
     const clipKey = `video/${job.songId}/${job.id}/clip_${seg.index}.mp4`;
     await putObject(clipKey, await readFile(loopFile), "video/mp4");
     seg.clipKey = clipKey;
@@ -333,7 +401,7 @@ export async function materializePlatesClip(opts: {
     return outName;
   }
 
-  // 6. Composite the plates over the loop → the scene's final fitted clip.
+  // Composite the plates over the loop → the scene's final fitted clip.
   await overlayPlatesOnClip({
     workDir,
     loopFile,
@@ -347,5 +415,35 @@ export async function materializePlatesClip(opts: {
   await putObject(clipKey, await readFile(path.join(workDir, outName)), "video/mp4");
   seg.clipKey = clipKey;
   seg.clipStatus = "ready";
+  seg.platesApplied = true;
   return outName;
+}
+
+/** Build a plates scene end-to-end for autopilot/finalize: reuse the stored
+ *  loop when one exists (the user may have generated it in review — the motion
+ *  is the expensive part), else generate it, then apply the lyric plates. */
+export async function materializePlatesClip(opts: {
+  job: VideoJobRow;
+  seg: VideoSegment;
+  aspectRatio: AspectRatio;
+  workDir: string;
+  motionPrompt: string;
+  canvasW: number;
+  canvasH: number;
+  outName: string;
+}): Promise<string> {
+  if (!opts.seg.loopClipKey) {
+    await materializeLoopClip(opts);
+  }
+  try {
+    return await applyPlatesToLoop(opts);
+  } catch (err) {
+    // A stale loopClipKey (object gone from R2) is recoverable: regenerate the
+    // loop once and retry the plates.
+    if (opts.seg.loopClipKey && /loop clip/i.test(err instanceof Error ? err.message : "")) {
+      await materializeLoopClip(opts);
+      return applyPlatesToLoop(opts);
+    }
+    throw err;
+  }
 }

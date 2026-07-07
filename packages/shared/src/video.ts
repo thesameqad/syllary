@@ -158,6 +158,13 @@ export const videoSegmentSchema = z.object({
    *  kept so re-doing one plate never re-bills the motion clip. `clipKey` holds
    *  the composited result the assembly consumes. */
   loopClipKey: z.string().nullable().optional(),
+  /** plates only: whether clipKey has the lyric plates composited in. FALSE =
+   *  clipKey is the bare loop (user is iterating on motion; lyrics applied as a
+   *  separate cheap step, or at finalize). ABSENT = true for legacy scenes. */
+  platesApplied: z.boolean().optional(),
+  /** plates only: the user-chosen length (seconds) of the GENERATED loopable
+   *  clip before ping-pong tiling. Null/absent = the model's max. */
+  loopSeconds: z.number().nullable().optional(),
 });
 export type VideoSegment = z.infer<typeof videoSegmentSchema>;
 
@@ -192,6 +199,10 @@ export const reviewSegmentSchema = z.object({
   /** plates only: how many of this scene's line-plates are generated (a count,
    *  not N presigned URLs — polls stay cheap). */
   platesReady: z.number().int().default(0),
+  /** plates only: whether the current clip has the lyrics composited in. */
+  platesApplied: z.boolean().default(true),
+  /** plates only: user-chosen generated-loop length (null = model max). */
+  loopSeconds: z.number().nullable().default(null),
 });
 export type ReviewSegment = z.infer<typeof reviewSegmentSchema>;
 
@@ -241,9 +252,13 @@ export type RegenerateSegmentRequest = z.infer<typeof regenerateSegmentSchema>;
 
 /** Body for POST /api/video-jobs/:id/segments/:index/regenerate-clip — the
  *  per-scene MOTION direction. An empty string clears it back to the default
- *  motion prompt; omitting it re-rolls with whatever is already stored. */
+ *  motion prompt; omitting it re-rolls with whatever is already stored.
+ *  For plates scenes this regenerates ONLY the bare loop (lyrics are applied
+ *  as a separate step); `loopSeconds` picks the generated loopable length
+ *  (clamped server-side to the motion model's range). */
 export const regenerateClipSchema = z.object({
   motionDirection: z.string().max(2000).optional(),
+  loopSeconds: z.number().int().min(1).max(30).optional(),
 });
 export type RegenerateClipRequest = z.infer<typeof regenerateClipSchema>;
 

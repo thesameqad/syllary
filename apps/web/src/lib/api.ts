@@ -905,17 +905,36 @@ export async function regenerateClip(
   jobId: string,
   index: number,
   motionDirection?: string,
+  loopSeconds?: number,
 ): Promise<ReviewSegment> {
   const res = await fetch(
     `${API_BASE}/api/video-jobs/${jobId}/segments/${index}/regenerate-clip`,
     {
       method: "POST",
       headers: { "content-type": "application/json", ...(await authHeaders()) },
-      body: JSON.stringify(motionDirection === undefined ? {} : { motionDirection }),
+      body: JSON.stringify({
+        ...(motionDirection === undefined ? {} : { motionDirection }),
+        ...(loopSeconds === undefined ? {} : { loopSeconds }),
+      }),
     },
   );
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not regenerate this clip."), res.status);
+  return reviewSegmentSchema.parse(data);
+}
+
+/** Plates scenes: apply the lyric plates to the already-generated loop (missing
+ *  plates are generated; existing ones are reused free). */
+export async function applySegmentPlates(jobId: string, index: number): Promise<ReviewSegment> {
+  const res = await fetch(
+    `${API_BASE}/api/video-jobs/${jobId}/segments/${index}/apply-plates`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(await authHeaders()) },
+    },
+  );
+  const data: unknown = await res.json();
+  if (!res.ok) throw new ApiError(errorMessage(data, "Could not apply the lyrics."), res.status);
   return reviewSegmentSchema.parse(data);
 }
 

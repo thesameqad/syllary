@@ -128,13 +128,25 @@ async function generateQwenOnce(prompt: string, aspectRatio: AspectRatio): Promi
   });
 }
 
+/** Per-attempt wait deadlines. The default is PATIENT (unattended autopilot
+ *  work: robustness beats latency). Interactive callers (the editor's Apply
+ *  lyrics) pass a snappy profile instead — a healthy queue answers in 5–35s,
+ *  so waiting minutes on a stuck one just holds the user's request hostage. */
+const PATIENT_ATTEMPTS_MS = [90_000, 90_000, 180_000];
+export const SNAPPY_ATTEMPTS_MS = [45_000, 45_000, 60_000];
+
 /** Generic fal image call with the queue + resubmit-on-cold-queue discipline —
- *  shared by Lite backdrops (Qwen t2i) and shared-clip text plates (inpaint). */
-export async function falQueueImage(model: string, body: Record<string, unknown>): Promise<Buffer> {
+ *  shared by Lite backdrops (Qwen t2i) and shared-clip text plates. */
+export async function falQueueImage(
+  model: string,
+  body: Record<string, unknown>,
+  opts?: { attemptsMs?: number[] },
+): Promise<Buffer> {
+  const attempts = opts?.attemptsMs ?? PATIENT_ATTEMPTS_MS;
   let lastErr = "";
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (const waitMs of attempts) {
     try {
-      return await falImageAttempt(model, body, attempt === 2 ? 180_000 : 90_000);
+      return await falImageAttempt(model, body, waitMs);
     } catch (e) {
       lastErr = (e as Error).message;
       if (!/timed out|IN_QUEUE|HTTP 5\d\d|network|fetch failed/i.test(lastErr)) throw e;
@@ -157,8 +169,23 @@ async function falImageAttempt(
   if (!submit.ok) {
     throw new Error(`qwen submit HTTP ${submit.status}: ${(await submit.text()).slice(0, 200)}`);
   }
-  const job = (await submit.json()) as { status_url?: string; response_url?: string };
+  const job = (await submit.json()) as {
+    status_url?: string;
+    response_url?: string;
+    cancel_url?: string;
+  };
   if (!job.status_url || !job.response_url) throw new Error("qwen submit returned no queue urls");
+
+  // Fire-and-forget: abandoning a queued request without cancelling leaves it
+  // to complete (and BILL) minutes later for nobody — every resubmit used to
+  // strand one of these orphans on fal's dashboard.
+  const cancelAbandoned = () => {
+    if (!job.cancel_url) return;
+    void fetch(job.cancel_url, {
+      method: "PUT",
+      headers: { Authorization: `Key ${env.FAL_AI_KEY}` },
+    }).catch(() => undefined);
+  };
 
   const deadline = Date.now() + waitMs;
   let status = "";
@@ -171,9 +198,14 @@ async function falImageAttempt(
       continue; // network blip → re-poll
     }
     if (status === "COMPLETED") break;
-    if (status !== "IN_QUEUE" && status !== "IN_PROGRESS") throw new Error(`fal image status ${status}`);
+    if (status !== "IN_QUEUE" && status !== "IN_PROGRESS") {
+      throw new Error(`fal image status ${status}`);
+    }
   }
-  if (status !== "COMPLETED") throw new Error(`fal image timed out (${status || "no status"})`);
+  if (status !== "COMPLETED") {
+    cancelAbandoned();
+    throw new Error(`fal image timed out (${status || "no status"})`);
+  }
   console.log(`[fal-image] ${model} done in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
   const res = await fetch(job.response_url, { headers: { Authorization: `Key ${env.FAL_AI_KEY}` } });

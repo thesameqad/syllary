@@ -738,9 +738,14 @@ export function GenerateVideoModal({
                             </span>
                           )}
                           {g === "single" && (
-                            <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[10px] font-medium text-white/55">
-                              Living Scenes
-                            </span>
+                            <>
+                              <span className="rounded-full bg-white/[0.08] px-2 py-0.5 text-[10px] font-medium text-white/55">
+                                Living Scenes
+                              </span>
+                              <span className="rounded-full border border-amber-300/35 bg-gradient-to-r from-amber-400/20 to-pulse/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.6px] text-amber-200">
+                                Experimental
+                              </span>
+                            </>
                           )}
                           {selected && (
                             <span className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-pulse text-white">

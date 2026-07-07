@@ -35,7 +35,12 @@ import {
 } from "../db/schema.js";
 import { buildBackdropPrompt, generateBackdrop } from "./openrouter-image.js";
 import { buildLitePrompt, generateLiteBackdrop } from "./fal-image.js";
-import { loopFillClip, materializePlatesClip } from "./plates.js";
+import {
+  applyPlatesToLoop,
+  loopFillClip,
+  materializeLoopClip,
+  materializePlatesClip,
+} from "./plates.js";
 import { videoArtBrief } from "./openrouter.js";
 import { generateMotionClip } from "./openrouter-video.js";
 import { generateLiteMotionClip } from "./fal-video.js";
@@ -527,6 +532,8 @@ export async function toReviewSegment(seg: VideoSegment): Promise<ReviewSegment>
     lines: seg.lines?.map((l) => ({ text: l.text, start: l.start, end: l.end })),
     textMode: seg.textMode ?? "baked",
     platesReady: seg.lines?.filter((l) => l.plateKey != null).length ?? 0,
+    platesApplied: seg.platesApplied ?? true,
+    loopSeconds: seg.loopSeconds ?? null,
   };
 }
 
@@ -706,6 +713,7 @@ export async function regenerateSegmentClip(
   job: VideoJobRow,
   index: number,
   newMotionDirection?: string,
+  loopSeconds?: number,
 ): Promise<ReviewSegment> {
   const segments = job.segments ?? [];
   const seg = segments.find((s) => s.index === index);
@@ -715,23 +723,20 @@ export async function regenerateSegmentClip(
     throw new Error("This scene has no image to animate yet.");
   }
   if (newMotionDirection !== undefined) seg.motionDirection = newMotionDirection.trim() || null;
-  // Captured BEFORE the work: a plates run can FLIP seg.textMode to "overlay"
-  // (QC double-fail fallback) and that flip must be persisted below.
-  const wasPlates = seg.textMode === "plates";
+  if (loopSeconds !== undefined) seg.loopSeconds = loopSeconds;
 
   const aspectRatio = job.aspectRatio as AspectRatio;
   const workDir = path.join(os.tmpdir(), `syllary-clip-${job.id}-${index}`);
   try {
     await mkdir(workDir, { recursive: true });
     if (seg.textMode === "plates") {
-      // The plates scene's "clip" = one loop + all its inpainted lyric plates,
-      // composited. Generating it here lets the user PREVIEW the living block
-      // before rendering the whole video.
+      // Plates scenes regenerate ONLY the bare loop here — cheap fast motion
+      // iteration; the lyrics are applied as a separate step (or at finalize).
       const elementCatalog = await loadSongElementRefs(job.songId, job.elementIds);
       // Ensures the text-free base exists (generates + persists imageKey on demand).
       await materializeFrame(job, seg, aspectRatio, workDir, elementCatalog);
       const { w, h } = CANVAS[aspectRatio];
-      await materializePlatesClip({
+      await materializeLoopClip({
         job,
         seg,
         aspectRatio,
@@ -739,7 +744,6 @@ export async function regenerateSegmentClip(
         motionPrompt: buildMotionPrompt(job, seg),
         canvasW: w,
         canvasH: h,
-        outName: `clip_${index}.mp4`,
       });
     } else {
       await generateSegmentClip(job, seg, segments, aspectRatio, workDir, `clip_${index}.mp4`);
@@ -757,13 +761,69 @@ export async function regenerateSegmentClip(
     f.motionDirection = seg.motionDirection;
     f.clipKey = seg.clipKey;
     f.clipStatus = seg.clipStatus;
-    if (wasPlates) {
-      f.textMode = seg.textMode; // may have flipped to "overlay" on QC failure
+    if (seg.textMode === "plates") {
       f.imageKey = seg.imageKey; // base may have been generated on demand
       f.loopClipKey = seg.loopClipKey;
-      f.plateRect = seg.plateRect;
-      if (seg.lines) f.lines = seg.lines.map((l) => ({ ...l }));
+      f.platesApplied = seg.platesApplied;
+      f.loopSeconds = seg.loopSeconds;
     }
+    updated = f;
+  });
+
+  return toReviewSegment(updated ?? seg);
+}
+
+/** Apply the lyric plates to a plates scene's already-generated loop (missing
+ *  stickers are generated + QC'd; existing ones are reused for free). The cheap
+ *  half of the split flow — no motion model call. Throws on failure (the route
+ *  then charges nothing). */
+export async function regenerateSegmentPlates(
+  job: VideoJobRow,
+  index: number,
+): Promise<ReviewSegment> {
+  const segments = job.segments ?? [];
+  const seg = segments.find((s) => s.index === index);
+  if (!seg) throw new Error("Segment not found.");
+  if (seg.textMode !== "plates") throw new Error("This scene doesn't use lyric plates.");
+  if (!seg.loopClipKey) throw new Error("Generate this scene's loop first.");
+
+  const aspectRatio = job.aspectRatio as AspectRatio;
+  const workDir = path.join(os.tmpdir(), `syllary-plates-${job.id}-${index}`);
+  try {
+    await mkdir(workDir, { recursive: true });
+    const { w, h } = CANVAS[aspectRatio];
+    await applyPlatesToLoop({
+      job,
+      seg,
+      aspectRatio,
+      workDir,
+      canvasW: w,
+      canvasH: h,
+      outName: `clip_${index}.mp4`,
+    });
+  } catch (err) {
+    // A transient queue stall can leave SOME plates finished (they're already
+    // uploaded) — persist those keys so the retry reuses them for free instead
+    // of regenerating, then let the route report the failure (nothing charged).
+    await patchJobSegments(job.id, (fresh) => {
+      const f = fresh.find((s) => s.index === index);
+      if (!f || !seg.lines) return;
+      f.lines = seg.lines.map((l) => ({ ...l }));
+    }).catch(() => undefined);
+    throw err;
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  let updated: VideoSegment | undefined;
+  await patchJobSegments(job.id, (fresh) => {
+    const f = fresh.find((s) => s.index === index);
+    if (!f) return;
+    f.clipKey = seg.clipKey;
+    f.clipStatus = seg.clipStatus;
+    f.textMode = seg.textMode; // may have flipped to "overlay" on QC failure
+    f.platesApplied = seg.platesApplied;
+    if (seg.lines) f.lines = seg.lines.map((l) => ({ ...l }));
     updated = f;
   });
 
@@ -892,9 +952,14 @@ async function runAnimated(
   await mapPool(segments, VIDEO_CONCURRENCY, async (seg, i) => {
     const { imageFile } = await materializeFrame(job, seg, aspectRatio, workDir, elementCatalog);
     const clipName = `clip_${i}.mp4`;
-    if (seg.textMode === "plates" && (seg.clipStatus !== "ready" || !seg.clipKey)) {
-      // Shared-clip scene: one loop + per-line inpainted plates (or the overlay
-      // fallback). The composited result becomes this scene's fitted clip.
+    if (
+      seg.textMode === "plates" &&
+      (seg.clipStatus !== "ready" || !seg.clipKey || seg.platesApplied === false)
+    ) {
+      // Shared-clip scene: one loop + per-line typography plates (or the overlay
+      // fallback). An existing loop is REUSED (platesApplied=false = the user
+      // generated the motion in review but never applied the lyrics) — only the
+      // plates + composite run here.
       await materializePlatesClip({
         job,
         seg,

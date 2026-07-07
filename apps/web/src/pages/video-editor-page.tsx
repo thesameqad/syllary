@@ -44,6 +44,7 @@ import {
   getVideoJob,
   listElements,
   moveSegmentLine,
+  applySegmentPlates,
   regenerateClip,
   regenerateSegment,
   updateSceneGroup,
@@ -447,8 +448,14 @@ function EditorBody({
     enqueue("image", seg.index, () => regenerateSegment(job.id, seg.index, direction, noCast));
   }
 
-  function regenerateMotion(seg: ReviewSegment, motionDirection?: string) {
-    enqueue("clip", seg.index, () => regenerateClip(job.id, seg.index, motionDirection));
+  function regenerateMotion(seg: ReviewSegment, motionDirection?: string, loopSeconds?: number) {
+    enqueue("clip", seg.index, () => regenerateClip(job.id, seg.index, motionDirection, loopSeconds));
+  }
+
+  // Plates scenes: composite the lyrics onto the already-generated loop (cheap —
+  // no motion model call; missing plates are generated, existing reused free).
+  function applyPlates(seg: ReviewSegment) {
+    enqueue("clip", seg.index, () => applySegmentPlates(job.id, seg.index));
   }
 
   // A lyric bubble mid-drag: which scene + which line within it.
@@ -694,7 +701,10 @@ function EditorBody({
               imageCost={imageCost}
               clipCost={singleClipTokens(job.model, seg.clipEnd - seg.clipStart, job.imageQuality)}
               onRegenerateImage={(direction, noCast) => regenerateImage(seg, direction, noCast)}
-              onRegenerateMotion={(motionDirection) => regenerateMotion(seg, motionDirection)}
+              onRegenerateMotion={(motionDirection, loopSeconds) =>
+                regenerateMotion(seg, motionDirection, loopSeconds)
+              }
+              onApplyPlates={() => applyPlates(seg)}
               onUngroup={() => void ungroup(seg.index)}
               onSetMode={(m) => void setGroupMode(seg.index, m)}
               dragging={dragging}
@@ -908,6 +918,7 @@ function SceneRow({
   clipCost,
   onRegenerateImage,
   onRegenerateMotion,
+  onApplyPlates,
   onUngroup,
   onSetMode,
   dragging,
@@ -929,7 +940,8 @@ function SceneRow({
   imageCost: number;
   clipCost: number;
   onRegenerateImage: (direction?: string, noCast?: boolean) => void;
-  onRegenerateMotion: (motionDirection?: string) => void;
+  onRegenerateMotion: (motionDirection?: string, loopSeconds?: number) => void;
+  onApplyPlates: () => void;
   onUngroup: () => void;
   onSetMode: (m: "baked" | "plates") => void;
   dragging: { scene: number; line: number; lines: number } | null;
@@ -945,13 +957,16 @@ function SceneRow({
   const [direction, setDirection] = useState(seg.direction ?? "");
   const [noCast, setNoCast] = useState(seg.noCast);
   const [motionDir, setMotionDir] = useState(motionSeed(seg));
+  // Plates: the user-chosen generated-loop length (null = the model's max).
+  const [loopSecs, setLoopSecs] = useState<number | null>(seg.loopSeconds);
 
   useEffect(() => {
     setDirection(seg.direction ?? "");
     setNoCast(seg.noCast);
     setMotionDir(motionSeed(seg));
+    setLoopSecs(seg.loopSeconds);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seg.direction, seg.noCast, seg.motionDirection]);
+  }, [seg.direction, seg.noCast, seg.motionDirection, seg.loopSeconds]);
 
   const busyImage = state?.kind === "image" && state.phase !== "error";
   const busyClip = state?.kind === "clip" && state.phase !== "error";
@@ -961,6 +976,8 @@ function SceneRow({
     !seg.imageUrl && (job.status === "pending" || job.status === "processing");
   const isPlates = seg.textMode === "plates";
   const isGroup = (seg.lines?.length ?? 0) > 1;
+  // "One scene" jobs stack dozens of lines in one row — cap the lane and scroll.
+  const dense = (seg.lines?.length ?? 0) > 8;
   // Legacy single-line segments don't expose sung times in the DTO — the scene
   // window is the honest timecode for them.
   const lines =
@@ -969,6 +986,12 @@ function SceneRow({
   const span = seg.clipEnd - seg.clipStart;
   const clipMax = job.imageQuality === "lite" ? LITE_CLIP_MAX_SECONDS : GROK_MAX_SECONDS;
   const loops = supportsMotion && span > clipMax + 0.5;
+  // Plates: selectable generated-loop lengths (the loop then tiles the window).
+  // Lite has no 1s/3s: Seedance rejects clips under 4s (the server clamps to 4,
+  // so shorter chips would silently lie). Grok generates down to 1s.
+  const loopOptions = (job.imageQuality === "lite" ? [4, 8, 12] : [1, 3, 5, 10, 15]).filter(
+    (s, _i, arr) => s <= Math.max(Math.ceil(span), arr[0]!),
+  );
 
   const mentioned = cast.length > 0 ? findMentionedNames(direction, cast) : [];
   const motionMentioned = cast.length > 0 ? findMentionedNames(motionDir, cast) : [];
@@ -1012,39 +1035,76 @@ function SceneRow({
       )}
     >
       {/* ------------------------------ Lyrics lane ------------------------------ */}
-      <div className="flex flex-col justify-center gap-1.5 lg:pr-2">
+      <div className="flex min-w-0 flex-col justify-center gap-1.5 lg:pr-2">
         {lines.length > 0 ? (
-          lines.map((l, i) => {
-            // Timing is fixed → only the boundary lines can hop to a neighbor.
-            const draggable = interactive && (i === 0 || i === lines.length - 1);
-            const isDragged = dragging?.scene === seg.index && dragging.line === i;
-            return (
-              <div
-                key={i}
-                draggable={draggable}
-                onDragStart={(e) => {
-                  if (!draggable) return;
-                  e.dataTransfer.setData("text/plain", l.text);
-                  e.dataTransfer.effectAllowed = "move";
-                  onDragStart(i, lines.length);
-                }}
-                onDragEnd={onDragEnd}
-                title={draggable ? "Drag onto the scene above or below to move this line there." : undefined}
-                className={cn(
-                  "flex w-fit max-w-full items-center gap-2 rounded-[14px] rounded-bl-[4px] border px-2.5 py-1.5 transition-all",
-                  isDragged
-                    ? "border-pulse/60 bg-pulse/10 opacity-50"
-                    : "border-white/10 bg-white/[0.04]",
-                  draggable && "cursor-grab hover:border-white/30 active:cursor-grabbing",
-                )}
-              >
-                <span className="shrink-0 rounded bg-black/40 px-1 py-px text-[9.5px] tabular-nums text-white/45">
-                  {fmtTime(l.start)}
+          <div
+            className={cn(
+              dense &&
+                "rounded-[14px] border border-white/[0.07] bg-black/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
+            )}
+          >
+            {dense && (
+              <div className="flex items-baseline justify-between border-b border-white/[0.06] px-3 py-2">
+                <span className="text-[10px] uppercase tracking-[1.2px] text-white/40">
+                  {lines.length} lines
                 </span>
-                <span className="truncate text-[12.5px] leading-snug text-white/85">{l.text}</span>
+                <span className="text-[10px] tabular-nums text-white/30">
+                  {fmtTime(lines[0]!.start)}–{fmtTime(lines[lines.length - 1]!.end)}
+                </span>
               </div>
-            );
-          })
+            )}
+            <div
+              className={cn(
+                "flex flex-col gap-1.5",
+                dense &&
+                  "max-h-[380px] overflow-y-auto p-2.5 [mask-image:linear-gradient(to_bottom,transparent,black_14px,black_calc(100%-14px),transparent)] [scrollbar-color:rgba(255,255,255,0.18)_transparent] [scrollbar-width:thin] lg:max-h-[440px]",
+              )}
+            >
+              {lines.map((l, i) => {
+                // Timing is fixed → only the boundary lines can hop to a neighbor.
+                const draggable = interactive && (i === 0 || i === lines.length - 1);
+                const isDragged = dragging?.scene === seg.index && dragging.line === i;
+                return (
+                  <div
+                    key={i}
+                    draggable={draggable}
+                    onDragStart={(e) => {
+                      if (!draggable) return;
+                      e.dataTransfer.setData("text/plain", l.text);
+                      e.dataTransfer.effectAllowed = "move";
+                      onDragStart(i, lines.length);
+                    }}
+                    onDragEnd={onDragEnd}
+                    title={
+                      draggable
+                        ? "Drag onto the scene above or below to move this line there."
+                        : undefined
+                    }
+                    className={cn(
+                      "flex w-fit max-w-full items-center gap-2 rounded-[14px] rounded-bl-[4px] border transition-all",
+                      dense ? "px-2 py-1" : "px-2.5 py-1.5",
+                      isDragged
+                        ? "border-pulse/60 bg-pulse/10 opacity-50"
+                        : "border-white/10 bg-white/[0.04]",
+                      draggable && "cursor-grab hover:border-white/30 active:cursor-grabbing",
+                    )}
+                  >
+                    <span className="shrink-0 rounded bg-black/40 px-1 py-px text-[9.5px] tabular-nums text-white/45">
+                      {fmtTime(l.start)}
+                    </span>
+                    <span
+                      className={cn(
+                        "truncate leading-snug text-white/85",
+                        dense ? "text-[12px]" : "text-[12.5px]",
+                      )}
+                    >
+                      {l.text}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         ) : (
           <div className="flex w-fit items-center gap-2 rounded-[14px] rounded-bl-[4px] border border-dashed border-white/10 px-2.5 py-1.5">
             <span className="shrink-0 rounded bg-black/40 px-1 py-px text-[9.5px] tabular-nums text-white/45">
@@ -1086,6 +1146,9 @@ function SceneRow({
               >
                 <Film className="mr-1 inline h-2.5 w-2.5" />
                 In sequence
+                <span className="ml-1.5 inline-block rounded-full border border-amber-300/35 bg-gradient-to-r from-amber-400/20 to-pulse/20 px-1.5 py-px align-middle text-[8px] font-medium uppercase tracking-[0.8px] text-amber-200">
+                  Experimental
+                </span>
               </button>
             </div>
             <button
@@ -1117,21 +1180,31 @@ function SceneRow({
           </p>
         )}
         {isPlates && (
-          <div className="mt-1 flex items-center gap-1.5 text-[10px] text-white/40">
-            <span>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-white/40">
+            <span className="tabular-nums">
               {seg.platesReady}/{platesTotal} plates
             </span>
-            <span className="flex gap-1">
-              {Array.from({ length: platesTotal }, (_, i) => (
+            {platesTotal > 8 ? (
+              // Dozens of lines ("One scene") → a compact progress bar, not dots.
+              <span className="h-1.5 w-20 overflow-hidden rounded-full bg-white/10">
                 <span
-                  key={i}
-                  className={cn(
-                    "h-1.5 w-1.5 rounded-full",
-                    i < seg.platesReady ? "bg-pulse" : "bg-white/15",
-                  )}
+                  className="block h-full rounded-full bg-gradient-to-r from-[#ff5151] to-pulse transition-[width] duration-500"
+                  style={{ width: `${Math.round((seg.platesReady / Math.max(1, platesTotal)) * 100)}%` }}
                 />
-              ))}
-            </span>
+              </span>
+            ) : (
+              <span className="flex gap-1">
+                {Array.from({ length: platesTotal }, (_, i) => (
+                  <span
+                    key={i}
+                    className={cn(
+                      "h-1.5 w-1.5 rounded-full",
+                      i < seg.platesReady ? "bg-pulse" : "bg-white/15",
+                    )}
+                  />
+                ))}
+              </span>
+            )}
             <span>
               {job.sceneGrouping === "single" && job.prerenderImages && !job.isEdit
                 ? "· included in the up-front price"
@@ -1318,6 +1391,32 @@ function SceneRow({
                 }
                 className={FIELD}
               />
+              {isPlates && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] text-white/35">Loop length</span>
+                  {loopOptions.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setLoopSecs(s)}
+                      className={cn(
+                        "rounded-full border px-2 py-0.5 text-[10.5px] tabular-nums transition-colors",
+                        (loopSecs ?? loopOptions[loopOptions.length - 1]) === s
+                          ? "border-pulse/50 bg-pulse/10 text-white"
+                          : "border-white/15 text-white/50 hover:border-white/35 hover:text-white",
+                      )}
+                    >
+                      {s}s
+                    </button>
+                  ))}
+                  <span
+                    className="cursor-help text-[10px] text-white/25"
+                    title="How long a clip the motion model generates — it then ping-pong loops to fill the whole scene. Shorter = faster to generate; longer = less visible repetition."
+                  >
+                    ?
+                  </span>
+                </div>
+              )}
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 {cast.map((name) => (
                   <button
@@ -1339,15 +1438,34 @@ function SceneRow({
                   disabled={
                     (!!state && state.phase !== "error") || (!seg.imageUrl && !isPlates)
                   }
-                  onClick={() => onRegenerateMotion(motionDir)}
+                  onClick={() => onRegenerateMotion(motionDir, isPlates ? (loopSecs ?? undefined) : undefined)}
                   className="ml-auto flex items-center gap-1.5 rounded-[9px] border border-pulse/40 bg-pulse/[0.08] px-2.5 py-1 text-[11.5px] font-medium text-white transition-colors hover:bg-pulse/[0.16] disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <RefreshCw className={cn("h-3 w-3", busyClip && "animate-spin")} />
                   {isPlates
-                    ? `${seg.clipUrl ? "Regenerate" : "Generate"} loop + plates · ${clipCost + platesTotal * singlePlateTokens()}`
+                    ? `${seg.clipUrl ? "Regenerate" : "Generate"} loop · ${clipCost}`
                     : `${seg.clipUrl ? "Regenerate" : "Generate"} · ${clipCost}`}
                 </button>
               </div>
+              {isPlates && seg.clipUrl && !seg.platesApplied && (
+                <div className="mt-2 flex items-center justify-between gap-2 rounded-[10px] border border-amber-400/25 bg-amber-400/[0.06] px-2.5 py-1.5">
+                  <span className="text-[10.5px] leading-snug text-amber-200/85">
+                    The loop plays without lyrics — apply them when the motion looks right.
+                  </span>
+                  <button
+                    type="button"
+                    disabled={!!state && state.phase !== "error"}
+                    onClick={onApplyPlates}
+                    className="flex shrink-0 items-center gap-1.5 rounded-[9px] border border-pulse/40 bg-pulse/[0.08] px-2.5 py-1 text-[11.5px] font-medium text-white transition-colors hover:bg-pulse/[0.16] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    Apply lyrics
+                    {platesTotal - seg.platesReady > 0
+                      ? ` · ${(platesTotal - seg.platesReady) * singlePlateTokens()}`
+                      : " · free"}
+                  </button>
+                </div>
+              )}
               {isPlates && (
                 <p className="mt-1 text-[10px] leading-snug text-white/35">
                   <Repeat className="mr-1 inline h-2.5 w-2.5" />
