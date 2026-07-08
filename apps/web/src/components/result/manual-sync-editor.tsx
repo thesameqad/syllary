@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  GripHorizontal,
   Loader2,
   Pause,
   Play,
@@ -22,6 +23,13 @@ const MIN_WORD_DURATION = 0.04;
 const MIN_PX_PER_SEC = 30;
 const MAX_PX_PER_SEC = 1200;
 const DEFAULT_PX_PER_SEC = 140;
+// Zoom is multiplicative — additive steps feel glacial at high zoom and
+// violent at low zoom. The slider maps over the same log range.
+const ZOOM_STEP = 1.3;
+const ZOOM_LOG_RANGE = Math.log(MAX_PX_PER_SEC / MIN_PX_PER_SEC);
+// Below this on-screen width a word can't be grabbed by its body (the trim
+// handles eat all of it), so a grab-tab is rendered under the block instead.
+const NARROW_WORD_PX = 30;
 // Padding seconds after the last word so the user can drag right beyond the
 // final word if needed (and so the playhead at song-end is still in view).
 const TRAIL_PADDING = 0.5;
@@ -65,8 +73,19 @@ export function ManualSyncEditor({
   // Word the pointer is hovering over — drives delete affordances and the
   // keyboard Delete/Backspace shortcut.
   const [hoveredWord, setHoveredWord] = useState<{ li: number; wi: number } | null>(null);
+  // Multi-selection of words, keyed "lineIdx:wordIdx". Dragging any selected
+  // word moves the whole selection; arrow keys nudge it; Del removes it.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Rubber-band selection in progress on the empty track area, in seconds.
+  const [marquee, setMarquee] = useState<{ a: number; b: number } | null>(null);
   // Snapshot of the lines on open so we can detect "dirty" + reset on cancel.
   const initialLinesRef = useRef<string>("");
+  const pxPerSecRef = useRef(DEFAULT_PX_PER_SEC);
+  pxPerSecRef.current = pxPerSec;
+  // Zoom anchoring: keep the time under the cursor (or the viewport centre)
+  // fixed while pxPerSec changes, instead of letting content slide underneath.
+  const pendingZoomAnchor = useRef<{ time: number; px: number } | null>(null);
+  const skipAutoScrollRef = useRef(false);
 
   // Reset state every time the editor is opened with a fresh song.
   useEffect(() => {
@@ -76,6 +95,10 @@ export function ManualSyncEditor({
     initialLinesRef.current = JSON.stringify(clone);
     setPxPerSec(DEFAULT_PX_PER_SEC);
     setPlayhead(0);
+    setSelected(new Set());
+    setMarquee(null);
+    pendingZoomAnchor.current = null;
+    skipAutoScrollRef.current = false;
   }, [open, song.lyrics]);
 
   // Initialize WaveSurfer for the seek-able waveform + audio playback. One
@@ -154,9 +177,51 @@ export function ManualSyncEditor({
     void ws.playPause();
   }, []);
 
-  // Spacebar = play/pause; Escape closes; Delete/Backspace removes the
-  // currently-hovered word (intentionally not the "selected" word — there
-  // isn't one; hover is the targeting affordance).
+  // Zoom to a new px/s, keeping the time under `anchorClientX` (or the
+  // viewport centre when omitted) visually fixed. The actual scroll fix-up
+  // happens in the layout effect below, once the new width has rendered.
+  const zoomTo = useCallback((next: number, anchorClientX?: number) => {
+    const el = trackScrollRef.current;
+    const clamped = clamp(next, MIN_PX_PER_SEC, MAX_PX_PER_SEC);
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      const px = anchorClientX != null ? anchorClientX - rect.left : el.clientWidth / 2;
+      pendingZoomAnchor.current = {
+        time: (el.scrollLeft + px) / pxPerSecRef.current,
+        px,
+      };
+    }
+    setPxPerSec(clamped);
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = trackScrollRef.current;
+    const anchor = pendingZoomAnchor.current;
+    if (!el || !anchor) return;
+    pendingZoomAnchor.current = null;
+    // Don't let the playhead auto-scroll effect fight the anchor correction.
+    skipAutoScrollRef.current = true;
+    el.scrollLeft = anchor.time * pxPerSec - anchor.px;
+  }, [pxPerSec]);
+
+  // Ctrl/Cmd + scroll wheel zooms around the cursor. Native listener because
+  // React's delegated wheel handlers can't preventDefault (passive).
+  useEffect(() => {
+    if (!open) return;
+    const el = trackScrollRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      zoomTo(pxPerSecRef.current * Math.exp(-e.deltaY * 0.0022), e.clientX);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [open, zoomTo]);
+
+  // Keyboard map: Space play/pause · Esc clears selection, then closes ·
+  // Del/Backspace removes the selection (or the hovered word) · +/− zooms ·
+  // ←/→ nudges the selection by 10 ms (Shift = 100 ms) · Ctrl+A selects all.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -165,16 +230,37 @@ export function ManualSyncEditor({
         e.preventDefault();
         togglePlay();
       } else if (e.key === "Escape" && !saving) {
-        onClose();
-      } else if ((e.key === "Delete" || e.key === "Backspace") && hoveredWord) {
+        if (selected.size > 0) setSelected(new Set());
+        else handleClose();
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        if (selected.size > 0) {
+          e.preventDefault();
+          deleteWords(selected);
+        } else if (hoveredWord) {
+          e.preventDefault();
+          deleteWord(hoveredWord.li, hoveredWord.wi);
+        }
+      } else if ((e.key === "+" || e.key === "=") && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
-        deleteWord(hoveredWord.li, hoveredWord.wi);
+        zoomTo(pxPerSecRef.current * ZOOM_STEP);
+      } else if ((e.key === "-" || e.key === "_") && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        zoomTo(pxPerSecRef.current / ZOOM_STEP);
+      } else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && selected.size > 0) {
+        e.preventDefault();
+        const step = (e.shiftKey ? 0.1 : 0.01) * (e.key === "ArrowLeft" ? -1 : 1);
+        nudgeSelected(step);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        const all = new Set<string>();
+        lines.forEach((l, li) => l.words.forEach((_, wi) => all.add(`${li}:${wi}`)));
+        setSelected(all);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, togglePlay, onClose, saving, hoveredWord]);
+  }, [open, togglePlay, onClose, saving, hoveredWord, selected, lines]);
 
   // Keep the playhead in view at all times — works for both playback and
   // manual seeks (waveform click, track click). When the playhead would
@@ -185,6 +271,11 @@ export function ManualSyncEditor({
   useEffect(() => {
     const el = trackScrollRef.current;
     if (!el) return;
+    // A zoom-anchor correction just ran — keep the anchored view in place.
+    if (skipAutoScrollRef.current) {
+      skipAutoScrollRef.current = false;
+      return;
+    }
     const playheadX = playhead * pxPerSec;
     const visibleStart = el.scrollLeft;
     const visibleEnd = el.scrollLeft + el.clientWidth;
@@ -218,31 +309,96 @@ export function ManualSyncEditor({
     );
   }
 
-  // Remove a word from its line. Also rewrites line.text so the lyrics view
-  // and the downloadable formats stay in sync with the timed words. If the
-  // line's last word was removed, drop the whole line — keeping an empty
-  // line around would still surface in the dynamic / synced views (which
-  // render line.text), even though it has nothing on the timeline.
-  function deleteWord(lineIdx: number, wordIdx: number) {
+  // Batch variant of updateWord — applies absolute start/end to many words
+  // in one setLines pass so a group drag stays a single state update.
+  function setWordTimes(
+    patches: { li: number; wi: number; start: number; end: number }[],
+  ) {
+    if (patches.length === 0) return;
+    const byLine = new Map<number, Map<number, { start: number; end: number }>>();
+    for (const p of patches) {
+      let m = byLine.get(p.li);
+      if (!m) {
+        m = new Map();
+        byLine.set(p.li, m);
+      }
+      m.set(p.wi, { start: p.start, end: p.end });
+    }
+    setLines((prev) =>
+      prev.map((l, li) => {
+        const m = byLine.get(li);
+        if (!m) return l;
+        const words = l.words.map((w, wi) => {
+          const patch = m.get(wi);
+          return patch ? { ...w, ...patch } : w;
+        });
+        const lineStart = words.length > 0 ? Math.min(...words.map((w) => w.start)) : l.start;
+        const lineEnd = words.length > 0 ? Math.max(...words.map((w) => w.end)) : l.end;
+        return { ...l, words, start: lineStart, end: lineEnd };
+      }),
+    );
+  }
+
+  // Resolve selection keys ("li:wi") to concrete words with their current
+  // times. Silently skips keys that no longer resolve (defensive).
+  function collectMembers(
+    keys: Set<string>,
+  ): { li: number; wi: number; start: number; end: number }[] {
+    const members: { li: number; wi: number; start: number; end: number }[] = [];
+    for (const k of keys) {
+      const [li = -1, wi = -1] = k.split(":").map(Number);
+      const w = lines[li]?.words[wi];
+      if (w) members.push({ li, wi, start: w.start, end: w.end });
+    }
+    return members;
+  }
+
+  // Shift the whole selection by dt seconds, clamped so the earliest word
+  // never crosses 0 and the latest never crosses the song end.
+  function nudgeSelected(dtRaw: number) {
+    const members = collectMembers(selected);
+    if (members.length === 0) return;
+    pauseForEdit();
+    const minStart = Math.min(...members.map((m) => m.start));
+    const maxEnd = Math.max(...members.map((m) => m.end));
+    const dt = clamp(dtRaw, -minStart, songDuration - maxEnd);
+    if (dt === 0) return;
+    setWordTimes(
+      members.map((m) => ({ li: m.li, wi: m.wi, start: m.start + dt, end: m.end + dt })),
+    );
+  }
+
+  // Remove words from their lines. Also rewrites line.text so the lyrics
+  // view and the downloadable formats stay in sync with the timed words. If
+  // a line loses its last word, drop the whole line — keeping an empty line
+  // around would still surface in the dynamic / synced views (which render
+  // line.text), even though it has nothing on the timeline. Selection is
+  // cleared because word indices shift after a removal.
+  function deleteWords(keys: Set<string>) {
+    if (keys.size === 0) return;
     pauseForEdit();
     setLines((prev) => {
       const out: LyricLine[] = [];
-      for (let li = 0; li < prev.length; li++) {
-        const l = prev[li]!;
-        if (li !== lineIdx) {
+      prev.forEach((l, li) => {
+        const words = l.words.filter((_, wi) => !keys.has(`${li}:${wi}`));
+        if (words.length === 0) return; // drop the line entirely
+        if (words.length === l.words.length) {
           out.push(l);
-          continue;
+          return;
         }
-        const words = l.words.filter((_, wi) => wi !== wordIdx);
-        if (words.length === 0) continue; // drop the line entirely
         const text = words.map((w) => w.text).join(" ").trim();
         const lineStart = Math.min(...words.map((w) => w.start));
         const lineEnd = Math.max(...words.map((w) => w.end));
         out.push({ ...l, words, text, start: lineStart, end: lineEnd });
-      }
+      });
       return out;
     });
+    setSelected(new Set());
     setHoveredWord(null);
+  }
+
+  function deleteWord(lineIdx: number, wordIdx: number) {
+    deleteWords(new Set([`${lineIdx}:${wordIdx}`]));
   }
 
   function beginDrag(
@@ -256,6 +412,34 @@ export function ManualSyncEditor({
     pauseForEdit();
     const word = lines[lineIdx]?.words[wordIdx];
     if (!word) return;
+    const key = `${lineIdx}:${wordIdx}`;
+
+    // Shift/Ctrl-click toggles the word in/out of the selection, no drag.
+    if (mode === "move" && (e.shiftKey || e.ctrlKey || e.metaKey)) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return next;
+      });
+      return;
+    }
+
+    // Grabbing a word that isn't part of the selection collapses the
+    // selection to just that word; grabbing a selected word drags the whole
+    // selection along. Trims always act on the single word.
+    let group: Set<string>;
+    if (mode === "move") {
+      group = selected.has(key) ? selected : new Set([key]);
+      if (group !== selected) setSelected(group);
+    } else {
+      group = new Set([key]);
+    }
+    const members = collectMembers(group);
+    if (members.length === 0) return;
+    const minStart = Math.min(...members.map((m) => m.start));
+    const maxEnd = Math.max(...members.map((m) => m.end));
+
     const startX = e.clientX;
     const origStart = word.start;
     const origEnd = word.end;
@@ -269,9 +453,12 @@ export function ManualSyncEditor({
     function onMove(ev: PointerEvent) {
       const dt = (ev.clientX - startX) / pxPerSec;
       if (mode === "move") {
-        const dur = origEnd - origStart;
-        const ns = clamp(origStart + dt, 0, songDuration - dur);
-        updateWord(lineIdx, wordIdx, { start: ns, end: ns + dur });
+        // One shared clamped delta so relative spacing inside the group is
+        // preserved even when the edges hit the song bounds.
+        const d = clamp(dt, -minStart, songDuration - maxEnd);
+        setWordTimes(
+          members.map((m) => ({ li: m.li, wi: m.wi, start: m.start + d, end: m.end + d })),
+        );
       } else if (mode === "trim-left") {
         const ns = clamp(origStart + dt, 0, origEnd - MIN_WORD_DURATION);
         updateWord(lineIdx, wordIdx, { start: ns });
@@ -296,10 +483,49 @@ export function ManualSyncEditor({
     return Math.max(0, (e.clientX - rect.left) / pxPerSec);
   }
 
-  // Click on the empty track area (between word blocks) = seek to that time.
-  function onTrackClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (e.target !== e.currentTarget) return;
-    seekTo(timeAtClientX(e));
+  // Pointer-down on the empty track area (between word blocks): a plain
+  // click still seeks, but dragging draws a rubber-band that selects every
+  // word it touches (Shift/Ctrl keeps the existing selection and adds).
+  function onTrackPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.target !== e.currentTarget || e.button !== 0) return;
+    e.preventDefault();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const toTime = (clientX: number) =>
+      clamp((clientX - rect.left) / pxPerSec, 0, viewEnd);
+    const startT = toTime(e.clientX);
+    const startClientX = e.clientX;
+    const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+    let dragging = false;
+
+    const onMove = (ev: PointerEvent) => {
+      if (!dragging && Math.abs(ev.clientX - startClientX) < 5) return;
+      dragging = true;
+      setMarquee({ a: startT, b: toTime(ev.clientX) });
+    };
+    const onUp = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setMarquee(null);
+      if (!dragging) {
+        if (!additive) setSelected(new Set());
+        seekTo(startT);
+        return;
+      }
+      const endT = toTime(ev.clientX);
+      const lo = Math.min(startT, endT);
+      const hi = Math.max(startT, endT);
+      setSelected((prev) => {
+        const next = additive ? new Set(prev) : new Set<string>();
+        lines.forEach((l, li) =>
+          l.words.forEach((w, wi) => {
+            if (w.end >= lo && w.start <= hi) next.add(`${li}:${wi}`);
+          }),
+        );
+        return next;
+      });
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   }
 
   // Click on the time ruler = seek there. Tick marks live inside but have
@@ -401,22 +627,34 @@ export function ManualSyncEditor({
             </div>
 
             <div className="flex items-center gap-2">
-              <div className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-1 py-1 text-[12px] text-white/70">
+              <div className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-1.5 py-1 text-[12px] text-white/70">
                 <button
                   type="button"
-                  onClick={() => setPxPerSec((p) => clamp(p - 60, MIN_PX_PER_SEC, MAX_PX_PER_SEC))}
+                  onClick={() => zoomTo(pxPerSecRef.current / ZOOM_STEP)}
                   aria-label="Zoom out"
+                  title="Zoom out (−)"
                   className="rounded-full p-1 transition-colors hover:bg-white/[0.06] hover:text-white"
                 >
                   <ZoomOut className="h-3.5 w-3.5" />
                 </button>
-                <span className="hidden px-1 font-mono text-[11px] text-white/55 sm:inline">
-                  {Math.round(pxPerSec)}px/s
-                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={Math.round((Math.log(pxPerSec / MIN_PX_PER_SEC) / ZOOM_LOG_RANGE) * 100)}
+                  onChange={(e) =>
+                    zoomTo(MIN_PX_PER_SEC * Math.exp((Number(e.target.value) / 100) * ZOOM_LOG_RANGE))
+                  }
+                  aria-label="Zoom level"
+                  title={`${Math.round(pxPerSec)} px/s · +/− keys or Ctrl+scroll also zoom`}
+                  className="h-1 w-20 cursor-pointer accent-pulse sm:w-32"
+                />
                 <button
                   type="button"
-                  onClick={() => setPxPerSec((p) => clamp(p + 60, MIN_PX_PER_SEC, MAX_PX_PER_SEC))}
+                  onClick={() => zoomTo(pxPerSecRef.current * ZOOM_STEP)}
                   aria-label="Zoom in"
+                  title="Zoom in (+)"
                   className="rounded-full p-1 transition-colors hover:bg-white/[0.06] hover:text-white"
                 >
                   <ZoomIn className="h-3.5 w-3.5" />
@@ -450,6 +688,20 @@ export function ManualSyncEditor({
                   {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                   {isPlaying ? "Pause" : "Play"}
                 </button>
+                {selected.size > 0 && (
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-pulse/40 bg-pulse/10 py-1 pl-3 pr-1 text-[12px] font-medium text-white/85">
+                    {selected.size} selected
+                    <button
+                      type="button"
+                      onClick={() => setSelected(new Set())}
+                      aria-label="Clear selection"
+                      title="Clear selection (Esc)"
+                      className="rounded-full p-1 text-white/55 transition-colors hover:bg-white/10 hover:text-white"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                )}
                 {/* Click-to-seek waveform — wavesurfer owns audio playback and
                     the caret/cursor that follows it. */}
                 <div
@@ -499,8 +751,8 @@ export function ManualSyncEditor({
 
                   {/* Word blocks track */}
                   <div
-                    className="relative h-[140px] cursor-crosshair"
-                    onClick={onTrackClick}
+                    className="relative h-[140px] cursor-crosshair select-none"
+                    onPointerDown={onTrackPointerDown}
                   >
                     {/* Faint envelope tints per line so the user can see line
                         boundaries even while editing all words at once. */}
@@ -534,6 +786,8 @@ export function ManualSyncEditor({
                       line.words.map((word, wi) => {
                         const left = word.start * pxPerSec;
                         const width = Math.max(8, (word.end - word.start) * pxPerSec);
+                        const isSelected = selected.has(`${li}:${wi}`);
+                        const narrow = width < NARROW_WORD_PX;
                         return (
                           <div
                             key={`${li}-${wi}`}
@@ -543,19 +797,30 @@ export function ManualSyncEditor({
                                 prev && prev.li === li && prev.wi === wi ? null : prev,
                               )
                             }
-                            className="group absolute top-5 bottom-5 rounded-md border border-pulse/40 bg-gradient-to-b from-pulse/40 to-pulse/15 shadow-[0_4px_16px_rgba(255,45,45,0.18)] transition-colors hover:border-pulse hover:from-pulse/55"
+                            className={cn(
+                              "group absolute top-5 bottom-5 rounded-md border bg-gradient-to-b shadow-[0_4px_16px_rgba(255,45,45,0.18)] transition-colors hover:z-20",
+                              isSelected
+                                ? "z-10 border-white/70 from-pulse/60 to-pulse/25 ring-1 ring-white/50"
+                                : "border-pulse/40 from-pulse/40 to-pulse/15 hover:border-pulse hover:from-pulse/55",
+                            )}
                             style={{ left: `${left}px`, width: `${width}px` }}
                           >
                             {/* Left trim handle */}
                             <div
                               onPointerDown={(e) => beginDrag(li, wi, "trim-left", e)}
-                              className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize rounded-l-md bg-white/15 transition-colors hover:bg-white/40"
+                              className={cn(
+                                "absolute left-0 top-0 bottom-0 cursor-ew-resize rounded-l-md bg-white/15 transition-colors hover:bg-white/40",
+                                narrow ? "w-1" : "w-2",
+                              )}
                               title="Drag to change start time"
                             />
                             {/* Body (move) */}
                             <div
                               onPointerDown={(e) => beginDrag(li, wi, "move", e)}
-                              className="absolute left-2 right-2 top-0 bottom-0 cursor-grab select-none active:cursor-grabbing"
+                              className={cn(
+                                "absolute top-0 bottom-0 cursor-grab select-none active:cursor-grabbing",
+                                narrow ? "left-1 right-1" : "left-2 right-2",
+                              )}
                             >
                               <div className="flex h-full items-center justify-center overflow-hidden px-1">
                                 <span className="truncate font-medium text-[12px] text-white">
@@ -566,35 +831,90 @@ export function ManualSyncEditor({
                             {/* Right trim handle */}
                             <div
                               onPointerDown={(e) => beginDrag(li, wi, "trim-right", e)}
-                              className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize rounded-r-md bg-white/15 transition-colors hover:bg-white/40"
+                              className={cn(
+                                "absolute right-0 top-0 bottom-0 cursor-ew-resize rounded-r-md bg-white/15 transition-colors hover:bg-white/40",
+                                narrow ? "w-1" : "w-2",
+                              )}
                               title="Drag to change end time"
                             />
-                            {/* Delete button — sits slightly outside the
-                                top-right corner so it's still clickable on
-                                very narrow blocks. Hidden until hover. */}
-                            <button
-                              type="button"
-                              onPointerDown={(e) => {
-                                // Beat the drag-handler pointerdown on the parent.
-                                e.stopPropagation();
-                              }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteWord(li, wi);
-                              }}
-                              aria-label={`Delete word "${word.text}"`}
-                              title={`Delete "${word.text}"`}
-                              className="absolute -right-2 -top-2 z-10 flex h-5 w-5 items-center justify-center rounded-full border border-white/15 bg-stage text-white/70 opacity-100 shadow-[0_4px_10px_rgba(0,0,0,0.5)] transition-all hover:scale-110 hover:border-pulse hover:bg-pulse hover:text-white focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                            {narrow ? (
+                              /* Words too narrow to grip by their body get a
+                                 tab on top merging a grab handle with the
+                                 delete button. Always visible. */
+                              <div
+                                className={cn(
+                                  "absolute -top-4 left-1/2 z-10 flex -translate-x-1/2 items-stretch overflow-hidden rounded-t-md border border-b-0 bg-stage shadow-[0_-3px_8px_rgba(0,0,0,0.35)] transition-colors",
+                                  isSelected ? "border-white/60" : "border-pulse/50",
+                                )}
+                              >
+                                <div
+                                  onPointerDown={(e) => beginDrag(li, wi, "move", e)}
+                                  title={`Drag to move "${word.text}"`}
+                                  className="flex h-4 w-5 cursor-grab items-center justify-center text-white/60 transition-colors hover:bg-white/10 hover:text-white active:cursor-grabbing"
+                                >
+                                  <GripHorizontal className="h-3 w-3" />
+                                </div>
+                                <button
+                                  type="button"
+                                  onPointerDown={(e) => {
+                                    // Beat the drag-handler pointerdown on the parent.
+                                    e.stopPropagation();
+                                  }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    deleteWord(li, wi);
+                                  }}
+                                  aria-label={`Delete word "${word.text}"`}
+                                  title={`Delete "${word.text}"`}
+                                  className="flex h-4 w-5 items-center justify-center border-l border-white/10 text-white/60 transition-colors hover:bg-pulse hover:text-white"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </div>
+                            ) : (
+                              /* Delete button — sits slightly outside the
+                                 top-right corner. Hidden until hover. */
+                              <button
+                                type="button"
+                                onPointerDown={(e) => {
+                                  // Beat the drag-handler pointerdown on the parent.
+                                  e.stopPropagation();
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  deleteWord(li, wi);
+                                }}
+                                aria-label={`Delete word "${word.text}"`}
+                                title={`Delete "${word.text}"`}
+                                className="absolute -right-2 -top-2 z-10 flex h-5 w-5 items-center justify-center rounded-full border border-white/15 bg-stage text-white/70 opacity-100 shadow-[0_4px_10px_rgba(0,0,0,0.5)] transition-all hover:scale-110 hover:border-pulse hover:bg-pulse hover:text-white focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            )}
+                            {/* Timing readout on hover — pushed higher on
+                                narrow words so it clears the grab tab. */}
+                            <div
+                              className={cn(
+                                "pointer-events-none absolute left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-black/80 px-1.5 py-0.5 font-mono text-[10px] text-white/85 opacity-0 transition-opacity group-hover:opacity-100",
+                                narrow ? "-top-10" : "-top-6",
+                              )}
                             >
-                              <X className="h-3 w-3" />
-                            </button>
-                            {/* Timing readout on hover */}
-                            <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-black/80 px-1.5 py-0.5 font-mono text-[10px] text-white/85 opacity-0 transition-opacity group-hover:opacity-100">
                               {word.start.toFixed(2)}s – {word.end.toFixed(2)}s
                             </div>
                           </div>
                         );
                       }),
+                    )}
+
+                    {/* Rubber-band selection rectangle */}
+                    {marquee && (
+                      <div
+                        className="pointer-events-none absolute top-0 bottom-0 z-20 rounded-sm border border-white/25 bg-white/[0.07]"
+                        style={{
+                          left: `${Math.min(marquee.a, marquee.b) * pxPerSec}px`,
+                          width: `${Math.abs(marquee.b - marquee.a) * pxPerSec}px`,
+                        }}
+                      />
                     )}
 
                     {/* Playhead */}
@@ -610,22 +930,27 @@ export function ManualSyncEditor({
 
               <p className="mt-3 text-center text-[12px] text-white/40">
                 <span className="sm:hidden">
-                  Drag a word to move it · drag the edges to trim · tap{" "}
+                  Drag a word to move it · drag the edges to trim · drag empty
+                  space to select several · tap{" "}
                   <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-white/15 align-text-bottom text-[9px] text-white/70">
                     ×
                   </span>{" "}
                   to remove it · tap the waveform to scrub.
                 </span>
                 <span className="hidden sm:inline">
-                  Drag to move · Drag the edges to trim · Hover and click{" "}
-                  <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-white/15 align-text-bottom text-[9px] text-white/70">
-                    ×
-                  </span>{" "}
-                  (or press{" "}
-                  <kbd className="rounded border border-white/15 bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10.5px] text-white/70">Del</kbd>
-                  ) to remove a word ·{" "}
+                  Drag to move · Drag empty space (or{" "}
+                  <kbd className="rounded border border-white/15 bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10.5px] text-white/70">Shift</kbd>
+                  -click) to select several, then drag or{" "}
+                  <kbd className="rounded border border-white/15 bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10.5px] text-white/70">←</kbd>
+                  <kbd className="rounded border border-white/15 bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10.5px] text-white/70">→</kbd>{" "}
+                  to nudge · Drag the edges to trim ·{" "}
+                  <kbd className="rounded border border-white/15 bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10.5px] text-white/70">+</kbd>
+                  <kbd className="rounded border border-white/15 bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10.5px] text-white/70">−</kbd>{" "}
+                  or Ctrl-scroll zooms ·{" "}
+                  <kbd className="rounded border border-white/15 bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10.5px] text-white/70">Del</kbd>{" "}
+                  removes ·{" "}
                   <kbd className="rounded border border-white/15 bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10.5px] text-white/70">Space</kbd>{" "}
-                  plays / pauses · Click waveform or ruler to scrub
+                  plays / pauses
                 </span>
               </p>
             </div>
