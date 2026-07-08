@@ -35,14 +35,15 @@ const envSchema = z.object({
   // model above (3× tokens) when they want the sharpest baked-in lyrics.
   OPENROUTER_IMAGE_MODEL_FAST: z.string().default("google/gemini-3.1-flash-image-preview"),
   // Cheap image-to-video model for Cinemagraph + Living Scenes. Grok Imagine is
-  // the cheapest (~$0.05/s) AND supports short 1–15s clips, so we generate a
-  // brief clip and loop it — far cheaper than Wan's forced 5/10s clips.
-  OPENROUTER_VIDEO_MODEL: z.string().default("x-ai/grok-imagine-video"),
-  // Image-to-video model for the "Cinematic" style. MUST support a last_frame
+  // the cheapest (~$0.07/s at 720p) AND supports short 1–15s clips, so we
+  // generate a brief clip and loop it. On fal (vs OpenRouter): ~40% faster and
+  // no 1-req/s submit limit, so parallel scene regens don't collide.
+  FAL_MOTION_MODEL: z.string().default("xai/grok-imagine/image-to-video"),
+  // Image-to-video model for the "Cinematic" style. MUST support an end image
   // (Cinematic morphs each line's frame → the next line's frame for seamless,
-  // scene-changing shots) — Grok does NOT (first_frame only), Seedance/Wan/Kling
+  // scene-changing shots) — Grok does NOT (first frame only), Seedance/Kling
   // do. Seedance 2.0 Fast is the cheapest confirmed first+last option.
-  OPENROUTER_CINEMATIC_MODEL: z.string().default("bytedance/seedance-2.0-fast"),
+  FAL_CINEMATIC_MODEL: z.string().default("bytedance/seedance-2.0/fast/image-to-video"),
   // Lite-tier motion (Living Scenes on the Lite model): Seedance 1.5 Pro i2v on
   // fal, 480p silent — ~$0.0117/s vs Grok's $0.05/s. 4–12s clips only.
   FAL_VIDEO_MODEL: z.string().default("fal-ai/bytedance/seedance/v1.5/pro/image-to-video"),
@@ -53,10 +54,11 @@ const envSchema = z.object({
   // Permissive fallback for Cinematic when the default model rejects the frames
   // as "possibly a real person" (the user clicks "Retry with a more permissive
   // model"). MUST also support first+last frame so the morphing transitions —
-  // what makes Cinematic distinct from Living Scenes — survive. Kling supports it
-  // and uses a different provider/moderation than Seedance. Kling clips are 5s or
-  // 10s, so the pipeline snaps the gen duration when this is active.
-  OPENROUTER_CINEMATIC_FALLBACK_MODEL: z.string().default("kwaivgi/kling-v3.0-std"),
+  // what makes Cinematic distinct from Living Scenes — survive. Kling supports
+  // it (start_image_url/end_image_url) and uses a different provider/moderation
+  // than Seedance. Kling v3 on fal takes any 3–15s duration and is ~33% cheaper
+  // with generate_audio off ($0.084/s).
+  FAL_CINEMATIC_FALLBACK_MODEL: z.string().default("fal-ai/kling-video/v3/standard/image-to-video"),
   // Override the ffmpeg binary path. Defaults to the bundled ffmpeg-static
   // binary (works on Render's native runtime, no Docker); set this to use a
   // system install locally.

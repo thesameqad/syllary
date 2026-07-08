@@ -13,8 +13,7 @@ import {
 import type { VideoJobRow } from "../db/schema.js";
 import { env } from "../env.js";
 import { presignGet, putObject } from "./r2.js";
-import { generateLiteMotionClip } from "./fal-video.js";
-import { generateMotionClip } from "./openrouter-video.js";
+import { generateMotionClip } from "./fal-video.js";
 import { falQueueImage, lyricTextLooksRight, SNAPPY_ATTEMPTS_MS } from "./fal-image.js";
 
 // ---------------------------------------------------------------------------
@@ -234,22 +233,13 @@ export async function materializeLoopClip(opts: {
   const genDur = Math.min(max, Math.max(min, Math.ceil(wanted)));
   const baseUrl = seg.imageKey ? await presignGet(seg.imageKey) : null;
   if (!baseUrl) throw new Error(`Scene ${seg.index} has no base image.`);
-  const raw =
-    job.imageQuality === "lite"
-      ? await generateLiteMotionClip({
-          prompt: opts.motionPrompt,
-          firstFrameUrl: baseUrl,
-          aspectRatio,
-          durationSeconds: genDur,
-        })
-      : await generateMotionClip({
-          model: env.OPENROUTER_VIDEO_MODEL,
-          prompt: opts.motionPrompt,
-          firstFrameUrl: baseUrl,
-          aspectRatio,
-          durationSeconds: genDur,
-          resolution: "720p",
-        });
+  const raw = await generateMotionClip({
+    route: job.imageQuality === "lite" ? "lite" : "normal",
+    prompt: opts.motionPrompt,
+    firstFrameUrl: baseUrl,
+    aspectRatio,
+    durationSeconds: genDur,
+  });
   const rawFile = path.join(workDir, `plraw_${seg.index}.mp4`);
   await writeFile(rawFile, raw);
   const loopName = `loop_${seg.index}.mp4`;

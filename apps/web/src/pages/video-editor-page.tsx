@@ -146,6 +146,37 @@ function EditorSignedOut({ signedIn }: { signedIn: boolean }) {
   );
 }
 
+// Presigned URLs carry a fresh signature on EVERY poll even when the R2 object
+// is unchanged, so naively swapping in polled segments changes each <img>/<video>
+// src and makes finished scenes blink while others still generate. Two URLs
+// point at the same object iff their paths (sans query) match — reuse the
+// previous segment object when a poll brought nothing new. Regenerations
+// bypass this (applySegment sets the response directly), so an overwritten
+// image under the same key still gets its fresh URL and refetches.
+function sameAsset(a: string | null, b: string | null): boolean {
+  return (a ? a.split("?")[0] : null) === (b ? b.split("?")[0] : null);
+}
+function stableSegment(prev: ReviewSegment | undefined, fresh: ReviewSegment): ReviewSegment {
+  if (!prev) return fresh;
+  const unchanged =
+    prev.status === fresh.status &&
+    prev.clipStatus === fresh.clipStatus &&
+    prev.text === fresh.text &&
+    prev.prompt === fresh.prompt &&
+    prev.direction === fresh.direction &&
+    prev.motionDirection === fresh.motionDirection &&
+    prev.textMode === fresh.textMode &&
+    prev.platesReady === fresh.platesReady &&
+    prev.platesApplied === fresh.platesApplied &&
+    prev.loopSeconds === fresh.loopSeconds &&
+    prev.noCast === fresh.noCast &&
+    prev.clipStart === fresh.clipStart &&
+    prev.clipEnd === fresh.clipEnd &&
+    sameAsset(prev.imageUrl, fresh.imageUrl) &&
+    sameAsset(prev.clipUrl, fresh.clipUrl);
+  return unchanged ? prev : fresh;
+}
+
 function VideoEditorInner() {
   const { songId } = useParams<{ songId: string }>();
   const [searchParams] = useSearchParams();
@@ -283,11 +314,11 @@ function VideoEditorInner() {
             const merged = fresh.segments.length
               ? {
                   ...fresh,
-                  segments: fresh.segments.map((s) =>
-                    busyIndexes.has(s.index)
-                      ? (prev.segments.find((p) => p.index === s.index) ?? s)
-                      : s,
-                  ),
+                  segments: fresh.segments.map((s) => {
+                    const p = prev.segments.find((q) => q.index === s.index);
+                    if (busyIndexes.has(s.index)) return p ?? s;
+                    return stableSegment(p, s);
+                  }),
                 }
               : fresh;
             return merged;

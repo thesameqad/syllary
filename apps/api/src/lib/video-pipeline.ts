@@ -42,8 +42,7 @@ import {
   materializePlatesClip,
 } from "./plates.js";
 import { videoArtBrief } from "./openrouter.js";
-import { generateMotionClip } from "./openrouter-video.js";
-import { generateLiteMotionClip } from "./fal-video.js";
+import { generateMotionClip } from "./fal-video.js";
 import {
   concatClips,
   fitClipToDuration,
@@ -55,7 +54,6 @@ import {
   stitchLyricsVideo,
   type StitchSegment,
 } from "./ffmpeg.js";
-import { env } from "../env.js";
 import { captureForUserId } from "./posthog.js";
 import { presignGet, putObject } from "./r2.js";
 
@@ -615,50 +613,45 @@ async function generateSegmentClip(
   let genDur: number;
   if (job.model === "pro") {
     // Cinematic: morph frame[i] → frame[i+1] (Seedance, or the permissive Kling
-    // fallback). The next frame is the seamless boundary; Seedance does 4–15s, the
-    // Kling fallback 5s or 10s — generate valid, then speedFit to the real length.
+    // fallback). The next frame is the seamless boundary; both do flexible
+    // durations on fal (Seedance 4–15s, Kling 3–15s) — generate valid, then
+    // speedFit to the real length.
     const permissive = job.motionMode === "ai_permissive";
-    const cinematicModel = permissive
-      ? env.OPENROUTER_CINEMATIC_FALLBACK_MODEL
-      : env.OPENROUTER_CINEMATIC_MODEL;
     const next = segments.find((s) => s.index === seg.index + 1);
     const lastFrameUrl = next?.imageKey ? await presignGet(next.imageKey) : undefined;
     genDur = permissive
-      ? dur <= 7
-        ? 5
-        : 10
+      ? Math.min(15, Math.max(3, Math.ceil(dur)))
       : Math.min(CINEMATIC_MAX_SECONDS, Math.max(CINEMATIC_MIN_SECONDS, Math.ceil(dur)));
     raw = await generateMotionClip({
-      model: cinematicModel,
+      route: permissive ? "cinematic_permissive" : "cinematic",
       prompt,
       firstFrameUrl,
       lastFrameUrl, // first→last morph (undefined on the final clip)
       aspectRatio,
       durationSeconds: genDur,
-      resolution: permissive ? "1080p" : "480p",
     });
   } else if (job.imageQuality === "lite") {
-    // Living Scenes on the Lite tier: Seedance 1.5 Pro @480p silent via fal
+    // Living Scenes on the Lite tier: Seedance 1.5 Pro @480p silent
     // (4–12s clips; fitClipToDuration trims to the real window). The stitch
     // upscales 480p to the 1080p canvas.
     genDur = Math.min(LITE_CLIP_MAX_SECONDS, Math.max(LITE_CLIP_MIN_SECONDS, Math.ceil(dur)));
-    raw = await generateLiteMotionClip({
+    raw = await generateMotionClip({
+      route: "lite",
       prompt,
       firstFrameUrl,
       aspectRatio,
       durationSeconds: genDur,
     });
   } else {
-    // Living Scenes: animate the single frame (Grok), generated at ~the segment's
-    // length and trimmed.
+    // Living Scenes: animate the single frame (Grok @720p), generated at ~the
+    // segment's length and trimmed.
     genDur = Math.min(GROK_MAX_SECONDS, Math.max(GROK_MIN_SECONDS, Math.ceil(dur)));
     raw = await generateMotionClip({
-      model: env.OPENROUTER_VIDEO_MODEL,
+      route: "normal",
       prompt,
       firstFrameUrl,
       aspectRatio,
       durationSeconds: genDur,
-      resolution: "720p",
     });
   }
 
