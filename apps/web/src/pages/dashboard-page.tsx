@@ -25,9 +25,10 @@ export function DashboardPage() {
       .catch(() => setShowcase([]));
   }, [loadMine]);
 
-  // Keep progress fresh while a lyric video is generating.
+  // Keep progress fresh while a lyric video is generating. A "review" draft is
+  // parked on the user (not loading), so it doesn't warrant polling.
   useEffect(() => {
-    if (!mine?.some((s) => s.videoActive)) return;
+    if (!mine?.some((s) => s.videoActive && s.videoActive.status !== "review")) return;
     const t = setTimeout(loadMine, 4000);
     return () => clearTimeout(t);
   }, [mine, loadMine]);
@@ -91,9 +92,23 @@ export function DashboardPage() {
         )}
       </section>
 
-      {(showcase ?? []).map((section) => (
-        <ShowcaseRow key={section.tag.id} section={section} />
-      ))}
+      {(showcase ?? []).length > 0 && (
+        <section className="border-t border-white/[0.08] pt-10">
+          <div className="mb-7">
+            <h2 className="text-[26px] font-medium tracking-[-0.7px] text-white">
+              From the community
+            </h2>
+            <p className="mt-1 text-[13px] text-white/45">
+              Hand-picked public videos made with Syllary.
+            </p>
+          </div>
+          <div className="space-y-8">
+            {(showcase ?? []).map((section) => (
+              <ShowcaseRow key={section.tag.id} section={section} />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

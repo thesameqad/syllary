@@ -32,6 +32,7 @@ import { Button3D } from "@/components/ui/button-3d";
 import { Modal } from "@/components/ui/modal";
 import { ManualReview } from "@/components/result/manual-review";
 import { TheaterMode } from "@/components/result/theater-mode";
+import { useMediaQuery } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
 import { captureClient } from "@/lib/analytics";
 import { PlansModal } from "@/components/result/plans-modal";
@@ -83,13 +84,13 @@ function ReuseSplitButton({
   }
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative max-sm:w-full">
       <button
         type="button"
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
         className={cn(
-          "inline-flex items-center gap-2 whitespace-nowrap rounded-full border px-4 py-2 text-[12.5px] font-medium transition-all disabled:opacity-50",
+          "inline-flex items-center gap-2 whitespace-nowrap rounded-full border px-4 py-2 text-[12.5px] font-medium transition-all disabled:opacity-50 max-sm:w-full max-sm:justify-center",
           open
             ? "border-pulse/70 bg-pulse/[0.14] text-white shadow-[0_6px_28px_-8px_rgba(255,45,45,0.6)]"
             : "border-white/12 bg-white/[0.04] text-white/85 hover:border-pulse/50 hover:bg-white/[0.06] hover:text-white",
@@ -206,6 +207,10 @@ export function VideoTabs({
   const navigate = useNavigate();
   const { account } = useAccount();
   const allowClean = !!account && canRemoveWatermark(account.plan);
+  // Phones don't get the inline carousel review (cramped + it downloads every
+  // scene image) — they get a big "Open in Editor" hand-off instead. Rendered
+  // conditionally (not CSS-hidden) so the images never even load.
+  const isMobile = useMediaQuery("(max-width: 639px)");
   const [theaterOpen, setTheaterOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [downloadOpen, setDownloadOpen] = useState(false);
@@ -499,26 +504,46 @@ export function VideoTabs({
       </div>
 
       {showReview && liveJob ? (
-        <>
-          <div className="mt-3 flex justify-end">
+        isMobile ? (
+          /* Phones: hand off to the full-page editor instead of the inline
+             carousel — it's cramped there and would fetch every scene image. */
+          <div className="mt-4 flex flex-col items-center gap-3 rounded-[12px] border border-white/[0.08] bg-white/[0.02] px-4 py-6 text-center">
+            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-pulse/15 text-pulse">
+              <Pencil className="h-5 w-5" />
+            </span>
+            <p className="text-[13px] leading-relaxed text-white/60">
+              This video is in scene review — direct and regenerate every scene in the editor.
+            </p>
             <Link
               to={`/s/${song.id}/editor?job=${liveJob.id}`}
-              className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1 text-[11.5px] text-white/55 transition-colors hover:border-white/35 hover:text-white"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-pulse px-5 py-3 text-[14px] font-medium text-white shadow-[0_4px_18px_rgba(255,45,45,0.35)] transition-transform active:scale-[0.98]"
             >
-              <LayoutGrid className="h-3 w-3" />
-              Open full-page editor
+              <LayoutGrid className="h-4 w-4" />
+              Open in Editor
             </Link>
           </div>
-          <ManualReview
-            job={liveJob}
-            audioUrl={song.audioUrl}
-            onSegmentUpdated={applySegment}
-            onJobUpdated={(updated) => setLiveJob(updated)}
-            onFinalized={(updated) => setLiveJob(updated)}
-            onCancel={() => void discardReview()}
-            finalizeCost={liveJob.isEdit ? reRenderTokens(liveJob.model, liveJob.segments, liveJob.imageQuality) : undefined}
-          />
-        </>
+        ) : (
+          <>
+            <div className="mt-3 flex justify-end">
+              <Link
+                to={`/s/${song.id}/editor?job=${liveJob.id}`}
+                className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1 text-[11.5px] text-white/55 transition-colors hover:border-white/35 hover:text-white"
+              >
+                <LayoutGrid className="h-3 w-3" />
+                Open full-page editor
+              </Link>
+            </div>
+            <ManualReview
+              job={liveJob}
+              audioUrl={song.audioUrl}
+              onSegmentUpdated={applySegment}
+              onJobUpdated={(updated) => setLiveJob(updated)}
+              onFinalized={(updated) => setLiveJob(updated)}
+              onCancel={() => void discardReview()}
+              finalizeCost={liveJob.isEdit ? reRenderTokens(liveJob.model, liveJob.segments, liveJob.imageQuality) : undefined}
+            />
+          </>
+        )
       ) : showProgress ? (
         <ProgressPanel
           done={liveJob?.completedSegments ?? 0}

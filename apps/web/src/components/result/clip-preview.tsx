@@ -36,11 +36,15 @@ export function ClipPreview({
   audioUrl,
   clipStart,
   busy,
+  emptyState,
 }: {
   clipUrl: string | null;
   audioUrl: string | null;
   clipStart: number;
   busy: boolean;
+  /** Replaces the default "No motion clip yet" placeholder content (the video
+   *  editor uses it for step/locked teaching states). */
+  emptyState?: React.ReactNode;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -91,11 +95,15 @@ export function ClipPreview({
   if (!clipUrl && !busy) {
     return (
       <div className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-[12px] border border-dashed border-white/15 bg-black/40 text-center">
-        <Film className="h-7 w-7 text-white/30" />
-        <p className="text-[12.5px] text-white/55">No motion clip yet</p>
-        <p className="max-w-[80%] text-[11px] text-white/35">
-          Generate to create &amp; preview this shot.
-        </p>
+        {emptyState ?? (
+          <>
+            <Film className="h-7 w-7 text-white/30" />
+            <p className="text-[12.5px] text-white/55">No motion clip yet</p>
+            <p className="max-w-[80%] text-[11px] text-white/35">
+              Generate to create &amp; preview this shot.
+            </p>
+          </>
+        )}
       </div>
     );
   }

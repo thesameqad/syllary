@@ -30,9 +30,13 @@ export function RecentPage() {
   }, [load]);
 
   // Poll while anything is still processing OR a lyric video is generating.
+  // A "review" video draft is parked on the user (not loading) — don't poll for it.
   useEffect(() => {
     const busy = songs?.some(
-      (s) => s.status === "processing" || s.status === "pending" || s.videoActive,
+      (s) =>
+        s.status === "processing" ||
+        s.status === "pending" ||
+        (s.videoActive && s.videoActive.status !== "review"),
     );
     if (!busy) return;
     const t = setTimeout(() => void load(), 4000);

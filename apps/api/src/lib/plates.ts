@@ -28,9 +28,12 @@ import { falQueueImage, lyricTextLooksRight, SNAPPY_ATTEMPTS_MS } from "./fal-im
 // ---------------------------------------------------------------------------
 
 /** Thrown (verbatim, user-facing) when fal's image queue stalls mid-plates —
- *  transient: the caller persists any finished plates and the user retries. */
+ *  transient: the caller persists any finished plates and the user retries.
+ *  Plates are charged AFTER success, so a queue-busy failure costs nothing —
+ *  say so explicitly (tester feedback: an error without billing clarity reads
+ *  as "did I just pay for nothing? will retrying charge me twice?"). */
 export const PLATES_QUEUE_BUSY =
-  "The image model's queue is busy right now — try again in a minute. Finished lyric plates were kept.";
+  "The image model's queue is busy right now — try again in a minute. You were not charged for this attempt, and the lyric plates that did finish were kept (a retry only pays for missing ones).";
 
 const exec = promisify(execFile);
 const require = createRequire(import.meta.url);

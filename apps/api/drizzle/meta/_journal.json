@@ -218,6 +218,13 @@
       "when": 1783368219494,
       "tag": "0030_aberrant_next_avengers",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1783628451344,
+      "tag": "0031_opposite_kabuki",
+      "breakpoints": true
     }
   ]
 }

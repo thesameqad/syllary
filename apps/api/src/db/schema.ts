@@ -74,6 +74,9 @@ export const songs = pgTable("songs", {
   latestVideoKey: text("latest_video_key"),
   // Which lyric-video style is shown on the public page. Null = none chosen.
   publicVideoModel: text("public_video_model").$type<VideoModel>(),
+  // Video-card thumbnails: true (default) = the song's cover image; false = a
+  // frame captured from the video itself (song_videos.thumb_key).
+  useCoverForVideoThumb: boolean("use_cover_for_video_thumb").notNull().default(true),
   // First-touch SEO landing page this song's owner arrived from (slug, no
   // leading slash). Stamped at generation from the earliest "visited" event for
   // this owner's hash; powers per-landing funnel attribution.
@@ -254,6 +257,10 @@ export const songVideos = pgTable(
       .references(() => songs.id, { onDelete: "cascade" }),
     model: text("model").$type<VideoModel>().notNull(),
     videoKey: text("video_key").notNull(),
+    // R2 key of a JPEG frame captured from the video (~5s in) — the video-card
+    // thumbnail when songs.use_cover_for_video_thumb is off. Null until captured
+    // (finalize captures new renders; a toggle-off backfills older ones).
+    thumbKey: text("thumb_key"),
     // True when the saved video for this style is only a preview sample.
     isPreview: boolean("is_preview").notNull().default(false),
     // The grouping the source job used — the reuse-frames flow quotes its price

@@ -89,9 +89,7 @@ export function ShowcaseRow({ section }: { section: ShowcaseSection }) {
   return (
     <section>
       <div className="mb-4 flex items-center justify-between gap-3">
-        <h2 className="text-[15px] font-medium text-white">
-          The best public {section.tag.name.toLowerCase()} music videos
-        </h2>
+        <h2 className="text-[15px] font-medium capitalize text-white">{section.tag.name}</h2>
         {pages > 1 && (
           <div className="flex items-center gap-1.5">
             <button

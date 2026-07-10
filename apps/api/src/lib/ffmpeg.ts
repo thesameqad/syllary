@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -465,6 +465,33 @@ export async function muxAudio(opts: {
   ];
   await runFfmpeg(args, opts.workDir);
   return path.join(opts.workDir, opts.outName);
+}
+
+/** Capture a single JPEG frame from a video at `atSeconds` — the video-card
+ *  thumbnail. Falls back to the first frame when the video is shorter than the
+ *  requested seek (ffmpeg exits fine but writes nothing past EOF). */
+export async function extractVideoFrame(opts: {
+  workDir: string;
+  videoName: string;
+  outName: string;
+  atSeconds: number;
+}): Promise<string> {
+  const attempt = (seek: number) =>
+    runFfmpeg(
+      ["-y", "-ss", seek.toFixed(3), "-i", opts.videoName, "-frames:v", "1", "-q:v", "3", "-threads", "2", opts.outName],
+      opts.workDir,
+    );
+  const outFile = path.join(opts.workDir, opts.outName);
+  const wrote = () => existsSync(outFile) && statSync(outFile).size > 0;
+  try {
+    await attempt(opts.atSeconds);
+    if (wrote()) return outFile;
+  } catch {
+    // Seek past EOF (or a codec hiccup at that timestamp) — retry at the start.
+  }
+  await attempt(0);
+  if (!wrote()) throw new Error("ffmpeg produced no thumbnail frame.");
+  return outFile;
 }
 
 /** One lyric line with its on-screen window, for the subtitle overlay. */

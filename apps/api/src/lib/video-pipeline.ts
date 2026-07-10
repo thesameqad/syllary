@@ -1,7 +1,7 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import {
   type AspectRatio,
   buildPreviewSegments,
@@ -45,6 +45,7 @@ import { videoArtBrief } from "./openrouter.js";
 import { generateMotionClip } from "./fal-video.js";
 import {
   concatClips,
+  extractVideoFrame,
   fitClipToDuration,
   type LyricCue,
   muxAudio,
@@ -55,7 +56,7 @@ import {
   type StitchSegment,
 } from "./ffmpeg.js";
 import { captureForUserId } from "./posthog.js";
-import { presignGet, putObject } from "./r2.js";
+import { deleteObject, presignGet, putObject } from "./r2.js";
 
 // How many backdrop images to generate concurrently. Keeps us well under
 // OpenRouter rate limits while still finishing a ~30-line song quickly.
@@ -115,12 +116,58 @@ async function bumpProgress(jobId: string, segments: VideoSegment[]): Promise<vo
  *  pipeline doesn't survive an API restart). */
 export const VIDEO_STALE_MS = 20 * 60 * 1000;
 
+/** A "review" job (manual edit parked for the user) unopened for this long is
+ *  considered abandoned and auto-discarded. Opening the editor touches the job
+ *  (GET /video-jobs/:id), so only truly forgotten drafts expire. */
+export const REVIEW_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Discard a "review" job: delete the row, refund any up-front charge, and
+ *  best-effort remove the frames/clips written under THIS job's own R2 folder
+ *  (copy-on-write regenerations). Cloned source keys point at another job's
+ *  folder and back the still-live video, so they must survive. The row delete is
+ *  conditional on status="review" so a concurrent finalize wins the race; returns
+ *  false when nothing was deleted. */
+export async function discardReviewVideoJob(row: VideoJobRow): Promise<boolean> {
+  const [gone] = await db
+    .delete(videoJobs)
+    .where(and(eq(videoJobs.id, row.id), eq(videoJobs.status, "review")))
+    .returning();
+  if (!gone) return false;
+  const ownPrefix = `video/${gone.songId}/${gone.id}/`;
+  const ownKeys = (gone.segments ?? [])
+    .flatMap((s) => [s.imageKey, s.clipKey])
+    .filter((k): k is string => !!k && k.startsWith(ownPrefix));
+  await Promise.all(ownKeys.map((k) => deleteObject(k).catch(() => undefined)));
+  if (gone.userId && gone.tokensCharged > 0) {
+    await db
+      .update(users)
+      .set({ credits: sql`${users.credits} + ${gone.tokensCharged}`, updatedAt: new Date() })
+      .where(eq(users.id, gone.userId));
+  }
+  return true;
+}
+
 /** Stuck-job reaper. A lyric-video job runs in-process, fire-and-forget, so an API
  *  restart leaves it "pending"/"processing" forever — showing "Generating…" on the
  *  dashboard and blocking edits. If such a job hasn't advanced in VIDEO_STALE_MS,
- *  mark it failed and refund its tokens. "review" jobs are NEVER reaped (a manual
- *  edit can sit open indefinitely). Idempotent + safe to call on any read of a job. */
-export async function reapStaleVideoJob(row: VideoJobRow): Promise<VideoJobRow> {
+ *  mark it failed and refund its tokens. A "review" job (manual edit parked for the
+ *  user) can sit open for days legitimately, but one untouched for REVIEW_STALE_MS
+ *  is abandoned: it's auto-discarded exactly like the manual Discard action
+ *  (refund + own-folder R2 cleanup) and null is returned — there is no active job
+ *  anymore. Idempotent + safe to call on any read of a job. */
+export async function reapStaleVideoJob(row: VideoJobRow): Promise<VideoJobRow | null> {
+  if (row.status === "review") {
+    if (Date.now() - row.updatedAt.getTime() <= REVIEW_STALE_MS) return row;
+    const discarded = await discardReviewVideoJob(row);
+    if (!discarded) return row;
+    void captureForUserId(row.userId, "video_review_expired", {
+      song_id: row.songId,
+      style: row.model,
+      scenes: row.totalSegments,
+      tokens_refunded: row.tokensCharged,
+    });
+    return null;
+  }
   const running = row.status === "pending" || row.status === "processing";
   if (!running) return row;
   if (Date.now() - row.updatedAt.getTime() <= VIDEO_STALE_MS) return row;
@@ -842,19 +889,38 @@ async function finalize(job: VideoJobRow, outFile: string): Promise<void> {
   const tUp = Date.now();
   await putObject(videoKey, mp4, "video/mp4");
   console.log(`[finalize] upload ms=${Date.now() - tUp} mp4MB=${(mp4.length / 1e6).toFixed(1)}`);
+  // Best-effort thumbnail (a frame ~5s in) for the video cards when the owner
+  // opts out of the cover image. A capture failure never fails the finished job;
+  // it just leaves thumbKey null (the cards fall back to the cover).
+  let thumbKey: string | null = null;
+  try {
+    const thumbFile = await extractVideoFrame({
+      workDir: path.dirname(outFile),
+      videoName: path.basename(outFile),
+      outName: "thumb.jpg",
+      atSeconds: VIDEO_THUMB_SECONDS,
+    });
+    thumbKey = `video/${job.songId}/${job.id}/thumb.jpg`;
+    await putObject(thumbKey, await readFile(thumbFile), "image/jpeg");
+  } catch (err) {
+    thumbKey = null;
+    console.warn(`[finalize] thumb capture failed job=${job.id}:`, err);
+  }
   await db
     .update(videoJobs)
     .set({ status: "ready", videoKey, updatedAt: new Date() })
     .where(eq(videoJobs.id, job.id));
   // Save this style's video (one row per song+style; replaces a prior render —
   // a later full render overwrites a preview row, flipping isPreview back off).
+  // thumbKey is replaced even when null: the video changed, so a stale frame of
+  // the OLD render must not survive as this render's thumbnail.
   const sceneGrouping = grouping(job);
   await db
     .insert(songVideos)
-    .values({ songId: job.songId, model: job.model, videoKey, isPreview: job.isPreview, sceneGrouping })
+    .values({ songId: job.songId, model: job.model, videoKey, thumbKey, isPreview: job.isPreview, sceneGrouping })
     .onConflictDoUpdate({
       target: [songVideos.songId, songVideos.model],
-      set: { videoKey, isPreview: job.isPreview, sceneGrouping, updatedAt: new Date() },
+      set: { videoKey, thumbKey, isPreview: job.isPreview, sceneGrouping, updatedAt: new Date() },
     });
   // A finished video is NOT made public automatically — the user explicitly
   // chooses which style (if any) appears on their public page from the video
@@ -869,6 +935,49 @@ async function finalize(job: VideoJobRow, outFile: string): Promise<void> {
     preview: job.isPreview,
     render_seconds: Math.round((Date.now() - job.createdAt.getTime()) / 1000),
   });
+}
+
+/** Where in the video the card thumbnail is captured. 5s skips the (often
+ *  text-free) opening instant and lands on a real scene. */
+const VIDEO_THUMB_SECONDS = 5;
+
+/** Capture missing thumbnails for a song's saved videos — renders that predate
+ *  thumbnails. Fired (fire-and-forget) when the owner switches the video cards
+ *  to "frame from the video"; new renders get their thumb at finalize, so this
+ *  runs once per old video. Best-effort per video; deliberately does NOT bump
+ *  song_videos.updatedAt (that would reshuffle the latest-first card sort). */
+export async function backfillVideoThumbs(songId: string): Promise<void> {
+  const vids = await db
+    .select()
+    .from(songVideos)
+    .where(and(eq(songVideos.songId, songId), isNull(songVideos.thumbKey)));
+  if (vids.length === 0) return;
+  const workDir = await mkdtemp(path.join(os.tmpdir(), "syllary-thumb-"));
+  try {
+    for (const v of vids) {
+      try {
+        const url = await presignGet(v.videoKey);
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`could not fetch video (HTTP ${res.status})`);
+        const videoName = `${v.id}.mp4`;
+        await writeFile(path.join(workDir, videoName), Buffer.from(await res.arrayBuffer()));
+        const thumbFile = await extractVideoFrame({
+          workDir,
+          videoName,
+          outName: `${v.id}.jpg`,
+          atSeconds: VIDEO_THUMB_SECONDS,
+        });
+        // Store next to the video: video/{songId}/{jobId}/thumb.jpg.
+        const thumbKey = v.videoKey.replace(/[^/]+$/, "thumb.jpg");
+        await putObject(thumbKey, await readFile(thumbFile), "image/jpeg");
+        await db.update(songVideos).set({ thumbKey }).where(eq(songVideos.id, v.id));
+      } catch (err) {
+        console.warn(`[thumbs] backfill failed song=${songId} video=${v.id}:`, err);
+      }
+    }
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 // ---------------------------------------------------------------------------

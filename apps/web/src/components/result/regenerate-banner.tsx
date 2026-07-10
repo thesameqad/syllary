@@ -101,38 +101,41 @@ export function RegenerateBanner({
         <div className="min-w-0 flex-1 pr-6">
           <h3 className="text-[13px] font-medium text-white">{heading}</h3>
           <p className="mt-1 text-[12px] leading-snug text-white/55">{body}</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {choices.map((mode) => {
-              const Icon = MODE_ICON[mode];
-              const cost = creditCost(durationSeconds ?? 60, mode);
-              const isBusy = busy === mode;
-              const disabled = busy !== null;
-              return (
-                <button
-                  key={mode}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => void run(mode)}
-                  className="group inline-flex items-center gap-2 rounded-full border border-pulse/30 bg-pulse/[0.08] px-3.5 py-1.5 text-[12px] font-medium text-white transition-colors hover:border-pulse hover:bg-pulse/[0.15] disabled:opacity-60 disabled:hover:border-pulse/30 disabled:hover:bg-pulse/[0.08] max-sm:w-full max-sm:justify-between"
-                  title={MODE_INFO[mode].description}
-                >
-                  <span className="inline-flex items-center gap-2 whitespace-nowrap">
-                    {isBusy ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-pulse" />
-                    ) : (
-                      <Icon className="h-3.5 w-3.5 text-pulse" />
-                    )}
-                    <span className="sm:hidden">{MODE_INFO[mode].label}</span>
-                    <span className="hidden sm:inline">Regenerate with {MODE_INFO[mode].label}</span>
-                  </span>
-                  <span className="shrink-0 whitespace-nowrap rounded-full bg-black/30 px-2 py-0.5 text-[10px] text-white/65">
-                    {cost} tokens
-                  </span>
-                </button>
-              );
-            })}
-          </div>
         </div>
+      </div>
+      {/* Outside the icon column so max-sm:w-full spans the whole card on
+          mobile; sm:pl-11/pr-6 reproduce the column's exact desktop geometry
+          (icon w-8 + gap-3 = 44px = pl-11). */}
+      <div className="mt-3 flex flex-wrap gap-2 sm:pl-11 sm:pr-6">
+        {choices.map((mode) => {
+          const Icon = MODE_ICON[mode];
+          const cost = creditCost(durationSeconds ?? 60, mode);
+          const isBusy = busy === mode;
+          const disabled = busy !== null;
+          return (
+            <button
+              key={mode}
+              type="button"
+              disabled={disabled}
+              onClick={() => void run(mode)}
+              className="group inline-flex items-center gap-2 rounded-full border border-pulse/30 bg-pulse/[0.08] px-3.5 py-1.5 text-[12px] font-medium text-white transition-colors hover:border-pulse hover:bg-pulse/[0.15] disabled:opacity-60 disabled:hover:border-pulse/30 disabled:hover:bg-pulse/[0.08] max-sm:w-full max-sm:justify-between max-sm:py-2.5"
+              title={MODE_INFO[mode].description}
+            >
+              <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                {isBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-pulse" />
+                ) : (
+                  <Icon className="h-3.5 w-3.5 text-pulse" />
+                )}
+                <span className="sm:hidden">{MODE_INFO[mode].label}</span>
+                <span className="hidden sm:inline">Regenerate with {MODE_INFO[mode].label}</span>
+              </span>
+              <span className="shrink-0 whitespace-nowrap rounded-full bg-black/30 px-2 py-0.5 text-[10px] text-white/65">
+                {cost} tokens
+              </span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

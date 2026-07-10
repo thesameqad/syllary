@@ -91,8 +91,12 @@ export function LibraryPage() {
   }, [load]);
 
   useEffect(() => {
+    // A "review" video draft is parked on the user (not loading) — don't poll for it.
     const busy = songs?.some(
-      (s) => s.status === "processing" || s.status === "pending" || s.videoActive,
+      (s) =>
+        s.status === "processing" ||
+        s.status === "pending" ||
+        (s.videoActive && s.videoActive.status !== "review"),
     );
     // Also retry when the initial load hasn't succeeded yet (songs still null) so
     // a transient failure recovers on its own without a manual refresh.

@@ -40,11 +40,12 @@ import {
 } from "../db/schema.js";
 import { getAuthUserId } from "../lib/clerk.js";
 import { captureServer } from "../lib/posthog.js";
-import { deleteObject, presignGet } from "../lib/r2.js";
+import { presignGet } from "../lib/r2.js";
 import { getOrCreateUser } from "../lib/users.js";
 import { videoArtBrief } from "../lib/openrouter.js";
 import { PLATES_QUEUE_BUSY } from "../lib/plates.js";
 import {
+  discardReviewVideoJob,
   finalizeVideoJob,
   patchJobSegments,
   reapStaleVideoJob,
@@ -723,8 +724,22 @@ export async function videoRoutes(app: FastifyInstance) {
     let [row] = await db.select().from(videoJobs).where(eq(videoJobs.id, req.params.id)).limit(1);
     if (!row || row.userId !== user.id) return reply.code(404).send({ error: "Not found." });
 
+    // Reading a review draft = the owner is (re)opening the editor: touch it so the
+    // abandoned-draft reaper (REVIEW_STALE_MS) only expires drafts nobody looks at.
+    if (row.status === "review") {
+      const [touched] = await db
+        .update(videoJobs)
+        .set({ updatedAt: new Date() })
+        .where(and(eq(videoJobs.id, row.id), eq(videoJobs.status, "review")))
+        .returning();
+      if (touched) row = touched;
+      return reply.send(await toVideoJobDto(row, { scenes: req.query.scenes === "1" }));
+    }
+
     const wasRunning = row.status === "pending" || row.status === "processing";
-    row = await reapStaleVideoJob(row);
+    const reaped = await reapStaleVideoJob(row);
+    if (!reaped) return reply.code(404).send({ error: "Not found." });
+    row = reaped;
     if (wasRunning && row.status === "failed") {
       captureServer(`clerk:${clerkId}`, "video_failed", {
         song_id: row.songId,
@@ -975,7 +990,7 @@ export async function videoRoutes(app: FastifyInstance) {
         const msg =
           err instanceof Error && err.message === PLATES_QUEUE_BUSY
             ? PLATES_QUEUE_BUSY
-            : "Could not apply the lyrics. Try again.";
+            : "Could not apply the lyrics — you were not charged. Try again.";
         return reply.code(502).send({ error: msg });
       } finally {
         regensInFlight.delete(flightKey);
@@ -1477,24 +1492,10 @@ export async function videoRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "This video isn't open for editing." });
     }
 
-    // Drop only frames + clips written under THIS job's own folder (copy-on-write
-    // regenerations); cloned source keys point elsewhere and must survive.
-    const ownPrefix = `video/${job.songId}/${job.id}/`;
-    const ownKeys = (job.segments ?? [])
-      .flatMap((s) => [s.imageKey, s.clipKey])
-      .filter((k): k is string => !!k && k.startsWith(ownPrefix));
-    await Promise.all(ownKeys.map((k) => deleteObject(k).catch(() => undefined)));
-
-    await db.delete(videoJobs).where(eq(videoJobs.id, job.id));
-
-    // Refund any up-front charge (0 for an edit job — its re-render is charged at
-    // finalize, not on open).
-    if (job.userId && job.tokensCharged > 0) {
-      await db
-        .update(users)
-        .set({ credits: sql`${users.credits} + ${job.tokensCharged}`, updatedAt: new Date() })
-        .where(eq(users.id, job.userId));
-    }
+    // Row delete (conditional on review), refund of any up-front charge (0 for an
+    // edit job — its re-render is charged at finalize), and cleanup of the frames +
+    // clips under THIS job's own folder. Shared with the abandoned-draft reaper.
+    await discardReviewVideoJob(job);
 
     return reply.send({ ok: true });
   });

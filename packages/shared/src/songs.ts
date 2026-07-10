@@ -224,6 +224,9 @@ export const songSchema = z.object({
   activeVideoJob: videoJobSchema.nullable().default(null),
   /** Which video style is shown on the public page (null = none chosen). */
   publicVideoModel: videoModelSchema.nullable().default(null),
+  /** Video-card thumbnails: true = the song's cover image, false = a frame
+   *  captured from the video itself. */
+  useCoverForVideoThumb: z.boolean().default(true),
   /** True when the requesting user owns this song and may edit it. */
   canEdit: z.boolean().default(false),
 });
@@ -263,6 +266,9 @@ export const songSummarySchema = z.object({
     .default(null),
   /** Most recent video activity (finished or in-progress), for latest-first sort. */
   videoLatestAt: z.string().nullable().default(null),
+  /** Thumbnail for the video cards when the owner opted out of the cover image
+   *  (a frame captured from the video). Null = use coverUrl. */
+  videoThumbUrl: z.string().url().nullable().default(null),
 });
 export type SongSummary = z.infer<typeof songSummarySchema>;
 
@@ -276,6 +282,7 @@ export const updateSongSchema = z.object({
   year: z.number().int().min(1).max(9999).nullable().optional(),
   genre: z.string().max(80).nullable().optional(),
   links: z.array(songLinkSchema).max(20).optional(),
+  useCoverForVideoThumb: z.boolean().optional(),
 });
 export type UpdateSong = z.infer<typeof updateSongSchema>;
 

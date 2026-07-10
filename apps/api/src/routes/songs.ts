@@ -56,7 +56,7 @@ import { generateCoverImage } from "../lib/cover-image.js";
 import { matchStreamingLinks } from "../lib/music-links.js";
 import { probeDurationSeconds, transcodeForDownload } from "../lib/ffmpeg.js";
 import { Sentry } from "../instrument.js";
-import { reapStaleVideoJob, toReviewSegment } from "../lib/video-pipeline.js";
+import { backfillVideoThumbs, reapStaleVideoJob, toReviewSegment } from "../lib/video-pipeline.js";
 import { resolveArtistAlbum } from "../lib/catalog.js";
 import { estimateGenerationCost, firstTouchLandingSlug, recordEvent } from "../lib/analytics.js";
 import { sendOnce, songReadyEmail, tokenLowEmail, userForEmail } from "../lib/email.js";
@@ -160,9 +160,12 @@ async function activeVideoJobFor(songId: string): Promise<VideoJob | null> {
     .limit(1);
   if (!row) return null;
   // Self-heal: a job whose in-process pipeline died on a restart would otherwise show
-  // "Generating…" forever and block edits. Reap it (mark failed + refund) if stale —
-  // then there's no active job to surface.
-  row = await reapStaleVideoJob(row);
+  // "Generating…" forever and block edits. Reap it (mark failed + refund) if stale;
+  // an abandoned "review" draft is discarded outright (reap returns null) — either
+  // way there's no active job to surface.
+  const alive = await reapStaleVideoJob(row);
+  if (!alive) return null;
+  row = alive;
   if (row.status !== "pending" && row.status !== "processing" && row.status !== "review") {
     return null;
   }
@@ -198,13 +201,20 @@ async function activeVideoJobFor(songId: string): Promise<VideoJob | null> {
 /** R2 key of the song's chosen public lyric video, or null. Exported for the
  *  dashboard showcase (routes/showcase.ts). */
 export async function publicVideoKeyFor(row: SongRow): Promise<string | null> {
+  return (await publicVideoFor(row))?.videoKey ?? null;
+}
+
+/** The song's chosen public video row (key + captured thumbnail), or null. */
+export async function publicVideoFor(
+  row: SongRow,
+): Promise<{ videoKey: string; thumbKey: string | null } | null> {
   if (!row.publicVideoModel) return null;
   const [v] = await db
-    .select({ videoKey: songVideos.videoKey })
+    .select({ videoKey: songVideos.videoKey, thumbKey: songVideos.thumbKey })
     .from(songVideos)
     .where(and(eq(songVideos.songId, row.id), eq(songVideos.model, row.publicVideoModel)))
     .limit(1);
-  return v?.videoKey ?? null;
+  return v ?? null;
 }
 
 /** Presigned URL of the song's chosen public lyric video, or null. */
@@ -243,6 +253,7 @@ async function toSongDto(row: SongRow, canEdit = false): Promise<Song> {
     videos,
     activeVideoJob,
     publicVideoModel: row.publicVideoModel ?? null,
+    useCoverForVideoThumb: row.useCoverForVideoThumb,
     canEdit,
   };
 }
@@ -251,10 +262,17 @@ async function toSongSummary(row: SongRow): Promise<SongSummary> {
   const coverUrl = row.coverImageKey ? await presignGet(row.coverImageKey) : null;
   // Music-video status for the library/dashboard cards.
   const vids = await db
-    .select({ model: songVideos.model, updatedAt: songVideos.updatedAt })
+    .select({ model: songVideos.model, updatedAt: songVideos.updatedAt, thumbKey: songVideos.thumbKey })
     .from(songVideos)
     .where(eq(songVideos.songId, row.id));
   const active = await activeVideoJobFor(row.id);
+  // Video-card thumbnail when the owner opted out of the cover image: the most
+  // recently rendered video that has a captured frame (null falls back to cover).
+  const thumbKey = row.useCoverForVideoThumb
+    ? null
+    : (vids
+        .filter((v) => v.thumbKey)
+        .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0]?.thumbKey ?? null);
   const times = vids.map((v) => v.updatedAt.getTime());
   if (active) times.push(Date.parse(active.createdAt));
   return {
@@ -285,6 +303,7 @@ async function toSongSummary(row: SongRow): Promise<SongSummary> {
         }
       : null,
     videoLatestAt: times.length ? new Date(Math.max(...times)).toISOString() : null,
+    videoThumbUrl: thumbKey ? await presignGet(thumbKey) : null,
   };
 }
 
@@ -932,10 +951,21 @@ export async function songsRoutes(app: FastifyInstance) {
         ...(parsed.data.year !== undefined ? { year: parsed.data.year } : {}),
         ...(parsed.data.genre !== undefined ? { genre: parsed.data.genre } : {}),
         ...(parsed.data.links !== undefined ? { links: parsed.data.links } : {}),
+        ...(parsed.data.useCoverForVideoThumb !== undefined
+          ? { useCoverForVideoThumb: parsed.data.useCoverForVideoThumb }
+          : {}),
         updatedAt: new Date(),
       })
       .where(eq(songs.id, row.id))
       .returning();
+    // Switching to frame-based thumbnails: capture frames for videos rendered
+    // before thumbnails existed (new renders get theirs at finalize). Fire-and-
+    // forget — the cards fall back to the cover until each frame lands.
+    if (parsed.data.useCoverForVideoThumb === false && row.useCoverForVideoThumb) {
+      backfillVideoThumbs(row.id).catch((err) =>
+        req.log.warn({ err, songId: row.id }, "video thumb backfill failed"),
+      );
+    }
     return reply.send(await toSongDto(updated ?? row, true));
   });
 

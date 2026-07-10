@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowLeft,
@@ -54,7 +54,7 @@ import { useToast } from "@/components/ui/toast";
 import { Modal } from "@/components/ui/modal";
 import { Button3D } from "@/components/ui/button-3d";
 import { VideoFormatPreview } from "@/components/result/video-format-preview";
-import { MentionTextarea } from "@/components/ui/mention-textarea";
+import { MentionTextarea, type MentionTextareaHandle } from "@/components/ui/mention-textarea";
 import { cn } from "@/lib/utils";
 import { captureClient } from "@/lib/analytics";
 
@@ -305,14 +305,11 @@ export function GenerateVideoModal({
     }
   }
 
-  // Append "@Name " to the brief (no-op if already mentioned) — same as the manual
-  // editor's tappable chips.
+  // Insert "@Name " into the brief at the caret via the textarea's handle —
+  // repeat taps insert again (a description can mention a subject twice).
+  const briefRef = useRef<MentionTextareaHandle>(null);
   function insertMention(name: string) {
-    setSceneBrief((d) => {
-      if (findMentionedNames(d, [name]).length > 0) return d;
-      const base = d.trimEnd();
-      return `${base ? base + " " : ""}@${name} `;
-    });
+    briefRef.current?.insertMention(name);
   }
 
   // Switch the song-description mode. "ai" fetches the AI brief once.
@@ -1049,6 +1046,7 @@ export function GenerateVideoModal({
               </div>
             ) : (
               <MentionTextarea
+                ref={briefRef}
                 value={sceneBrief}
                 onChange={setSceneBrief}
                 names={castNames}

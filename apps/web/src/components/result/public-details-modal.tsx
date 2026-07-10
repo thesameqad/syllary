@@ -115,6 +115,8 @@ export function PublicDetailsModal({
   const [saving, setSaving] = useState(false);
   const [isPublic, setIsPublic] = useState(song.isPublic);
   const [publishing, setPublishing] = useState(false);
+  const [coverForThumbs, setCoverForThumbs] = useState(song.useCoverForVideoThumb);
+  const [thumbSaving, setThumbSaving] = useState(false);
   const [suggestions, setSuggestions] = useState<MetaSuggestions>({ artists: [], albums: [] });
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const [coverBusy, setCoverBusy] = useState(false);
@@ -137,6 +139,7 @@ export function PublicDetailsModal({
     setGenre(song.genre ?? "");
     setRows(initialRows(song.links));
     setIsPublic(song.isPublic);
+    setCoverForThumbs(song.useCoverForVideoThumb);
     setCropSrc(null);
     setAiOpen(false);
     setFindOpen(false);
@@ -238,6 +241,24 @@ export function PublicDetailsModal({
     setCropSrc(null);
   }
 
+  // Saved immediately (like the public toggle) — switching OFF also kicks off
+  // the server-side frame capture for videos rendered before thumbnails existed.
+  async function toggleCoverForThumbs() {
+    setThumbSaving(true);
+    try {
+      const updated = await updateSong(song.id, { useCoverForVideoThumb: !coverForThumbs });
+      setCoverForThumbs(updated.useCoverForVideoThumb);
+      onSaved(updated);
+      if (!updated.useCoverForVideoThumb) {
+        toast("Video thumbnails will use a frame from each video.");
+      }
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't update the thumbnail setting.", "error");
+    } finally {
+      setThumbSaving(false);
+    }
+  }
+
   async function togglePublic() {
     setPublishing(true);
     try {
@@ -302,7 +323,7 @@ export function PublicDetailsModal({
     }
   }
 
-  const busy = saving || coverBusy || publishing;
+  const busy = saving || coverBusy || publishing || thumbSaving;
   const coverSeed = [
     title.trim() ? `Album cover for "${title.trim()}"` : "Album cover artwork",
     artist.trim() ? `by ${artist.trim()}` : "",
@@ -421,6 +442,38 @@ export function PublicDetailsModal({
                   onChange={onPickFile}
                   className="hidden"
                 />
+              </div>
+
+              {/* Video-thumbnail source */}
+              <div className="mt-3 flex items-center justify-between gap-3 rounded-[12px] border border-white/[0.08] bg-white/[0.02] px-4 py-3">
+                <div>
+                  <div className="text-[13px] text-white/85">
+                    Use the same cover image for the video thumbnails
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-white/40">
+                    {coverForThumbs
+                      ? "Video cards show this cover image."
+                      : "Video cards show a frame captured from each video."}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={coverForThumbs}
+                  disabled={busy}
+                  onClick={() => void toggleCoverForThumbs()}
+                  className={cn(
+                    "relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-60",
+                    coverForThumbs ? "bg-pulse" : "bg-white/15",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform",
+                      coverForThumbs ? "translate-x-5" : "translate-x-0",
+                    )}
+                  />
+                </button>
               </div>
             </div>
 

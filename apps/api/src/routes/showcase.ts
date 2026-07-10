@@ -6,7 +6,7 @@ import { db } from "../db/client.js";
 import { showcaseItems, showcaseTags, songs, type SongRow } from "../db/schema.js";
 import { requireAdmin } from "../lib/admin.js";
 import { presignGet } from "../lib/r2.js";
-import { publicVideoKeyFor } from "./songs.js";
+import { publicVideoFor } from "./songs.js";
 
 // ---------------------------------------------------------------------------
 // Dashboard showcase: admin-curated categories ("abstract", "living scenes", …)
@@ -35,13 +35,17 @@ function isShowable(row: SongRow): boolean {
 }
 
 async function toShowcaseVideo(row: SongRow): Promise<ShowcaseVideo> {
-  const videoKey = await publicVideoKeyFor(row);
+  const video = await publicVideoFor(row);
+  // Card art honors the owner's thumbnail choice: a frame captured from the
+  // video when they opted out of the cover image (falling back to the cover).
+  const coverKey =
+    !row.useCoverForVideoThumb && video?.thumbKey ? video.thumbKey : row.coverImageKey;
   return {
     songId: row.id,
     title: row.title ?? row.originalFilename,
     artist: row.artist,
-    coverUrl: row.coverImageKey ? await presignGet(row.coverImageKey) : null,
-    videoUrl: videoKey ? await presignGet(videoKey) : null,
+    coverUrl: coverKey ? await presignGet(coverKey) : null,
+    videoUrl: video ? await presignGet(video.videoKey) : null,
   };
 }
 

@@ -6,6 +6,7 @@ import {
   Pause,
   Play,
   Save,
+  Undo2,
   Wand2,
   X,
   ZoomIn,
@@ -37,6 +38,9 @@ const TRAIL_PADDING = 0.5;
 // before auto-scrolling. 0.7 = playhead can wander to 70% of the visible
 // width before scroll kicks in (gives upcoming words context).
 const PLAYHEAD_LEAD_RATIO = 0.7;
+// Undo history depth. One entry per gesture (drag, nudge, delete), so 100
+// covers a long session without holding every intermediate drag frame.
+const UNDO_LIMIT = 100;
 
 type DragMode = "move" | "trim-left" | "trim-right";
 
@@ -76,6 +80,12 @@ export function ManualSyncEditor({
   // Multi-selection of words, keyed "lineIdx:wordIdx". Dragging any selected
   // word moves the whole selection; arrow keys nudge it; Del removes it.
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Undo history: the `lines` value as it was BEFORE each mutating gesture.
+  // Every mutation is immutable (map/filter), so keeping the previous
+  // top-level array is a full snapshot.
+  const [undoStack, setUndoStack] = useState<LyricLine[][]>([]);
+  // Words awaiting delete confirmation — non-null shows the confirm dialog.
+  const [confirmDelete, setConfirmDelete] = useState<Set<string> | null>(null);
   // Rubber-band selection in progress on the empty track area, in seconds.
   const [marquee, setMarquee] = useState<{ a: number; b: number } | null>(null);
   // Snapshot of the lines on open so we can detect "dirty" + reset on cancel.
@@ -96,6 +106,8 @@ export function ManualSyncEditor({
     setPxPerSec(DEFAULT_PX_PER_SEC);
     setPlayhead(0);
     setSelected(new Set());
+    setUndoStack([]);
+    setConfirmDelete(null);
     setMarquee(null);
     pendingZoomAnchor.current = null;
     skipAutoScrollRef.current = false;
@@ -226,6 +238,17 @@ export function ManualSyncEditor({
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
+      // The delete-confirm dialog owns the keyboard while open.
+      if (confirmDelete) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setConfirmDelete(null);
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          deleteWords(confirmDelete);
+        }
+        return;
+      }
       if (e.key === " ") {
         e.preventDefault();
         togglePlay();
@@ -235,11 +258,14 @@ export function ManualSyncEditor({
       } else if (e.key === "Delete" || e.key === "Backspace") {
         if (selected.size > 0) {
           e.preventDefault();
-          deleteWords(selected);
+          setConfirmDelete(new Set(selected));
         } else if (hoveredWord) {
           e.preventDefault();
-          deleteWord(hoveredWord.li, hoveredWord.wi);
+          setConfirmDelete(new Set([`${hoveredWord.li}:${hoveredWord.wi}`]));
         }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        undo();
       } else if ((e.key === "+" || e.key === "=") && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
         zoomTo(pxPerSecRef.current * ZOOM_STEP);
@@ -260,7 +286,7 @@ export function ManualSyncEditor({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, togglePlay, onClose, saving, hoveredWord, selected, lines]);
+  }, [open, togglePlay, onClose, saving, hoveredWord, selected, lines, confirmDelete, undoStack]);
 
   // Keep the playhead in view at all times — works for both playback and
   // manual seeks (waveform click, track click). When the playhead would
@@ -353,6 +379,28 @@ export function ManualSyncEditor({
     return members;
   }
 
+  // Record the pre-mutation lines so the next Undo restores them. Called once
+  // per user gesture (a whole drag = one entry, not one per pointermove).
+  function pushUndo(snapshot: LyricLine[]) {
+    setUndoStack((prev) => {
+      const next = prev.length >= UNDO_LIMIT ? prev.slice(1) : prev.slice();
+      next.push(snapshot);
+      return next;
+    });
+  }
+
+  function undo() {
+    if (undoStack.length === 0) return;
+    pauseForEdit();
+    const snapshot = undoStack[undoStack.length - 1]!;
+    setUndoStack(undoStack.slice(0, -1));
+    setLines(snapshot);
+    // Word indices in the restored snapshot may not match the current
+    // selection (e.g. undoing a delete brings indices back).
+    setSelected(new Set());
+    setHoveredWord(null);
+  }
+
   // Shift the whole selection by dt seconds, clamped so the earliest word
   // never crosses 0 and the latest never crosses the song end.
   function nudgeSelected(dtRaw: number) {
@@ -363,6 +411,7 @@ export function ManualSyncEditor({
     const maxEnd = Math.max(...members.map((m) => m.end));
     const dt = clamp(dtRaw, -minStart, songDuration - maxEnd);
     if (dt === 0) return;
+    pushUndo(lines);
     setWordTimes(
       members.map((m) => ({ li: m.li, wi: m.wi, start: m.start + dt, end: m.end + dt })),
     );
@@ -377,6 +426,8 @@ export function ManualSyncEditor({
   function deleteWords(keys: Set<string>) {
     if (keys.size === 0) return;
     pauseForEdit();
+    pushUndo(lines);
+    setConfirmDelete(null);
     setLines((prev) => {
       const out: LyricLine[] = [];
       prev.forEach((l, li) => {
@@ -395,10 +446,6 @@ export function ManualSyncEditor({
     });
     setSelected(new Set());
     setHoveredWord(null);
-  }
-
-  function deleteWord(lineIdx: number, wordIdx: number) {
-    deleteWords(new Set([`${lineIdx}:${wordIdx}`]));
   }
 
   function beginDrag(
@@ -443,6 +490,10 @@ export function ManualSyncEditor({
     const startX = e.clientX;
     const origStart = word.start;
     const origEnd = word.end;
+    // Pre-drag snapshot for Undo — pushed once, on the first real movement,
+    // so a plain click (no drag) doesn't record a no-op history entry.
+    const preDragLines = lines;
+    let undoPushed = false;
     const target = e.currentTarget;
     try {
       target.setPointerCapture(e.pointerId);
@@ -452,6 +503,10 @@ export function ManualSyncEditor({
 
     function onMove(ev: PointerEvent) {
       const dt = (ev.clientX - startX) / pxPerSec;
+      if (!undoPushed && dt !== 0) {
+        undoPushed = true;
+        pushUndo(preDragLines);
+      }
       if (mode === "move") {
         // One shared clamped delta so relative spacing inside the group is
         // preserved even when the edges hit the song bounds.
@@ -618,7 +673,7 @@ export function ManualSyncEditor({
               <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-pulse/15 text-pulse">
                 <Wand2 className="h-3.5 w-3.5" />
               </span>
-              <h2 className="whitespace-nowrap text-[15px] font-medium tracking-[-0.2px]">
+              <h2 className="hidden whitespace-nowrap text-[15px] font-medium tracking-[-0.2px] sm:block">
                 Fine-tune timing
               </h2>
               <span className="hidden text-[12px] text-white/40 sm:inline">
@@ -660,6 +715,17 @@ export function ManualSyncEditor({
                   <ZoomIn className="h-3.5 w-3.5" />
                 </button>
               </div>
+              <button
+                type="button"
+                onClick={undo}
+                disabled={undoStack.length === 0}
+                aria-label="Undo last change"
+                title="Undo (Ctrl+Z)"
+                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-[13px] font-medium text-white/80 transition-colors hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Undo2 className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Undo</span>
+              </button>
               <button
                 type="button"
                 disabled={saving || !dirty}
@@ -709,8 +775,12 @@ export function ManualSyncEditor({
                   className="min-w-0 flex-1 cursor-pointer overflow-hidden rounded-md border border-white/[0.06] bg-black/40 px-2"
                   title="Click to jump to that moment"
                 />
-                <div className="shrink-0 font-mono text-[12px] text-white/55">
-                  {timeLabel(playhead)} <span className="text-white/25">/</span> {timeLabel(songDuration)}
+                <div className="shrink-0 font-mono text-[11px] text-white/55 sm:text-[12px]">
+                  {timeLabel(playhead)}
+                  <span className="hidden sm:inline">
+                    {" "}
+                    <span className="text-white/25">/</span> {timeLabel(songDuration)}
+                  </span>
                 </div>
               </div>
 
@@ -862,7 +932,7 @@ export function ManualSyncEditor({
                                   }}
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    deleteWord(li, wi);
+                                    setConfirmDelete(new Set([`${li}:${wi}`]));
                                   }}
                                   aria-label={`Delete word "${word.text}"`}
                                   title={`Delete "${word.text}"`}
@@ -882,7 +952,7 @@ export function ManualSyncEditor({
                                 }}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  deleteWord(li, wi);
+                                  setConfirmDelete(new Set([`${li}:${wi}`]));
                                 }}
                                 aria-label={`Delete word "${word.text}"`}
                                 title={`Delete "${word.text}"`}
@@ -955,8 +1025,63 @@ export function ManualSyncEditor({
               </p>
             </div>
           </main>
+
+          {/* Delete confirmation — guards every deletion path (× buttons and
+              the Del key). Enter confirms, Esc / backdrop click cancels. */}
+          {confirmDelete && (
+            <div
+              className="fixed inset-0 z-[130] flex items-center justify-center bg-black/60 p-4 backdrop-blur-[2px]"
+              onClick={() => setConfirmDelete(null)}
+            >
+              <div
+                role="alertdialog"
+                aria-modal="true"
+                aria-label="Confirm word deletion"
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-[380px] rounded-[14px] border border-white/10 bg-stage p-5 shadow-[0_24px_60px_-12px_rgba(0,0,0,0.8)]"
+              >
+                <h3 className="text-[15px] font-medium text-white">
+                  Delete {confirmDeleteLabel(confirmDelete, lines)}?
+                </h3>
+                <p className="mt-1.5 text-[12px] leading-relaxed text-white/50">
+                  {confirmDelete.size === 1 ? "It" : "They"} will disappear from the timeline and
+                  from the lyrics text. You can undo this afterwards.
+                </p>
+                <div className="mt-4 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(null)}
+                    className="rounded-full px-4 py-2 text-[13px] text-white/70 transition-colors hover:bg-white/[0.06] hover:text-white"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    autoFocus
+                    onClick={() => deleteWords(confirmDelete)}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-pulse px-5 py-2 text-[13px] font-medium text-white transition-transform hover:scale-[1.03]"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </motion.div>
       )}
     </AnimatePresence>
   );
+}
+
+/** Human label for the words pending deletion: the quoted word for a single
+ *  one, a count otherwise. Defensive against stale keys. */
+function confirmDeleteLabel(keys: Set<string>, lines: LyricLine[]): string {
+  if (keys.size === 1) {
+    const key = keys.values().next().value ?? "";
+    const [li = -1, wi = -1] = key.split(":").map(Number);
+    const text = lines[li]?.words[wi]?.text;
+    return text ? `“${text}”` : "this word";
+  }
+  return `${keys.size} words`;
 }
