@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useAuth } from "@clerk/clerk-react";
 import { useNavigate } from "react-router-dom";
-import type { BillingPeriod } from "@syllary/shared";
+import { PLAN_CREDITS, type BillingPeriod } from "@syllary/shared";
 import { ApiError, startCheckout } from "@/lib/api";
 import { authConfigured } from "@/lib/auth";
-import { LYRICS_TIERS, type PlanTier, VIDEO_TIERS } from "@/lib/plans";
+import { bonusTokens, firstMonthTokens, LYRICS_TIERS, type PlanTier, VIDEO_TIERS } from "@/lib/plans";
 import { cn } from "@/lib/utils";
 
 function PlanButton({ tier, period, featured }: { tier: PlanTier["id"]; period: BillingPeriod; featured?: boolean }) {
@@ -67,6 +67,24 @@ function PlanCard({ tier, period }: { tier: PlanTier; period: BillingPeriod }) {
         ${period === "monthly" ? tier.monthly : tier.annual}
         <span className="text-[13px] font-normal text-white/40">/{period === "monthly" ? "mo" : "yr"}</span>
       </div>
+      <div className="mt-2 text-[12px] text-white/60">
+        {PLAN_CREDITS[tier.id].toLocaleString()} tokens / month
+      </div>
+      {bonusTokens(tier.id) > 0 && (
+        <>
+          <div className="mt-2 rounded-[10px] border border-pulse/50 bg-pulse/[0.12] px-3 py-2">
+            <div className="text-[15px] font-medium tracking-[-0.3px] text-pulse">
+              🎁 +{bonusTokens(tier.id).toLocaleString()} sign-up bonus
+            </div>
+            <div className="mt-0.5 text-[10px] leading-snug text-white/55">
+              one-time · applied instantly at checkout
+            </div>
+          </div>
+          <div className="mt-1.5 text-[11px] text-white/45">
+            = {firstMonthTokens(tier.id).toLocaleString()} tokens your first month
+          </div>
+        </>
+      )}
       <ul className="mt-4 space-y-1 text-[11px] leading-[1.6] text-white/50">
         {tier.features.map((feature) => (
           <li key={feature.text} className="flex items-baseline gap-1.5">

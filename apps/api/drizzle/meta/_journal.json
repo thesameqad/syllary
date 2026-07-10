@@ -225,6 +225,13 @@
       "when": 1783628451344,
       "tag": "0031_opposite_kabuki",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1783664445631,
+      "tag": "0032_tranquil_purple_man",
+      "breakpoints": true
     }
   ]
 }

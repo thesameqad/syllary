@@ -360,6 +360,10 @@ export const users = pgTable("users", {
   songsThisPeriod: integer("songs_this_period").notNull().default(0),
   songsLifetime: integer("songs_lifetime").notNull().default(0),
   currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
+  // When the one-time first-subscription token bonus (FIRST_SUB_BONUS) was
+  // granted. Permanent once-per-user marker — stripe_subscription_id is nulled
+  // on cancel, so cancel→resubscribe would otherwise re-farm the bonus.
+  firstSubBonusAt: timestamp("first_sub_bonus_at", { withTimezone: true }),
   // First-touch SEO landing page this account arrived from (slug, no leading
   // slash). Stamped once on the first authed visit; powers per-landing
   // registration + upgrade attribution.

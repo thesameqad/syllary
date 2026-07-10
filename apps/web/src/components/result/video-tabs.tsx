@@ -614,6 +614,7 @@ export function VideoTabs({
                 open={plansModalOpen}
                 onClose={() => setPlansModalOpen(false)}
                 trigger="video_full"
+                song={song}
               />
             </>
           ) : (

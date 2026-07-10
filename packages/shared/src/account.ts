@@ -31,6 +31,20 @@ export const PLAN_CREDITS: Record<Plan, number> = {
   premiere: 620000,
 };
 
+/** One-time token bonus granted on a user's FIRST-ever subscription, on top of
+ *  the plan's monthly grant. Scaled by tier so the $6 Starter can't be farmed
+ *  (subscribe → pocket bonus → cancel); video plans carry the headline 100k.
+ *  Applied exactly once per user — users.first_sub_bonus_at is the marker. */
+export const FIRST_SUB_BONUS: Record<Plan, number> = {
+  free: 0,
+  starter: 10_000,
+  creator: 25_000,
+  pro: 50_000,
+  reel: 100_000,
+  studio: 100_000,
+  premiere: 100_000,
+};
+
 export const accountSchema = z.object({
   plan: planSchema,
   credits: z.number(),

@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 import { eq } from "drizzle-orm";
-import { PLAN_CREDITS } from "@syllary/shared";
+import { FIRST_SUB_BONUS, PLAN_CREDITS } from "@syllary/shared";
 import { db } from "../db/client.js";
 import { users } from "../db/schema.js";
 import { planFromPrice, stripe } from "./stripe.js";
@@ -28,6 +28,10 @@ export async function applySubscription(sub: Stripe.Subscription): Promise<void>
   // Grant the plan's token allowance on activation, upgrade, or renewal —
   // not on every reconcile (so usage within a period is preserved).
   const grantTokens = active && (periodChanged || user.plan !== tier);
+  // One-time new-subscriber bonus, stacked on the first grant only. The
+  // first_sub_bonus_at marker survives cancel/resubscribe (unlike
+  // stripe_subscription_id), so the bonus can never be farmed.
+  const firstSub = grantTokens && user.firstSubBonusAt == null;
 
   await db
     .update(users)
@@ -38,7 +42,8 @@ export async function applySubscription(sub: Stripe.Subscription): Promise<void>
       monthlyQuota: active ? quota : null,
       currentPeriodEnd: active ? periodEnd : null,
       songsThisPeriod: periodChanged ? 0 : user.songsThisPeriod,
-      ...(grantTokens ? { credits: PLAN_CREDITS[tier] } : {}),
+      ...(grantTokens ? { credits: PLAN_CREDITS[tier] + (firstSub ? FIRST_SUB_BONUS[tier] : 0) } : {}),
+      ...(firstSub ? { firstSubBonusAt: new Date() } : {}),
       updatedAt: new Date(),
     })
     .where(eq(users.id, user.id));

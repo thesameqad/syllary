@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@clerk/clerk-react";
 import { useNavigate } from "react-router-dom";
 import { Loader2 } from "lucide-react";
-import type { BillingPeriod } from "@syllary/shared";
+import { estimateVideoCost, PLAN_CREDITS, type BillingPeriod, type Song } from "@syllary/shared";
 import { ApiError, startCheckout } from "@/lib/api";
 import { captureClient } from "@/lib/analytics";
-import { type PlanTier, VIDEO_TIERS } from "@/lib/plans";
+import { bonusTokens, firstMonthTokens, type PlanTier, VIDEO_TIERS } from "@/lib/plans";
 import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
 
@@ -54,6 +54,7 @@ function PlanButton({ tier, period, featured }: { tier: PlanTier["id"]; period: 
 }
 
 function PlanCard({ tier, period }: { tier: PlanTier; period: BillingPeriod }) {
+  const bonus = bonusTokens(tier.id);
   return (
     <div
       className={cn(
@@ -74,6 +75,24 @@ function PlanCard({ tier, period }: { tier: PlanTier; period: BillingPeriod }) {
         ${period === "monthly" ? tier.monthly : tier.annual}
         <span className="text-[13px] font-normal text-white/40">/{period === "monthly" ? "mo" : "yr"}</span>
       </div>
+      <div className="mt-2 text-[12px] text-white/60">
+        {PLAN_CREDITS[tier.id].toLocaleString()} tokens / month
+      </div>
+      {bonus > 0 && (
+        <>
+          <div className="mt-2 rounded-[10px] border border-pulse/50 bg-pulse/[0.12] px-3 py-2">
+            <div className="text-[16px] font-medium tracking-[-0.3px] text-pulse">
+              🎁 +{bonus.toLocaleString()} sign-up bonus
+            </div>
+            <div className="mt-0.5 text-[10px] leading-snug text-white/55">
+              one-time · applied instantly at checkout
+            </div>
+          </div>
+          <div className="mt-1.5 text-[11px] text-white/45">
+            = {firstMonthTokens(tier.id).toLocaleString()} tokens your first month
+          </div>
+        </>
+      )}
       <ul className="mt-4 space-y-1 text-[11px] leading-[1.6] text-white/50">
         {tier.features.map((f) => (
           <li key={f.text} className="flex items-baseline gap-1.5">
@@ -91,26 +110,91 @@ function PlanCard({ tier, period }: { tier: PlanTier; period: BillingPeriod }) {
   );
 }
 
+/** Ignorable one-tap "why not?" row at the bottom of the paywall. No exit
+ *  interception — leavers leave untouched; hesitators get a one-click way to
+ *  tell us why. Answers land in PostHog as plans_modal_feedback. */
+const FEEDBACK_OPTIONS = [
+  { key: "too_expensive", label: "Too expensive" },
+  { key: "one_video", label: "I only need one video" },
+  { key: "just_looking", label: "Just looking" },
+] as const;
+
+function FeedbackRow({ trigger, songId, estimatedTokens }: { trigger: string; songId?: string; estimatedTokens?: number }) {
+  const [answered, setAnswered] = useState(false);
+  if (answered) {
+    return <p className="mt-5 text-center text-[11px] text-white/40">Thanks — this genuinely helps 🙏</p>;
+  }
+  return (
+    <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-[11px] text-white/35">
+      <span>Not what you need?</span>
+      {FEEDBACK_OPTIONS.map((o) => (
+        <button
+          key={o.key}
+          type="button"
+          onClick={() => {
+            captureClient("plans_modal_feedback", {
+              trigger,
+              answer: o.key,
+              song_id: songId,
+              estimated_tokens: estimatedTokens,
+            });
+            setAnswered(true);
+          }}
+          className="rounded-full border border-white/10 px-2.5 py-1 text-white/45 transition-colors hover:border-white/25 hover:text-white/80"
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** Shown when a user runs out of tokens trying to render a full video — the real
  *  purchase moment. Video plans only. Fires plans_modal_viewed / _dismissed. */
 export function PlansModal({
   open,
   onClose,
   trigger,
+  song,
 }: {
   open: boolean;
   onClose: () => void;
   /** Where the modal was opened from (e.g. "video_full"). */
   trigger: string;
+  /** When present, anchors the pitch to THIS song's real full-render price. */
+  song?: Song | null;
 }) {
   const [period, setPeriod] = useState<BillingPeriod>("monthly");
 
+  // What this exact song costs to render full-length on the cheapest full
+  // quality (Lite, 1K, Living Scenes). An anchor, not a quote — the generate
+  // modal still shows the exact price for whatever settings they pick.
+  const anchorTokens = useMemo(() => {
+    if (!song?.lyrics) return null;
+    const est = estimateVideoCost({
+      model: "normal",
+      quality: "lite",
+      imageSize: "1K",
+      lyrics: song.lyrics,
+      durationSeconds: song.durationSeconds ?? null,
+    });
+    return est.tokens > 0 ? est.tokens : null;
+  }, [song]);
+  const reelCovers = anchorTokens ? Math.floor(firstMonthTokens("reel") / anchorTokens) : null;
+
   useEffect(() => {
-    if (open) captureClient("plans_modal_viewed", { trigger, wanted: "video_full" });
+    if (open)
+      captureClient("plans_modal_viewed", {
+        trigger,
+        wanted: "video_full",
+        song_id: song?.id,
+        estimated_tokens: anchorTokens,
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, trigger]);
 
   function close() {
-    captureClient("plans_modal_dismissed", { trigger });
+    captureClient("plans_modal_dismissed", { trigger, song_id: song?.id, estimated_tokens: anchorTokens });
     onClose();
   }
 
@@ -124,6 +208,13 @@ export function PlansModal({
           A preview is a 10-second taste. A plan renders your whole song into a finished music video —
           and the tokens carry over to every video you make next.
         </p>
+        {anchorTokens != null && reelCovers != null && reelCovers >= 1 && (
+          <p className="mt-2.5 text-[13px] text-white/70">
+            This song renders full-length from{" "}
+            <span className="font-medium text-white">~{anchorTokens.toLocaleString()} tokens</span> — Reel's
+            first month covers it <span className="font-medium text-pulse">{reelCovers}×</span>.
+          </p>
+        )}
         <div className="mt-4 inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] p-1 text-[12px]">
           {(["monthly", "annual"] as const).map((p) => (
             <button
@@ -146,6 +237,10 @@ export function PlansModal({
           <PlanCard key={tier.id} tier={tier} period={period} />
         ))}
       </div>
+      <p className="mt-4 text-center text-[11px] text-white/40">
+        Cancel anytime · unused tokens stay yours all period
+      </p>
+      <FeedbackRow trigger={trigger} songId={song?.id} estimatedTokens={anchorTokens ?? undefined} />
     </Modal>
   );
 }

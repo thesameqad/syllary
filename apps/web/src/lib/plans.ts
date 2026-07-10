@@ -1,4 +1,4 @@
-import type { Plan } from "@syllary/shared";
+import { FIRST_SUB_BONUS, PLAN_CREDITS, type Plan } from "@syllary/shared";
 
 export const PLAN_ORDER: Record<Plan, number> = {
   free: 0,
@@ -33,6 +33,17 @@ export type PlanTier = {
   featured?: boolean;
 };
 
+/** One-time first-subscription bonus for a tier (server grants it in
+ *  applySubscription; FIRST_SUB_BONUS is the single source of truth). */
+export function bonusTokens(tier: PlanTier["id"]): number {
+  return FIRST_SUB_BONUS[tier];
+}
+
+/** Total tokens a brand-new subscriber gets in month one: plan grant + bonus. */
+export function firstMonthTokens(tier: PlanTier["id"]): number {
+  return PLAN_CREDITS[tier] + FIRST_SUB_BONUS[tier];
+}
+
 // IMPORTANT: keep this list aligned with what the backend actually enforces
 // (see lib/subscription.ts + packages/shared/src/account.ts PLAN_CREDITS).
 // Today the only enforced per-plan differentiator is the monthly token grant
@@ -48,7 +59,6 @@ export const PLAN_TIERS: PlanTier[] = [
     monthly: 6,
     annual: 48,
     features: [
-      { text: "5,000 tokens / month" },
       { text: "All three generation modes" },
       { text: "Every export format" },
       { text: "Inline lyric editing" },
@@ -62,7 +72,7 @@ export const PLAN_TIERS: PlanTier[] = [
     monthly: 14,
     annual: 120,
     features: [
-      { text: "15,000 tokens / month — 3× Starter" },
+      { text: "3× the Starter tokens" },
       { text: "Everything in Starter" },
       { text: "API access", comingSoon: true },
     ],
@@ -76,7 +86,7 @@ export const PLAN_TIERS: PlanTier[] = [
     monthly: 29,
     annual: 240,
     features: [
-      { text: "60,000 tokens / month — 4× Creator" },
+      { text: "4× the Creator tokens" },
       { text: "Everything in Creator" },
       { text: "Early access to new features", comingSoon: true },
     ],
@@ -89,8 +99,8 @@ export const PLAN_TIERS: PlanTier[] = [
     monthly: 39,
     annual: 390,
     features: [
-      { text: "80,000 tokens / month" },
-      { text: "≈ 5 videos on Lite, 2–3 on Medium/Pro" },
+      { text: "≈ 11 videos your first month (Lite)" },
+      { text: "then ≈ 5 Lite or 2–3 Medium/Pro monthly" },
       { text: "All 3 video styles" },
       { text: "Unlimited lyric files" },
     ],
@@ -103,8 +113,8 @@ export const PLAN_TIERS: PlanTier[] = [
     monthly: 99,
     annual: 990,
     features: [
-      { text: "220,000 tokens / month" },
-      { text: "≈ 13 videos on Lite, 5–9 on Medium/Pro" },
+      { text: "≈ 20 videos your first month (Lite)" },
+      { text: "then ≈ 13 Lite or 5–9 Medium/Pro monthly" },
       { text: "Everything in Reel" },
       { text: "Unlimited lyric files" },
     ],
@@ -118,8 +128,8 @@ export const PLAN_TIERS: PlanTier[] = [
     monthly: 199,
     annual: 1990,
     features: [
-      { text: "620,000 tokens / month" },
-      { text: "≈ 38 videos on Lite, 14–25 on Medium/Pro" },
+      { text: "≈ 45 videos your first month (Lite)" },
+      { text: "then ≈ 38 Lite or 14–25 Medium/Pro monthly" },
       { text: "Best token value (2× rate)" },
       { text: "Everything in Studio" },
     ],

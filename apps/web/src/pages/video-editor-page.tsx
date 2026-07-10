@@ -29,6 +29,7 @@ import {
   LITE_CLIP_MAX_SECONDS,
   type ReviewSegment,
   reRenderTokens,
+  type Song,
   singleClipTokens,
   singleImageTokens,
   singlePlateTokens,
@@ -188,6 +189,7 @@ function VideoEditorInner() {
 
   const [job, setJob] = useState<VideoJob | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [song, setSong] = useState<Song | null>(null);
   const [songTitle, setSongTitle] = useState<string>("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -283,6 +285,7 @@ function VideoEditorInner() {
         const song = await getSong(songId);
         if (cancelled) return;
         setAudioUrl(song.audioUrl);
+        setSong(song);
         setSongTitle(song.title || song.originalFilename || "Untitled");
         if (jobIdParam) {
           const j = await getVideoJob(jobIdParam, { scenes: true });
@@ -395,7 +398,7 @@ function VideoEditorInner() {
         reducedMotion={reducedMotion}
         onPlans={() => setPlansOpen(true)}
       />
-      <PlansModal open={plansOpen} onClose={() => setPlansOpen(false)} trigger="video_editor" />
+      <PlansModal open={plansOpen} onClose={() => setPlansOpen(false)} trigger="video_editor" song={song} />
     </EditorFrame>
   );
 }

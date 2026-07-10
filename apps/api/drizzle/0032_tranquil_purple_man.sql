@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "first_sub_bonus_at" timestamp with time zone;
