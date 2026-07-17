@@ -639,6 +639,18 @@ function buildMotionPrompt(job: VideoJobRow, seg: VideoSegment): string {
       ].join(" ");
 }
 
+/** Seedance 2.0's content moderation rejects any frame it reads as a real-person
+ *  likeness — and it can't tell our AI-generated photoreal backdrops from photos,
+ *  so songs whose scenes contain people trip it on every attempt (observed Jul
+ *  2026: 6/6 Cinematic failures, all `content_policy_violation`, one paying
+ *  customer burned twice). Deterministic per frame, so retrying the same route
+ *  is pointless — the recovery is the permissive fallback model. */
+function isModerationRefusal(message: string): boolean {
+  return /content_policy_violation|content[_ ]policy|likeness|real pe(?:ople|rson)|sensitive content/i.test(
+    message,
+  );
+}
+
 /** Generate ONE motion clip for a segment (animating its frame; for Cinematic also
  *  morphing into the next frame), fit it to the segment's window, persist it to R2
  *  (reusable + editable), and return the local fitted-clip filename. The per-model
@@ -666,17 +678,44 @@ async function generateSegmentClip(
     const permissive = job.motionMode === "ai_permissive";
     const next = segments.find((s) => s.index === seg.index + 1);
     const lastFrameUrl = next?.imageKey ? await presignGet(next.imageKey) : undefined;
-    genDur = permissive
-      ? Math.min(15, Math.max(3, Math.ceil(dur)))
-      : Math.min(CINEMATIC_MAX_SECONDS, Math.max(CINEMATIC_MIN_SECONDS, Math.ceil(dur)));
-    raw = await generateMotionClip({
-      route: permissive ? "cinematic_permissive" : "cinematic",
-      prompt,
-      firstFrameUrl,
-      lastFrameUrl, // first→last morph (undefined on the final clip)
-      aspectRatio,
-      durationSeconds: genDur,
-    });
+    if (permissive) {
+      genDur = Math.min(15, Math.max(3, Math.ceil(dur)));
+      raw = await generateMotionClip({
+        route: "cinematic_permissive",
+        prompt,
+        firstFrameUrl,
+        lastFrameUrl, // first→last morph (undefined on the final clip)
+        aspectRatio,
+        durationSeconds: genDur,
+      });
+    } else {
+      genDur = Math.min(CINEMATIC_MAX_SECONDS, Math.max(CINEMATIC_MIN_SECONDS, Math.ceil(dur)));
+      try {
+        raw = await generateMotionClip({
+          route: "cinematic",
+          prompt,
+          firstFrameUrl,
+          lastFrameUrl, // first→last morph (undefined on the final clip)
+          aspectRatio,
+          durationSeconds: genDur,
+        });
+      } catch (e) {
+        if (!isModerationRefusal((e as Error).message ?? "")) throw e;
+        // Seedance refused THIS frame as a possible real-person likeness. Animate
+        // just this scene on the permissive model and keep the job alive — one
+        // flagged backdrop must not sink an 80k-token render. The rest of the
+        // job stays on Seedance.
+        genDur = Math.min(15, Math.max(3, Math.ceil(dur)));
+        raw = await generateMotionClip({
+          route: "cinematic_permissive",
+          prompt,
+          firstFrameUrl,
+          lastFrameUrl,
+          aspectRatio,
+          durationSeconds: genDur,
+        });
+      }
+    }
   } else if (job.imageQuality === "lite") {
     // Living Scenes on the Lite tier: Seedance 1.5 Pro @480p silent
     // (4–12s clips; fitClipToDuration trims to the real window). The stitch
