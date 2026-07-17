@@ -658,6 +658,16 @@ export async function songsRoutes(app: FastifyInstance) {
       predictionId = await startSeparation(audioUrl, mode);
     } catch (err) {
       req.log.error(err);
+      // Page on this: when the separation provider rejects the kickoff (credit
+      // exhausted, revoked key, deprecated model, provider incident), EVERY
+      // upload fails identically — the Jul 12 2026 outage ran 44h unseen
+      // because this path only logged. The handler replies gracefully, so the
+      // global Fastify→Sentry hook never sees it.
+      Sentry.captureException(new Error(`Song processing kickoff failed: ${(err as Error).message}`), {
+        level: "error",
+        tags: { feature: "song_pipeline", stage: "separation_kickoff" },
+        extra: { songId: row.id, mode },
+      });
       await db
         .update(songs)
         .set({ status: "failed", error: "Could not start processing.", updatedAt: new Date() })
@@ -776,6 +786,12 @@ export async function songsRoutes(app: FastifyInstance) {
       predictionId = await startSeparation(audioUrl, mode);
     } catch (err) {
       req.log.error(err);
+      // Same provider-kickoff blind spot as /process above — page on it.
+      Sentry.captureException(new Error(`Song regeneration kickoff failed: ${(err as Error).message}`), {
+        level: "error",
+        tags: { feature: "song_pipeline", stage: "separation_kickoff" },
+        extra: { songId: row.id, mode },
+      });
       return reply.code(502).send({ error: "Could not start regeneration." });
     }
 
