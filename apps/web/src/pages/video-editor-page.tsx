@@ -188,12 +188,24 @@ function VideoEditorInner() {
   const reducedMotion = usePrefersReducedMotion();
 
   const [job, setJob] = useState<VideoJob | null>(null);
+  // First-open explainer for comp-claim ("gift") jobs: the user arrived from an
+  // email onto the busiest page in the product while it generates scenes on its
+  // own — one modal turns confusion into delight. Shown once per job.
+  useEffect(() => {
+    if (!job?.isComp) return;
+    const key = `comp_gift_seen:${job.id}`;
+    if (sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, "1");
+    setGiftOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.isComp, job?.id]);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [song, setSong] = useState<Song | null>(null);
   const [songTitle, setSongTitle] = useState<string>("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [plansOpen, setPlansOpen] = useState(false);
+  const [giftOpen, setGiftOpen] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [discarding, setDiscarding] = useState(false);
@@ -399,6 +411,40 @@ function VideoEditorInner() {
         onPlans={() => setPlansOpen(true)}
       />
       <PlansModal open={plansOpen} onClose={() => setPlansOpen(false)} trigger="video_editor" song={song} />
+      <Modal
+        open={giftOpen}
+        onClose={() => setGiftOpen(false)}
+        title="A gift: your full video"
+        widthClass="max-w-[440px]"
+      >
+        <div className="space-y-3 text-[13px] leading-relaxed text-white/70">
+          <p>
+            This is the studio — and your whole song is being turned into scenes right now,{" "}
+            <strong className="text-white">on us</strong>.
+          </p>
+          <ul className="space-y-2">
+            <li>🖼️ Every scene image appearing here is free — already covered.</li>
+            <li>
+              ✏️ Want a scene different? Tell it what to show and regenerate — that part costs
+              tokens (the price is on the button).
+            </li>
+            <li>
+              🎬 Happy with it? Hit <strong className="text-white">Generate video</strong> — your
+              first full render is free.
+            </li>
+          </ul>
+          <p className="text-[11px] text-white/40">
+            One-time gift. Downloads carry a small watermark — a video plan removes it.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setGiftOpen(false)}
+          className="mt-5 w-full rounded-full bg-pulse py-2.5 text-[13px] font-medium text-white transition-transform hover:scale-[1.02]"
+        >
+          Show me my scenes →
+        </button>
+      </Modal>
     </EditorFrame>
   );
 }
@@ -475,13 +521,14 @@ function EditorBody({
     : segments
         .filter((s) => s.textMode === "plates")
         .reduce((n, s) => n + (s.lines?.filter((l) => l.text.trim()).length ?? 0) - s.platesReady, 0);
-  const finalizeCost =
-    (job.isEdit
-      ? reRenderTokens(job.model, segments, job.imageQuality)
-      : !job.prerenderImages
-        ? blanks * imageCost + reRenderTokens(job.model, segments, job.imageQuality)
-        : 0) +
-    Math.max(0, platesDue) * singlePlateTokens();
+  const finalizeCost = job.isComp
+    ? 0 // comp claim: the whole first render is a gift — mirror the server
+    : (job.isEdit
+        ? reRenderTokens(job.model, segments, job.imageQuality)
+        : !job.prerenderImages
+          ? blanks * imageCost + reRenderTokens(job.model, segments, job.imageQuality)
+          : 0) +
+      Math.max(0, platesDue) * singlePlateTokens();
 
   const totalSeconds = segments.length ? Math.max(...segments.map((s) => s.clipEnd)) : 0;
 
@@ -698,7 +745,11 @@ function EditorBody({
                     ) : (
                       <Clapperboard className="h-4 w-4" />
                     )}
-                    {finalizeCost > 0 ? `Generate video · ${finalizeCost}` : "Generate video"}
+                    {job.isComp
+                      ? "Generate video · Free 🎁"
+                      : finalizeCost > 0
+                        ? `Generate video · ${finalizeCost}`
+                        : "Generate video"}
                   </Button3D>
                 </div>
               </>
@@ -877,7 +928,11 @@ function EditorBody({
               disabled={!allGenerated || inFlight > 0 || finalizing}
             >
               {finalizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />}
-              {finalizeCost > 0 ? `Generate video · ${finalizeCost} tokens` : "Generate video"}
+              {job.isComp
+                ? "Generate video · Free 🎁"
+                : finalizeCost > 0
+                  ? `Generate video · ${finalizeCost} tokens`
+                  : "Generate video"}
             </Button3D>
           </div>
         </div>

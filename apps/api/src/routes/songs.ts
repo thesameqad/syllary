@@ -186,6 +186,7 @@ async function activeVideoJobFor(songId: string): Promise<VideoJob | null> {
     prerenderImages: row.prerenderImages,
     isPreview: row.isPreview,
     isEdit: row.reuseFrames && row.mode === "manual",
+    isComp: row.isComp,
     totalSegments: row.totalSegments,
     completedSegments: row.completedSegments,
     segments,

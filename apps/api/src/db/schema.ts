@@ -206,6 +206,9 @@ export const videoJobs = pgTable(
     motionMode: text("motion_mode").notNull().default("ffmpeg"),
     // True when this job renders only a short preview (not the full song).
     isPreview: boolean("is_preview").notNull().default(false),
+    // Comp claim job (post-preview rescue gift): first generation of each scene
+    // and the finalize render are free; regenerations still charge.
+    isComp: boolean("is_comp").notNull().default(false),
     // True when seeded with another style's already-generated frames (imageKeys):
     // the pipeline skips the segment rebuild + image generation and only renders
     // motion. Always an autopilot full render.
@@ -364,6 +367,9 @@ export const users = pgTable("users", {
   // granted. Permanent once-per-user marker — stripe_subscription_id is nulled
   // on cancel, so cancel→resubscribe would otherwise re-farm the bonus.
   firstSubBonusAt: timestamp("first_sub_bonus_at", { withTimezone: true }),
+  // When the one-time comp full-video claim (the post-preview rescue gift) was
+  // used. Permanent once-per-user marker.
+  compVideoClaimedAt: timestamp("comp_video_claimed_at", { withTimezone: true }),
   // First-touch SEO landing page this account arrived from (slug, no leading
   // slash). Stamped once on the first authed visit; powers per-landing
   // registration + upgrade attribution.

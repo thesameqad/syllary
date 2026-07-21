@@ -423,4 +423,76 @@ export const ADDED_PAGES: SeedPage[] = [
       { q: "Where do the streaming links come from?", a: "From a title and artist, or one link you paste — the matching platform links are gathered for the page." },
     ],
   },
+
+  // 161 — AI music video generator (tool-seeker intent; ads LP for "AI music
+  // to video" ad group). Vocabulary deliberately mirrors the dominant paid
+  // query family: "ai music video generator (free / from mp3 / from audio)",
+  // "song to video ai", "mp3 to music video", "turn song into video".
+  {
+    slug: "guides/ai-music-video-generator",
+    category: "guides",
+    renderType: "content",
+    title: "Turn your song into an AI music video",
+    metaTitle: "AI music video generator — song to video",
+    metaDescription:
+      "Upload your MP3 and turn it into a full AI music video — moving scenes, every lyric synced, 1080p. Watch a free preview of your own song first.",
+    blocks: [
+      {
+        kind: "paragraph",
+        text: "If you're looking for an AI music video generator, here's how this one works: upload your track — an MP3, WAV or FLAC — and AI builds a music video for it. Not a bars-and-waves visualizer and not a stock template: generated scenes that move with your song, with every lyric synced on screen as it's sung.",
+      },
+      {
+        kind: "badges",
+        items: [
+          "From MP3, WAV or FLAC",
+          "Full-length 1080p",
+          "Every lyric synced",
+          "No editing skills needed",
+          "YouTube & TikTok ready",
+        ],
+      },
+      {
+        kind: "steps",
+        items: [
+          { title: "Upload your song", text: "Any track you made — studio-recorded or AI-generated." },
+          { title: "Pick the look", text: "From a clean slideshow to scenes that move with the music." },
+          { title: "Preview, then render", text: "Watch a short preview of your own song first, then generate the full video." },
+        ],
+      },
+      {
+        kind: "paragraph",
+        text: "The preview is the honest part: before anything costs you, you see a real section of your own song as a finished video — your audio, your words, the style you picked. If you love it, render the full-length 1080p version and post it anywhere.",
+      },
+      {
+        kind: "table",
+        headers: ["Style", "What you get", "Best when"],
+        rows: [
+          ["Slideshow", "Designed stills that cut with the song", "You want it fast and clean"],
+          ["Living scenes", "Backdrops that drift and breathe", "You want motion without a film crew"],
+          ["Cinematic", "Fluid, animated shots", "The song deserves the big treatment"],
+        ],
+      },
+      {
+        kind: "callout",
+        text: "For your own or AI-generated songs only — not other artists' copyrighted recordings or AI covers of commercial songs.",
+      },
+      {
+        kind: "relatedLinks",
+        title: "Related",
+        items: [
+          { label: "Make a lyric video for your Suno track", href: "/guides/lyric-video-for-your-suno-track" },
+          { label: "How to make a lyric video", href: "/guides/how-to-make-a-lyric-video" },
+          { label: "Which lyric video style to pick", href: "/guides/how-to-make-a-lyric-video-for-a-song" },
+        ],
+      },
+      cta,
+    ],
+    faq: [
+      { q: "Is it free?", a: "Trying it is — you get a free preview of your own song as a video before paying anything. Full-length renders use a plan, and every plan starts with a one-time token bonus." },
+      { q: "Is this a lyric video or a music video?", a: "Both, honestly: the AI generates moving scenes like a music video, and your lyrics are synced inside them. If you'd rather have no words on screen, that's not what this makes." },
+      { q: "What files can I upload?", a: "MP3, WAV or FLAC — the audio file itself, up to a few minutes long. No project files or stems needed." },
+      { q: "Does it work with Suno or Udio songs?", a: "Yes — export the audio of your own generation from any AI music tool and upload it here." },
+      { q: "Do I need video editing skills?", a: "None. Upload the song, pick a style, and the video is generated — timing, scenes and lyrics included." },
+    ],
+  },
 ];

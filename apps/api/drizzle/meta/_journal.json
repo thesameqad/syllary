@@ -232,6 +232,13 @@
       "when": 1783664445631,
       "tag": "0032_tranquil_purple_man",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1784603128329,
+      "tag": "0033_broad_hannibal_king",
+      "breakpoints": true
     }
   ]
 }

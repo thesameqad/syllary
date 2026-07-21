@@ -303,6 +303,10 @@ export const videoJobSchema = z.object({
    *  swap scenes + re-render), not a first-time manual job. Lets the review UI
    *  show the discard affordance + the re-render token cost. */
   isEdit: z.boolean().default(false),
+  /** Comp claim job (the post-preview gift): scene generation + the final
+   *  render are free — the editor shows the gift explainer and a free
+   *  Generate button. Regenerations still charge. */
+  isComp: z.boolean().default(false),
   totalSegments: z.number(),
   completedSegments: z.number(),
   /** Per-line cards for manual review (empty until images are generated). */

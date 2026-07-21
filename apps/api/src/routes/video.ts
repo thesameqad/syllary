@@ -55,6 +55,8 @@ import {
   runVideoPipeline,
   toReviewSegment,
 } from "../lib/video-pipeline.js";
+import { env } from "../env.js";
+import { verifyCompClaim } from "../lib/comp-claim.js";
 
 async function toVideoJobDto(row: VideoJobRow, opts: { scenes?: boolean } = {}): Promise<VideoJob> {
   const videoUrl =
@@ -88,6 +90,7 @@ async function toVideoJobDto(row: VideoJobRow, opts: { scenes?: boolean } = {}):
     // A manual job seeded from a finished video's frames = a re-edit (reopened
     // into review to swap scenes + re-render), not a first-time manual render.
     isEdit: row.reuseFrames && row.mode === "manual",
+    isComp: row.isComp,
     // The editor needs this to compute the TRUE finalize cost (no-prerender jobs
     // pay for blank images + clips at finalize; prerendered jobs already paid).
     prerenderImages: row.prerenderImages,
@@ -306,6 +309,103 @@ async function startVideoJob(
 }
 
 export async function videoRoutes(app: FastifyInstance) {
+  // Comp full-video claim (the post-preview "gift" rescue): an HMAC-signed
+  // email link. Creates a manual-mode job whose FIRST render is on the house
+  // (is_comp — scene generations + finalize free, REgenerations charge), then
+  // redirects into the editor. Once per user ever; the link expires. No Clerk
+  // auth — the signature IS the auth, like the unsubscribe links; the editor
+  // itself still requires sign-in.
+  app.get<{ Querystring: { u?: string; s?: string; e?: string; t?: string } }>(
+    "/claim/full-video",
+    async (req, reply) => {
+      const { u, s, e, t } = req.query;
+      const expires = Number(e);
+      if (!u || !s || !t || !Number.isFinite(expires)) {
+        return reply.code(400).send({ error: "Invalid claim link." });
+      }
+      const check = verifyCompClaim(u, s, expires, t);
+      if (!check.ok) return reply.code(403).send({ error: "Invalid claim link." });
+
+      const [song] = await db.select().from(songs).where(eq(songs.id, s)).limit(1);
+      if (!song || song.userId !== u) return reply.code(404).send({ error: "Not found." });
+
+      // Re-clicks after a successful claim go straight back to the editor (or
+      // the finished video) — the gift is once-ever, the LINK stays usable.
+      const [existing] = await db
+        .select()
+        .from(videoJobs)
+        .where(and(eq(videoJobs.songId, s), eq(videoJobs.userId, u), eq(videoJobs.isComp, true)))
+        .orderBy(desc(videoJobs.createdAt))
+        .limit(1);
+      if (existing) {
+        return reply.redirect(`${env.APP_URL}/s/${s}/editor?job=${existing.id}&claimed=1`);
+      }
+
+      const [user] = await db.select().from(users).where(eq(users.id, u)).limit(1);
+      if (!user) return reply.code(404).send({ error: "Not found." });
+      if (user.compVideoClaimedAt) {
+        return reply.redirect(`${env.APP_URL}/s/${s}`);
+      }
+      if (check.expired) {
+        return reply.redirect(`${env.APP_URL}/s/${s}?claim=expired`);
+      }
+      if (song.status !== "ready" || !song.lyrics?.lines.length) {
+        return reply.code(400).send({ error: "This track isn't ready." });
+      }
+
+      // Inherit the look they already chose: their latest preview of this song.
+      const [preview] = await db
+        .select()
+        .from(videoJobs)
+        .where(and(eq(videoJobs.songId, s), eq(videoJobs.userId, u), eq(videoJobs.isPreview, true)))
+        .orderBy(desc(videoJobs.createdAt))
+        .limit(1);
+      if (!preview) return reply.code(400).send({ error: "Make a preview first." });
+
+      const [job] = await db
+        .insert(videoJobs)
+        .values({
+          songId: s,
+          userId: u,
+          status: "pending",
+          mode: "manual",
+          model: preview.model,
+          styleDescription: preview.styleDescription,
+          sceneBrief: preview.sceneBrief ?? null,
+          aspectRatio: preview.aspectRatio,
+          sceneGrouping: preview.sceneGrouping,
+          imageSize: preview.imageSize,
+          imageQuality: preview.imageQuality,
+          isPreview: false,
+          isComp: true,
+          reuseFrames: false,
+          segments: null,
+          characterImageKeys: preview.characterImageKeys ?? null,
+          elementIds: preview.elementIds ?? null,
+          // Pre-generate every scene image on claim (comped): the editor opens
+          // ALREADY FILLED — the user sees their video taking shape instantly
+          // instead of a wall of blank scenes. The expensive half (motion clips
+          // + assembly) still waits for their explicit "Generate video", so an
+          // abandoned claim costs images only.
+          prerenderImages: true,
+          motionMode: preview.model === "fast" ? "ffmpeg" : "ai",
+          tokensCharged: 0,
+        })
+        .returning();
+      if (!job) return reply.code(500).send({ error: "Could not start your video." });
+
+      await db
+        .update(users)
+        .set({ compVideoClaimedAt: new Date(), updatedAt: new Date() })
+        .where(eq(users.id, u));
+      captureServer(song.ownerHash, "comp_claimed", { song_id: s, style: preview.model });
+
+      // Plans the timeline then parks in review — the editor picks it up live.
+      void runVideoPipeline(job.id);
+      return reply.redirect(`${env.APP_URL}/s/${s}/editor?job=${job.id}&claimed=1`);
+    },
+  );
+
   // Kick off a lyric-video generation job for a ready song the caller owns.
   app.post<{ Params: { id: string } }>("/songs/:id/video", async (req, reply) => {
     const clerkId = await getAuthUserId(req);
@@ -821,7 +921,13 @@ export async function videoRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "This video isn't open for editing." });
       }
 
-      const cost = singleImageTokens(job.imageQuality as ImageQuality, job.imageSize as ImageSize);
+      // Comp jobs: the FIRST image of each scene is on the house (the gift is
+      // "see your full video"); regenerating an existing image charges normally.
+      const targetSeg = (job.segments ?? []).find((sg) => sg.index === index);
+      const comped = job.isComp && !targetSeg?.imageKey;
+      const cost = comped
+        ? 0
+        : singleImageTokens(job.imageQuality as ImageQuality, job.imageSize as ImageSize);
       if (user.credits < cost) {
         return reply.code(402).send({
           error: `Not enough tokens — regenerating a scene costs ${cost}. Upgrade for more.`,
@@ -843,11 +949,13 @@ export async function videoRoutes(app: FastifyInstance) {
         regensInFlight.delete(flightKey);
       }
 
-      // Charge only after a successful regeneration.
-      await db
-        .update(users)
-        .set({ credits: sql`GREATEST(${users.credits} - ${cost}, 0)`, updatedAt: new Date() })
-        .where(eq(users.id, user.id));
+      // Charge only after a successful regeneration (comped first-images are free).
+      if (cost > 0) {
+        await db
+          .update(users)
+          .set({ credits: sql`GREATEST(${users.credits} - ${cost}, 0)`, updatedAt: new Date() })
+          .where(eq(users.id, user.id));
+      }
 
       return reply.send(segment);
     },
@@ -1427,6 +1535,9 @@ export async function videoRoutes(app: FastifyInstance) {
         .reduce((n, s) => n + (s.lines?.filter((l) => l.text.trim() && !l.plateKey).length ?? 0), 0);
       charge += missingPlates * singlePlateTokens();
     }
+    // Comp claim jobs: the whole first render — remaining images, clips, plates
+    // — is on the house.
+    if (job.isComp) charge = 0;
     if (charge > 0 && user.credits < charge) {
       captureServer(`clerk:${clerkId}`, "paywall_viewed", {
         trigger: "tokens",
@@ -1468,6 +1579,13 @@ export async function videoRoutes(app: FastifyInstance) {
         style: job.model,
         cost_tokens: charge,
         reedit: true,
+      });
+    }
+    // The gift funnel's key step: a claimer committed to their free full render.
+    if (job.isComp) {
+      captureServer(`clerk:${clerkId}`, "comp_video_generated", {
+        song_id: job.songId,
+        style: job.model,
       });
     }
 

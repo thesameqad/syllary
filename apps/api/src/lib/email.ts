@@ -239,6 +239,120 @@ export function buildTokenFixEmail(opts: {
   };
 }
 
+/** Apology for the Jul 12-13 2026 processing outage (Replicate credit ran out;
+ *  every song upload failed for ~44h). Sent to affected signed-in users after
+ *  a +10,000-credit make-good was applied to their account. */
+export function buildOutageApologyEmail(opts: {
+  firstName?: string | null;
+  ctaUrl: string;
+}): { subject: string; html: string } {
+  const greeting = opts.firstName ? `Hi ${opts.firstName},` : "Hi there,";
+  return {
+    subject: "Sorry about yesterday — it's fixed, and 10,000 credits are on us",
+    html: layout(
+      p(greeting) +
+        p(
+          "Yesterday we had an outage: songs uploaded to Syllary failed to process, and yours was one of them. Sorry about that — that's not the first impression we want to make.",
+        ) +
+        p(
+          "We've been working hard on it and everything is live again. As a way to apologize, <strong>we've added 10,000 free credits to your account.</strong> Enjoy.",
+        ) +
+        p("Your song didn't make it through during the outage, so give it one more try — it'll work this time.") +
+        button(opts.ctaUrl, "Upload your song again →") +
+        p(
+          `I'm Anton, the founder — <strong><a href="mailto:anton@syllary.com" style="color:${BRAND.red};">anton@syllary.com</a></strong> is my direct email. If anything else breaks or behaves oddly, write me. I read everything.`,
+        ) +
+        p("Make something great,<br/>Anton · Syllary"),
+    ),
+  };
+}
+
+/** Personal founder note to a user whose subscription checkout failed at the
+ *  payment step (typo'd card, BNPL decline, ...). One-off sends, deduped via
+ *  email_log — see scripts/send-checkout-recovery.ts. */
+export function buildCheckoutRecoveryEmail(opts: {
+  firstName?: string | null;
+  ctaUrl: string;
+  /** One sentence naming what happened to THEIR payment, e.g. "your Premiere
+   *  checkout on July 8 didn't complete — the bank flagged a mistyped card
+   *  number". Factual, blame-free, and always paired with "nothing was charged". */
+  whatHappened: string;
+}): { subject: string; html: string } {
+  const greeting = opts.firstName ? `Hi ${opts.firstName},` : "Hi there,";
+  return {
+    subject: "Your Syllary checkout didn't go through — nothing was charged",
+    html: layout(
+      p(greeting) +
+        p(
+          `I'm Anton, the founder of Syllary. I saw that ${opts.whatHappened} — and to be clear, <strong>nothing was charged.</strong>`,
+        ) +
+        p(
+          "Your song is still in your account, one step from the full video. Checkout takes a minute — and Apple Pay / Google Pay work too, no card-typing required. Every first subscription also comes with a <strong>one-time token bonus</strong> (+100,000 on the video plans — roughly a first month of ≈ 11 full videos on Reel).",
+        ) +
+        button(opts.ctaUrl, "Pick up where you left off →") +
+        p(
+          `And if something else got in the way — the price, a bug, anything — just reply. <strong><a href="mailto:anton@syllary.com" style="color:${BRAND.red};">anton@syllary.com</a></strong> is my direct email and I read everything.`,
+        ) +
+        p("Make something great,<br/>Anton · Syllary"),
+    ),
+  };
+}
+
+/** "You said you'd need to see it first — here it is": a comped full video,
+ *  rendered founder-side for a skeptical free user. One-off sends. */
+export function buildCompVideoEmail(opts: {
+  firstName?: string | null;
+  songTitle: string;
+  ctaUrl: string;
+}): { subject: string; html: string } {
+  const greeting = opts.firstName ? `Hi ${opts.firstName},` : "Hi there,";
+  return {
+    subject: `Fair enough — I rendered "${opts.songTitle}" in full. On us.`,
+    html: layout(
+      p(greeting) +
+        p(
+          `Anton here, the founder of Syllary. You said you'd need to see what it looks like before you pay — that's fair. So I did something about it.`,
+        ) +
+        p(
+          `First: <strong>${opts.songTitle} is a genuinely good track.</strong> And it made one hell of a video — golden-hour western scenes, your words living inside the frames, the full three minutes, synced to your audio. I rendered the whole thing for you, no charge:`,
+        ) +
+        button(opts.ctaUrl, "Watch your full video →") +
+        p(
+          "If it's what you wanted, a plan gets you the clean download and your next videos. If it's <em>not</em> what you wanted, reply and tell me what's off — I read everything, and blunt feedback is the most useful kind.",
+        ) +
+        p("Make something great,<br/>Anton · Syllary"),
+    ),
+  };
+}
+
+/** The comp full-video claim ("gift") email: sent ~3h after a preview-watcher
+ *  goes idle without buying. The claim link opens their song in the editor with
+ *  the first full render comped. Honest urgency: the link really expires. */
+export function buildCompClaimEmail(opts: {
+  firstName?: string | null;
+  songTitle: string;
+  claimUrl: string;
+}): { subject: string; html: string } {
+  const greeting = opts.firstName ? `Hi ${opts.firstName},` : "Hi there,";
+  return {
+    subject: `A gift, 24 hours only: your full "${opts.songTitle}" video — on us`,
+    html: layout(
+      p(greeting) +
+        p(
+          `You made a preview of <strong>${opts.songTitle}</strong> earlier — the words in the scene, synced to your track. A preview is a taste. Here's the whole meal, on us:`,
+        ) +
+        p(
+          `The link below opens your song in the studio. Shape the scenes if you want — or just hit <strong>Generate video</strong> and get the full thing, every line, start to finish. <strong>Your first full render is free.</strong> No card, no tokens.`,
+        ) +
+        button(opts.claimUrl, "Claim your free full video →") +
+        p(
+          `One honest catch: this link expires in <strong>24 hours</strong>, and it's a one-time gift per account. After that, full renders are back to normal pricing.`,
+        ) +
+        p("Make something great,<br/>Anton · Syllary"),
+    ),
+  };
+}
+
 /** Look up the freshest user row for email decisions. */
 export async function userForEmail(userId: string): Promise<UserRow | null> {
   const [u] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
