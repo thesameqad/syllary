@@ -10,7 +10,8 @@ export type SignInPromptReason =
   | "inline-edit"
   | "regenerate"
   | "sync-timing"
-  | "demo-limit";
+  | "demo-limit"
+  | "video";
 
 const COPY: Record<SignInPromptReason, { title: string; body: string }> = {
   download: {
@@ -41,6 +42,10 @@ const COPY: Record<SignInPromptReason, { title: string; body: string }> = {
     title: "You've used your free demo",
     body: "Sign up free and we'll drop tokens in your account — enough to turn your own song into a full synced lyric video. No credit card.",
   },
+  video: {
+    title: "Sign up to generate a music video",
+    body: "Create a free account and turn this song into an AI music video — a scene painted for every line, synced to your track. Preview it free.",
+  },
 };
 
 type Perk = { icon: typeof Download; label: string };
@@ -58,11 +63,19 @@ const DEMO_LIMIT_PERKS: Perk[] = [
   { icon: Download, label: "Every synced lyric file, ready to ship" },
 ];
 
+/** The video prompt sells the flagship product — the thing most visitors came for. */
+const VIDEO_PERKS: Perk[] = [
+  { icon: Film, label: "Turn this song into an AI music video" },
+  { icon: Sparkles, label: "Free tokens to start — preview included" },
+  { icon: Download, label: "Every synced lyric file, ready to ship" },
+];
+
 export function SignInPromptModal({
   open,
   reason,
   onClose,
   onCtaClick,
+  redirectTo,
 }: {
   open: boolean;
   reason: SignInPromptReason;
@@ -70,6 +83,9 @@ export function SignInPromptModal({
   /** Fired when a CTA is clicked, before navigation — lets callers track intent
    *  (e.g. the lyric-video demo funnel's `demo_signup_clicked`). */
   onCtaClick?: (target: "sign-up" | "sign-in") => void;
+  /** Where to land after auth (e.g. back on the song page so an anonymous
+   *  upload can be claimed). Clerk's redirect_url beats fallbackRedirectUrl. */
+  redirectTo?: string;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -81,7 +97,9 @@ export function SignInPromptModal({
   }, [open, onClose]);
 
   const copy = COPY[reason];
-  const perks = reason === "demo-limit" ? DEMO_LIMIT_PERKS : PERKS;
+  const perks =
+    reason === "demo-limit" ? DEMO_LIMIT_PERKS : reason === "video" ? VIDEO_PERKS : PERKS;
+  const authQuery = redirectTo ? `?redirect_url=${encodeURIComponent(redirectTo)}` : "";
 
   return (
     <AnimatePresence>
@@ -152,7 +170,7 @@ export function SignInPromptModal({
 
               <div className="mt-6 flex flex-col gap-2.5">
                 <Link
-                  to="/sign-up"
+                  to={`/sign-up${authQuery}`}
                   onClick={() => {
                     onCtaClick?.("sign-up");
                     onClose();
@@ -163,7 +181,7 @@ export function SignInPromptModal({
                   Create your free account
                 </Link>
                 <Link
-                  to="/sign-in"
+                  to={`/sign-in${authQuery}`}
                   onClick={() => {
                     onCtaClick?.("sign-in");
                     onClose();

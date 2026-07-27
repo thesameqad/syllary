@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { and, desc, eq, isNotNull, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import {
   type AspectRatio,
   canRemoveWatermark,
@@ -43,6 +43,7 @@ import { db } from "../db/client.js";
 import { env } from "../env.js";
 import { ratings, songs, type SongRow, songVideos, users, type UserRow, videoJobs } from "../db/schema.js";
 import { getAuthUserId } from "../lib/clerk.js";
+import { ownerHash } from "../lib/hash.js";
 import { deleteObject, objectSize, presignGet, presignPut, putObject } from "../lib/r2.js";
 import {
   getPrediction,
@@ -1314,6 +1315,26 @@ export async function songsRoutes(app: FastifyInstance) {
     const clerkId = await getAuthUserId(req);
     if (clerkId && row.userId) {
       canEdit = (await lookupUserId(clerkId)) === row.userId;
+    } else if (clerkId && !row.userId) {
+      // Claim an anonymous upload: a signed-in user viewing an ownerless song
+      // from the same device (IP+UA hash) that uploaded it adopts it into
+      // their library. This is what lets the "sign up to generate a video"
+      // prompt land back on a song the new account actually owns. ownerHash
+      // stays unchanged so the anonymous free-song quota keeps counting it.
+      const hash = ownerHash(req.ip, req.headers["user-agent"] ?? "");
+      if (row.ownerHash === hash) {
+        const user = await getOrCreateUser(clerkId);
+        const [claimed] = await db
+          .update(songs)
+          .set({ userId: user.id })
+          .where(and(eq(songs.id, row.id), isNull(songs.userId)))
+          .returning();
+        if (claimed) {
+          row = claimed;
+          canEdit = true;
+          captureServer(`clerk:${clerkId}`, "song_claimed", { song_id: row.id });
+        }
+      }
     }
     return reply.send(await toSongDto(row, canEdit));
   });

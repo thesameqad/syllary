@@ -278,6 +278,7 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
           open={signInPromptReason !== null}
           reason={signInPromptReason ?? "regenerate"}
           onClose={() => setSignInPromptReason(null)}
+          redirectTo={songId ? `/s/${songId}` : undefined}
         />
       </Frame>
     );
@@ -393,10 +394,21 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
         toolbarLeft={
           showOwnerUi || song.isPublic ? (
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-1.5">
-              {song.canEdit && (
+              {(song.canEdit || !signedIn) && (
                 <motion.button
                   type="button"
-                  onClick={() => setVideoOpen(true)}
+                  onClick={() => {
+                    // Anonymous uploaders see the button too — the flagship CTA
+                    // must never be invisible on their own song. Clicking it
+                    // sells the video behind the sign-up prompt; after auth
+                    // they land back here and the API claims the song.
+                    if (!song.canEdit) {
+                      captureClient("video_signup_prompted", { song_id: song.id });
+                      promptSignIn("video");
+                      return;
+                    }
+                    setVideoOpen(true);
+                  }}
                   style={{ transformPerspective: 600 }}
                   whileHover={{ y: -2, rotateX: -7, scale: 1.04 }}
                   whileTap={{ scale: 0.96 }}
@@ -499,6 +511,7 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
         open={signInPromptReason !== null}
         reason={signInPromptReason ?? "download"}
         onClose={() => setSignInPromptReason(null)}
+        redirectTo={songId ? `/s/${songId}` : undefined}
       />
 
       {song.canEdit && (
