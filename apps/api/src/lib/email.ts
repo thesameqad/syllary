@@ -325,30 +325,36 @@ export function buildCompVideoEmail(opts: {
   };
 }
 
-/** The comp full-video claim ("gift") email: sent ~3h after a preview-watcher
- *  goes idle without buying. The claim link opens their song in the editor with
- *  the first full render comped. Honest urgency: the link really expires. */
+/** The comp full-video claim ("gift") email: sent after a preview-watcher goes
+ *  idle without buying. The claim link opens their song in the editor with the
+ *  first full render comped. V2 (Jul 25): transactional-style subject (the
+ *  "gift/free/24 hours" v1 subject converted 0/18 — likely spam-foldered),
+ *  unsubscribe link for deliverability/compliance, longer expiry. */
 export function buildCompClaimEmail(opts: {
+  userId: string;
   firstName?: string | null;
   songTitle: string;
   claimUrl: string;
+  expiresHours: number;
 }): { subject: string; html: string } {
   const greeting = opts.firstName ? `Hi ${opts.firstName},` : "Hi there,";
+  const days = Math.round(opts.expiresHours / 24);
   return {
-    subject: `A gift, 24 hours only: your full "${opts.songTitle}" video — on us`,
+    subject: `“${opts.songTitle}” — your full video is waiting in the studio`,
     html: layout(
       p(greeting) +
         p(
-          `You made a preview of <strong>${opts.songTitle}</strong> earlier — the words in the scene, synced to your track. A preview is a taste. Here's the whole meal, on us:`,
+          `You previewed <strong>${opts.songTitle}</strong> — the words living in the scene, synced to your track. The full version is set up in the studio now: every line, start to finish.`,
         ) +
         p(
-          `The link below opens your song in the studio. Shape the scenes if you want — or just hit <strong>Generate video</strong> and get the full thing, every line, start to finish. <strong>Your first full render is free.</strong> No card, no tokens.`,
+          `Open it below. Adjust any scene you want, or just hit <strong>Generate video</strong> — this first full render is covered by us, as a one-time thing. No card, no tokens.`,
         ) +
-        button(opts.claimUrl, "Claim your free full video →") +
+        button(opts.claimUrl, "Open your video in the studio →") +
         p(
-          `One honest catch: this link expires in <strong>24 hours</strong>, and it's a one-time gift per account. After that, full renders are back to normal pricing.`,
+          `The studio link stays live for <strong>${days} days</strong>. After that, full renders go back to normal pricing.`,
         ) +
         p("Make something great,<br/>Anton · Syllary"),
+      { unsubscribeUrl: unsubscribeUrl(opts.userId) },
     ),
   };
 }

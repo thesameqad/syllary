@@ -5,7 +5,7 @@ import { emailLog, songs, users, videoJobs } from "../db/schema.js";
 import { env } from "../env.js";
 import { compClaimUrl } from "../lib/comp-claim.js";
 import { buildCompClaimEmail, sendOnce } from "../lib/email.js";
-import { captureServer } from "../lib/posthog.js";
+import { captureServer, shutdownPosthog } from "../lib/posthog.js";
 
 // Send the comp full-video claim ("gift") email for one user+song. Manual
 // trigger for now — the T+3h automation reuses this exact machinery later.
@@ -22,7 +22,7 @@ if (!emailArg || !songIdArg) {
 const email: string = emailArg;
 const songId: string = songIdArg;
 const API_BASE = process.env.API_BASE_URL ?? "http://localhost:3000";
-const EXPIRES_HOURS = 24;
+const EXPIRES_HOURS = 72;
 
 async function main(): Promise<void> {
   // Resolve via the song's OWNER (an email can map to several Clerk accounts).
@@ -53,7 +53,7 @@ async function main(): Promise<void> {
   const first = u.name?.trim().split(/\s+/)[0] || null;
   const title = song.title || "your song";
   await sendOnce({ id: u.id, email: u.email, emailOptOut: u.emailOptOut }, `comp_claim:${songId}`, () =>
-    buildCompClaimEmail({ firstName: first, songTitle: title, claimUrl: url }),
+    buildCompClaimEmail({ userId: u.id, firstName: first, songTitle: title, claimUrl: url, expiresHours: EXPIRES_HOURS }),
   );
   const [delivered] = await db
     .select({ sentAt: emailLog.sentAt })
@@ -66,6 +66,7 @@ async function main(): Promise<void> {
     captureServer(song.ownerHash, "comp_claim_sent", { song_id: songId });
   }
   console.log(delivered ? `Sent ✅ (${String(delivered.sentAt)})` : "NOT sent ❌");
+  await shutdownPosthog(); // flush the funnel event before the process exits
   process.exit(delivered ? 0 : 1);
 }
 
