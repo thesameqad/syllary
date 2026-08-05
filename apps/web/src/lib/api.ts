@@ -268,11 +268,12 @@ function urlFrom(data: unknown): string {
 export async function startCheckout(
   tier: CheckoutRequest["tier"],
   billingPeriod: BillingPeriod,
+  songId?: string,
 ): Promise<string> {
   const res = await fetch(`${API_BASE}/api/billing/checkout`, {
     method: "POST",
     headers: { "content-type": "application/json", ...(await authHeaders()) },
-    body: JSON.stringify({ tier, billingPeriod }),
+    body: JSON.stringify({ tier, billingPeriod, ...(songId ? { songId } : {}) }),
   });
   const data: unknown = await res.json();
   if (!res.ok) throw new ApiError(errorMessage(data, "Could not start checkout."), res.status);

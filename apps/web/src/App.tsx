@@ -9,6 +9,7 @@ import { EmbedPage } from "@/pages/embed-page";
 import { SeoLandingPage } from "@/pages/seo-landing-page";
 import { SignInPage, SignUpPage } from "@/pages/auth-pages";
 import { AccountPage } from "@/pages/account-page";
+import { CheckoutRetryPage } from "@/pages/checkout-retry-page";
 import { DashboardLayout } from "@/components/dashboard/dashboard-layout";
 import { DashboardPage } from "@/pages/dashboard-page";
 import { UploadPage } from "@/pages/upload-page";
@@ -68,6 +69,7 @@ export function App() {
       <Route path="/sign-in/*" element={<SignInPage />} />
       <Route path="/sign-up/*" element={<SignUpPage />} />
       <Route path="/account" element={<AccountPage />} />
+      <Route path="/checkout/retry" element={<CheckoutRetryPage />} />
       <Route element={<DashboardLayout />}>
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/upload" element={<UploadPage />} />

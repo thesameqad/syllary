@@ -83,6 +83,15 @@ export async function billingRoutes(app: FastifyInstance) {
         .send({ error: "You already have an active plan. Change it from your account." });
     }
 
+    // Declines and deliberate cancels both land on the retry screen — it names
+    // the plan, explains that nothing was charged, and offers a one-click
+    // restart. Payers convert within minutes of first attempt; this is the
+    // in-flow half of checkout recovery (the 45-min email is the backstop).
+    const retryQs = new URLSearchParams({
+      tier: parsed.data.tier,
+      period: parsed.data.billingPeriod,
+      ...(parsed.data.songId ? { song: parsed.data.songId } : {}),
+    });
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer,
@@ -90,7 +99,7 @@ export async function billingRoutes(app: FastifyInstance) {
       // session_id lets the success page fire a deduped purchase conversion
       // (Stripe substitutes the real id into the template).
       success_url: `${env.APP_URL}/account?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${env.APP_URL}/#pricing`,
+      cancel_url: `${env.APP_URL}/checkout/retry?${retryQs.toString()}`,
       allow_promotion_codes: true,
     });
     if (!session.url) return reply.code(502).send({ error: "Could not start checkout." });
@@ -103,7 +112,11 @@ export async function billingRoutes(app: FastifyInstance) {
     void recordEvent("checkout_started", {
       ownerHash: `clerk:${clerkId}`,
       userId: user.id,
-      props: { tier: parsed.data.tier, period: parsed.data.billingPeriod },
+      props: {
+        tier: parsed.data.tier,
+        period: parsed.data.billingPeriod,
+        songId: parsed.data.songId ?? null,
+      },
     });
     return reply.send({ url: session.url });
   });

@@ -52,7 +52,7 @@ function PlanButton({
     setLoading(true);
     setError(null);
     try {
-      window.location.href = await startCheckout(tier, period);
+      window.location.href = await startCheckout(tier, period, songId);
     } catch (err) {
       setLoading(false);
       setError(err instanceof ApiError ? err.message : "Something went wrong.");

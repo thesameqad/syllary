@@ -68,6 +68,9 @@ export type BillingPeriod = z.infer<typeof billingPeriodSchema>;
 export const checkoutRequestSchema = z.object({
   tier: z.enum(PAID_TIERS),
   billingPeriod: billingPeriodSchema,
+  /** Song the buyer was on when they hit the paywall — carried through Stripe's
+   *  cancel URL so the retry screen can lead them back to their video. */
+  songId: z.string().uuid().optional(),
 });
 export type CheckoutRequest = z.infer<typeof checkoutRequestSchema>;
 
