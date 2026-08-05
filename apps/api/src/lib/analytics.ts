@@ -3,7 +3,13 @@ import type { Lyrics } from "@syllary/shared";
 import { db } from "../db/client.js";
 import { analyticsEvents } from "../db/schema.js";
 
-export type AnalyticsStage = "visited" | "generated" | "signed_up" | "subscribed" | "renewed";
+export type AnalyticsStage =
+  | "visited"
+  | "generated"
+  | "signed_up"
+  | "checkout_started"
+  | "subscribed"
+  | "renewed";
 
 type EventOpts = {
   ownerHash: string;

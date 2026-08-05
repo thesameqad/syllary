@@ -76,16 +76,16 @@ export async function sendOnce(
   kind: string,
   build: () => { subject: string; html: string },
   opts: { marketing?: boolean } = {},
-): Promise<void> {
+): Promise<boolean> {
   try {
-    if (!user.email || !env.RESEND_API_KEY) return;
-    if (opts.marketing && user.emailOptOut) return;
+    if (!user.email || !env.RESEND_API_KEY) return false;
+    if (opts.marketing && user.emailOptOut) return false;
     const [claimed] = await db
       .insert(emailLog)
       .values({ userId: user.id, kind })
       .onConflictDoNothing()
       .returning();
-    if (!claimed) return; // already sent (or another worker is sending)
+    if (!claimed) return false; // already sent (or another worker is sending)
     const { subject, html } = build();
     const ok = await deliver(user.email, subject, html);
     if (!ok) {
@@ -93,8 +93,10 @@ export async function sendOnce(
         .delete(emailLog)
         .where(and(eq(emailLog.userId, user.id), eq(emailLog.kind, kind)));
     }
+    return ok;
   } catch {
     // email must never break a request
+    return false;
   }
 }
 
@@ -294,6 +296,39 @@ export function buildCheckoutRecoveryEmail(opts: {
           `And if something else got in the way — the price, a bug, anything — just reply. <strong><a href="mailto:anton@syllary.com" style="color:${BRAND.red};">anton@syllary.com</a></strong> is my direct email and I read everything.`,
         ) +
         p("Make something great,<br/>Anton · Syllary"),
+    ),
+  };
+}
+
+/** Automated card-abandon follow-up (email-drip poller): fires ~1h after a
+ *  checkout_started that never became a subscription. We don't know the
+ *  decline reason, so the copy is generic but honest — most failures here are
+ *  issuer declines or wallet timeouts, not user error. Marketing rules apply
+ *  (opt-out + unsubscribe). */
+export function buildCheckoutRecoveryAutoEmail(opts: {
+  userId: string;
+  firstName?: string | null;
+  planName: string | null;
+  ctaUrl: string;
+}): { subject: string; html: string } {
+  const greeting = opts.firstName ? `Hi ${opts.firstName},` : "Hi there,";
+  const plan = opts.planName ? `the <strong>${opts.planName}</strong> plan` : "a plan";
+  return {
+    subject: "Your Syllary payment didn't go through — nothing was charged",
+    html: layout(
+      p(greeting) +
+        p(
+          `You started checkout for ${plan} a little while ago and the payment didn't complete — <strong>nothing was charged.</strong> When this happens it's almost always the bank declining or a wallet timing out, not something you did wrong.`,
+        ) +
+        p(
+          "What usually fixes it: a regular debit or credit card instead of a Cash App-style wallet, or simply a different card. Apple Pay and Google Pay work too. Your song and preview are exactly where you left them.",
+        ) +
+        button(opts.ctaUrl, "Pick up where you left off →") +
+        p(
+          `If something else got in the way — the price, a question, anything — just reply. <strong><a href="mailto:anton@syllary.com" style="color:${BRAND.red};">anton@syllary.com</a></strong> reaches me directly.`,
+        ) +
+        p("Make something great,<br/>Anton · Syllary"),
+      { unsubscribeUrl: unsubscribeUrl(opts.userId) },
     ),
   };
 }

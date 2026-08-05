@@ -9,6 +9,7 @@ import {
 import type { UserRow } from "../db/schema.js";
 import { env } from "../env.js";
 import { isAdminClerkId } from "../lib/admin.js";
+import { recordEvent } from "../lib/analytics.js";
 import { getAuthUserId } from "../lib/clerk.js";
 import { captureServer } from "../lib/posthog.js";
 import { getOrCreateCustomer, isAllowedPrice, stripe } from "../lib/stripe.js";
@@ -96,6 +97,13 @@ export async function billingRoutes(app: FastifyInstance) {
     captureServer(`clerk:${clerkId}`, "checkout_started", {
       plan: parsed.data.tier,
       interval: parsed.data.billingPeriod,
+    });
+    // DB copy of the attempt — feeds the automated card-abandon follow-up in
+    // lib/email-drip.ts (PostHog events aren't queryable from the poller).
+    void recordEvent("checkout_started", {
+      ownerHash: `clerk:${clerkId}`,
+      userId: user.id,
+      props: { tier: parsed.data.tier, period: parsed.data.billingPeriod },
     });
     return reply.send({ url: session.url });
   });
