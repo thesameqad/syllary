@@ -99,6 +99,7 @@ export const PLAN_TIERS: PlanTier[] = [
     monthly: 39,
     annual: 390,
     features: [
+      { text: "Watermark-free downloads" },
       { text: "≈ 11 videos your first month (Lite)" },
       { text: "then ≈ 5 Lite or 2–3 Medium/Pro monthly" },
       { text: "All 3 video styles" },
@@ -113,6 +114,7 @@ export const PLAN_TIERS: PlanTier[] = [
     monthly: 99,
     annual: 990,
     features: [
+      { text: "Watermark-free downloads" },
       { text: "≈ 20 videos your first month (Lite)" },
       { text: "then ≈ 13 Lite or 5–9 Medium/Pro monthly" },
       { text: "Everything in Reel" },
@@ -128,6 +130,7 @@ export const PLAN_TIERS: PlanTier[] = [
     monthly: 199,
     annual: 1990,
     features: [
+      { text: "Watermark-free downloads" },
       { text: "≈ 45 videos your first month (Lite)" },
       { text: "then ≈ 38 Lite or 14–25 Medium/Pro monthly" },
       { text: "Best token value (2× rate)" },

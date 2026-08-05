@@ -23,6 +23,7 @@ import { LogoWordmark } from "@/components/logo";
 import { LyricsPlayer } from "@/components/result/lyrics-player";
 import { LyricsEditModal } from "@/components/result/lyrics-editor";
 import { GenerateVideoModal } from "@/components/result/generate-video-modal";
+import { PlansModal } from "@/components/result/plans-modal";
 import { VideoTabs } from "@/components/result/video-tabs";
 import { ManualSyncEditor } from "@/components/result/manual-sync-editor";
 import { PublicDetailsModal } from "@/components/result/public-details-modal";
@@ -513,6 +514,18 @@ function ResultPageInner({ signedIn }: { signedIn: boolean }) {
         onClose={() => setSignInPromptReason(null)}
         redirectTo={songId ? `/s/${songId}` : undefined}
       />
+
+      {/* Dev-only harness: `?plansPreview=1` opens the paywall for copy/layout
+          review without needing an out-of-tokens account. Stripped in prod
+          builds by the DEV guard. */}
+      {import.meta.env.DEV && searchParams.get("plansPreview") === "1" && (
+        <PlansModal
+          open
+          onClose={() => setSearchParams({}, { replace: true })}
+          trigger={searchParams.get("plansTrigger") ?? "video_full"}
+          song={song}
+        />
+      )}
 
       {song.canEdit && (
         <>
