@@ -542,6 +542,11 @@ export function GenerateVideoModal({
                   <>
                     Free preview · <span className="font-medium text-white">{previewCost} tokens</span>
                     <span className="text-white/40"> · upgrade for the full video</span>
+                    {model !== "fast" && (
+                      <span className="block text-[11px] text-white/40">
+                        Previews show your scenes as stills — full videos add the motion.
+                      </span>
+                    )}
                   </>
                 ) : noPrerender ? (
                   <>
@@ -1103,6 +1108,11 @@ export function GenerateVideoModal({
                   <>
                     Free preview · <span className="font-medium text-white">{previewCost} tokens</span>
                     <span className="text-white/40"> · upgrade for the full video</span>
+                    {model !== "fast" && (
+                      <span className="block text-[11px] text-white/40">
+                        Previews show your scenes as stills — full videos add the motion.
+                      </span>
+                    )}
                   </>
                 ) : noPrerender ? (
                   <>

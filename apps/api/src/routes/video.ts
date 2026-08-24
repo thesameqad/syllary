@@ -454,7 +454,23 @@ export async function videoRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "This track has no lyrics to render." });
     }
 
-    const { job, cost, insufficient } = await startVideoJob(user.id, user.credits, song, settings);
+    // COST CONTROL (Aug 24): free-account previews render as stills (the
+    // slideshow assembly) in the user's chosen style — AI motion clips cost
+    // $1.9-2.9 per preview at the providers and free-user previews were the
+    // single biggest line on the model bill. Style, scene images, and the
+    // promote-to-full path are unchanged (promote re-derives real motion from
+    // the model); paid plans keep motion previews.
+    const stillsPreview = settings.preview && user.plan === "free" && settings.model !== "fast";
+
+    const { job, cost, insufficient } = await startVideoJob(
+      user.id,
+      user.credits,
+      song,
+      settings,
+      undefined,
+      undefined,
+      stillsPreview ? "ffmpeg" : undefined,
+    );
     if (insufficient) {
       captureServer(`clerk:${clerkId}`, "paywall_viewed", {
         trigger: "tokens",
@@ -473,6 +489,7 @@ export async function videoRoutes(app: FastifyInstance) {
       style: settings.model,
       cost_tokens: cost,
       image_quality: settings.imageQuality,
+      motion_downgraded: stillsPreview,
     });
 
     return reply.send(await toVideoJobDto(job));

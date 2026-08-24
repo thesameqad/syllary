@@ -491,7 +491,10 @@ function stampTextModes(job: VideoJobRow, segments: VideoSegment[]): void {
   for (const seg of segments) {
     if (!seg.lines || seg.textMode) continue;
     if (!seg.text) continue; // instrumental — nothing to show
-    seg.textMode = job.model === "pro" ? "overlay" : "baked";
+    // Stills-downgraded previews (motionMode "ffmpeg") assemble via the
+    // slideshow path, which renders no overlay track — bake the lyrics into
+    // the frames so a downgraded Cinematic preview still shows its words.
+    seg.textMode = job.model === "pro" && job.motionMode !== "ffmpeg" ? "overlay" : "baked";
   }
 }
 
@@ -1251,9 +1254,12 @@ async function assembleForMode(
   elementCatalog: ElementRef[],
   audioStartSeconds = 0,
 ): Promise<void> {
-  if (job.model === "normal") {
+  // motionMode "ffmpeg" on a motion style = a stills-downgraded free preview
+  // (routes/video.ts cost control): assemble the chosen style's frames as a
+  // slideshow instead of buying AI clips.
+  if (job.model === "normal" && job.motionMode !== "ffmpeg") {
     await runAnimated(job, audioR2Key, segments, aspectRatio, workDir, elementCatalog, audioStartSeconds);
-  } else if (job.model === "pro") {
+  } else if (job.model === "pro" && job.motionMode !== "ffmpeg") {
     await runCinematic(job, audioR2Key, segments, aspectRatio, workDir, elementCatalog, audioStartSeconds);
   } else {
     await runSlideshow(job, audioR2Key, segments, aspectRatio, workDir, elementCatalog, audioStartSeconds);
